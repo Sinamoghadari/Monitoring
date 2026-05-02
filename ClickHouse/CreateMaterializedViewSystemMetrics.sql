@@ -1,0 +1,32 @@
+CREATE MATERIALIZED VIEW IF NOT EXISTS MV_SystemMetrics_To_Target TO SystemMetrics AS
+SELECT
+    now() AS CollectedAt,
+    WindowsSid,
+    WindowsUsername,
+    MotherboardSerial,
+    CpuUsagePercent,
+    LogicalCores,
+    PhysicalCores,
+    CpuTemperature,
+    TotalRamMb,
+    UsedRamMb,
+    FreeRamMb,
+    SystemUptimeSeconds,
+    ActiveProcesses,
+    ActiveThreads,
+    OpenHandles,
+    parseDateTime64BestEffortOrZero(BootTime, 7) AS BootTime, 
+    FailedLoginAttempts,
+    AntivirusStatus,
+    FirewallStatus,
+    UsbDevicesCount,
+    ComputerName,
+    StorageDetailsJson,
+    NetworkDetailsJson,
+    NetworkTraceJson,
+    DiskModelsJson,
+    TopProcessesJson,
+    -- فیلدهای جدید Reliability
+    DiskHealthStatusJson,
+    CriticalSystemEventsJson
+FROM Kafka_SystemMetrics;
