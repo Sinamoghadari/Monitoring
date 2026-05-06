@@ -434,7 +434,7 @@ public Dictionary<string, object> Collect()
     }
         catch
     {
-        return DateTime.MinValue; // در صورت خطا مقدار پیش‌فرض برگردانید نه زمان حال
+        return DateTime.MinValue; 
     }
     }
 

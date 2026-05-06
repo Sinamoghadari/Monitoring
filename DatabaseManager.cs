@@ -7,29 +7,24 @@ using System.Collections.Generic;
 using Ergonomy.Configuration;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
-
-
+using System.Threading.Tasks;
 
 namespace Ergonomy.Database
 {
-    /// <summary>
-    /// این کلاس صرفاً برای خواندن تنظیمات، تصاویر و مدیریت دستورات ریموت از PostgreSQL استفاده می‌شود.
-    /// ارسال داده‌های عملیاتی (لاگ، اکتیویتی و متریک) به کافکا منتقل شده است.
-    /// </summary>
-    public class DatabaseManager : IDisposable
+    public class DatabaseManager
     {
         private readonly IConfiguration _configuration = new ConfigurationBuilder()
-        .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
-        .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-        .Build();
-        private NpgsqlConnection? _connection;
+            .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+            .Build();
+
         private readonly string _host;
         private readonly string _database;
         private readonly string _user;
         private readonly string _password;
         private readonly int _port;
 
-        public bool IsConnected => _connection != null && _connection.State == ConnectionState.Open;
+        private string GetConnectionString() => $"Host={_host};Port={_port};Username={_user};Password={_password};Database={_database}";
 
         public DatabaseManager(string host, string database, string user, string password, int port)
         {
@@ -40,30 +35,16 @@ namespace Ergonomy.Database
             _port = port;
         }
 
-        // 🌟 اتصال به دیتابیس
-        public bool Connect()
-        {
-            try
-            {
-                string connectionString = $"Host={_host};Port={_port};Username={_user};Password={_password};Database={_database}";
-                _connection = new NpgsqlConnection(connectionString);
-                _connection.Open();
-                return true;
-            }
-            catch (Exception ex) 
-            {
-                Console.WriteLine($"❌ Error connecting to Postgres: {ex.Message}");
-                return false;
-            }
-        }
-
-        // 🌟 دریافت تنظیمات اصلی برنامه از دیتابیس آنلاین
         public AppSettings? GetSettingsFromDatabase()
         {
             try
             {
+                using var conn = new NpgsqlConnection(GetConnectionString());
+                conn.Open(); 
+
                 string query = "SELECT settings_json FROM app_configuration LIMIT 1;";
-                using var cmd = new NpgsqlCommand(query, _connection);
+                using var cmd = new NpgsqlCommand(query, conn);
+                
                 var result = cmd.ExecuteScalar();
                 
                 if (result != null && result != DBNull.Value)
@@ -79,20 +60,18 @@ namespace Ergonomy.Database
             }
             return null; 
         }
-        // چک کردن کاکشن به postgres
+
         public async Task CheckAndLogPostgresConnectionAsync(KafkaConnect kafkaConnect, string windowsUsername)
         {
             bool checkEnabled = _configuration.GetValue<bool>("AppSettings:CheckPostgresConnection");
             if (!checkEnabled) return;
-
-            string connectionString = $"Host={_configuration["AppSettings:Database:Host"]};Port={_configuration["AppSettings:Database:Port"]};Database={_configuration["AppSettings:Database:Name"]};Username={_configuration["AppSettings:Database:User"]};Password={_configuration["AppSettings:Database:Password"]};";
 
             string statusMessage;
             string logLevel;
 
             try
             {
-                using var conn = new NpgsqlConnection(connectionString);
+                using var conn = new NpgsqlConnection(GetConnectionString());
                 await conn.OpenAsync();
                 statusMessage = "PostgreSQL Connection is OK.";
                 logLevel = "INFO";
@@ -115,20 +94,19 @@ namespace Ergonomy.Database
                     Category = "PostgresHealth"
                 };
                 await kafkaConnect.SendAppLogAsync(pgLog);
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [PG STATUS] {statusMessage}");
             }
         }
 
-        // 🌟 دریافت نام تمام عکس‌های موجود در دیتابیس
         public List<string> GetAllImageNames()
         {
             var names = new List<string>();
-            if (!IsConnected) return names;
-
             try
-            {
+            { 
+                using var conn = new NpgsqlConnection(GetConnectionString());
+                conn.Open(); 
                 string query = "SELECT image_name FROM alarm_images ORDER BY image_name";
-                using var cmd = new NpgsqlCommand(query, _connection);
+                using var cmd = new NpgsqlCommand(query, conn);
+
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
@@ -142,15 +120,15 @@ namespace Ergonomy.Database
             return names;
         }
 
-        // 🌟 دریافت فایل باینری تصویر از دیتابیس و تبدیل آن به کلاس Image
         public Image? GetImageFromDatabase(string imageName)
         {
-            if (!IsConnected) return null;
-
             try
             {
+                using var conn = new NpgsqlConnection(GetConnectionString());
+                conn.Open(); 
+
                 string query = "SELECT image_data FROM alarm_images WHERE image_name = @imageName";
-                using var cmd = new NpgsqlCommand(query, _connection);
+                using var cmd = new NpgsqlCommand(query, conn);
                 cmd.Parameters.AddWithValue("@imageName", imageName);
                 var result = cmd.ExecuteScalar();
                 
@@ -166,27 +144,22 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine($"Error loading image {imageName} from DB: {ex.Message}");
             }
-            
             return null; 
         }
 
-        // =========================================================
-        // 🌟 بخش مدیریت دستورات ریموت (Remote Commands)
-        // =========================================================
-
-        // خواندن دستوراتی که وضعیت pending دارند
         public List<ClientCommand> GetPendingCommands(string computerName, string windowsUsername)
         {
             var commands = new List<ClientCommand>();
-            if (!IsConnected) return commands;
-
             try
             {
+                using var conn = new NpgsqlConnection(GetConnectionString());
+                conn.Open(); 
+
                 using var cmd = new NpgsqlCommand(@"
                     SELECT id, command 
                     FROM client_commands 
                     WHERE status = 'pending' 
-                    AND (computer_name = @computerName OR windows_username = @windowsUsername)", _connection);
+                    AND (computer_name = @computerName OR windows_username = @windowsUsername)", conn);
                 
                 cmd.Parameters.AddWithValue("computerName", string.IsNullOrEmpty(computerName) ? DBNull.Value : computerName);
                 cmd.Parameters.AddWithValue("windowsUsername", string.IsNullOrEmpty(windowsUsername) ? DBNull.Value : windowsUsername);
@@ -194,11 +167,7 @@ namespace Ergonomy.Database
                 using var reader = cmd.ExecuteReader();
                 while (reader.Read())
                 {
-                    commands.Add(new ClientCommand
-                    {
-                        Id = reader.GetInt32(0),
-                        Command = reader.GetString(1)
-                    });
+                    commands.Add(new ClientCommand { Id = reader.GetInt32(0), Command = reader.GetString(1) });
                 }
             }
             catch (Exception ex)
@@ -208,45 +177,34 @@ namespace Ergonomy.Database
             return commands;
         }
 
-        // مارک کردن دستور به عنوان تاریخ گذشته (در صورت نیاز)
         public void MarkCommandAsOutdated(int commandId)
         {
-            if (!IsConnected) return;
             try
             {
-                using var cmd = new NpgsqlCommand("UPDATE client_commands SET status = 'outdated' WHERE id = @id", _connection);
+                using var conn = new NpgsqlConnection(GetConnectionString());
+                conn.Open(); 
+                using var cmd = new NpgsqlCommand("UPDATE client_commands SET status = 'outdated' WHERE id = @id", conn);
                 cmd.Parameters.AddWithValue("id", commandId);
                 cmd.ExecuteNonQuery();
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[DB] Error marking command as outdated: {ex.Message}");
-            }
+            catch (Exception ex) { Console.WriteLine($"[DB] Error: {ex.Message}"); }
         }
 
-        // ثبت دستور به عنوان "اجرا شده" (بلافاصله پس از دریافت در کلاینت)
         public void MarkCommandAsExecuted(int commandId)
         {
-            if (!IsConnected) return;
             try
             {
+                using var conn = new NpgsqlConnection(GetConnectionString());
+                conn.Open(); 
                 string query = "UPDATE client_commands SET status = 'executed' WHERE id = @id";
-                using var cmd = new NpgsqlCommand(query, _connection);
+                using var cmd = new NpgsqlCommand(query, conn);
                 cmd.Parameters.AddWithValue("id", commandId);
-                int rowsAffected = cmd.ExecuteNonQuery();
-                Console.WriteLine($"[DB] Command ID {commandId} updated. Rows affected: {rowsAffected}");
+                cmd.ExecuteNonQuery();
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Error updating command status: {ex.Message}");
-            }
+            catch (Exception ex) { Console.WriteLine($"[DB] Error: {ex.Message}"); }
         }
 
-        public void Dispose()
-        {
-            _connection?.Close();
-            _connection?.Dispose();
-        }
+        
     }
 
     public class ClientCommand
@@ -254,4 +212,6 @@ namespace Ergonomy.Database
         public int Id { get; set; }
         public string Command { get; set; } = string.Empty;
     }
+
+
 }

@@ -10,10 +10,13 @@ namespace Ergonomy.Configuration
         public int SessionCloseLimit { get; set; }
         public int SecondaryAlarmUnclosableSeconds { get; set; }
         public int SecondaryAlarmAutoCloseSeconds { get; set; }
-        public int LoggingIntervalHours { get; set; }
+        public int LoggingIntervalHours { get; set; } = 1;
         public double AdvancedMetricsIntervalMinutes { get; set; }
         public int TopProcessesCount { get; set; }
+        public int SettingsCheckIntervalSeconds {get; set;}
+        public double CommandCheckIntervalSeconds {get; set;}
         public double SyncEngineIntervalMinutes { get; set; }
+        public double PermissionPostgresRetryIntervalHours { get; set; } = 1;
         // public double HeartbeatIntervalMinutes { get; set; }
         public string NetworkTraceTargetIP { get; set; } = "";
         public List<string> EnabledMetrics { get; set; } = new List<string>();

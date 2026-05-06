@@ -42,6 +42,18 @@ namespace Ergonomy.Database
             Task.Run(async () => await ProcessQueueAsync()).Wait(); // فراخوانی فوری
         }
 
+        public void UpdateSyncInterval(double intervalMinutes)
+        {
+            if (intervalMinutes <= 0)
+                intervalMinutes = 1;
+
+            _syncTimer.Stop();
+            _syncTimer.Interval = intervalMinutes * 60 * 1000; // تبدیل دقیقه به میلی‌ثانیه
+            _syncTimer.Start();
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🕒 SyncEngine interval updated to {intervalMinutes} minutes.");
+        }
+
         private async Task ProcessQueueAsync()
         {
             if (_isSyncing) return;

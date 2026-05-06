@@ -10,7 +10,7 @@ namespace Ergonomy.Hooks
         private readonly System.Timers.Timer _mouseTimer;
         private DateTime _lastKeyboardActivity;
         private DateTime _lastMouseActivity;
-
+        private bool _isRunning = false;
         public TimeSpan TotalKeyboardActiveTime { get; private set; }
         public TimeSpan TotalMouseActiveTime { get; private set; }
 
@@ -29,18 +29,26 @@ namespace Ergonomy.Hooks
 
         public void Start()
         {
+            if (_isRunning) return; // جلوگیری از اجرای مجدد
+
             _lastKeyboardActivity = DateTime.UtcNow;
             _lastMouseActivity = DateTime.UtcNow;
             _keyboardTimer.Start();
             _mouseTimer.Start();
             _globalInputHook.Start();
+            
+            _isRunning = true;
         }
 
         public void Stop()
         {
+            if (!_isRunning) return;
+
             _globalInputHook.Stop();
             _keyboardTimer.Stop();
             _mouseTimer.Stop();
+            
+            _isRunning = false;
         }
 
         public void ResetTotalTimers()

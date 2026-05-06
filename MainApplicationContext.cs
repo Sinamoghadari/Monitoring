@@ -26,9 +26,13 @@ namespace Ergonomy
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
             .Build();
 
+
+        private CommandManager _commandManager;
         private System.Timers.Timer _healthCheckTimer;
         private AppSettings? _appSettings;
         private System.Timers.Timer? _wakeUpTimer;
+        private System.Timers.Timer? _postgresPermissionTimer;
+        private System.Windows.Forms.Timer _settingsUpdateTimer;
         
         // تایمرهای اصلی جمع‌آوری داده
         private System.Windows.Forms.Timer? _advancedMetricsTimer;
@@ -72,8 +76,6 @@ namespace Ergonomy
             // ۱. بارگذاری تنظیمات پایه از فایل JSON
             LoadAppSettings();
 
-            
-            
             // دریافت اطلاعات کاربر سیستم
             _windowsSid = GetWindowsSID();
             try { _windowsUsername = WindowsIdentity.GetCurrent().Name; }
@@ -99,7 +101,8 @@ namespace Ergonomy
             _dbManager = new DatabaseManager(dbSettings.Host, dbSettings.Name, dbSettings.User, dbSettings.Password, dbSettings.Port);
             
             // موتور سینک حالا با استفاده از KafkaConnect و LocalDb کار می‌کند
-            _syncEngine = new SyncEngine(_kafkaConnect!, _localDb, _dbManager);
+            _syncEngine = new SyncEngine(_kafkaConnect!, _localDb, _dbManager, _appSettings?.SyncEngineIntervalMinutes ?? 1);
+
             
             _ergonomyManager = new ErgonomyManager(_appSettings, _dbManager, _localDb, _sessionGuid, _windowsSid, _windowsUsername);
             
@@ -107,45 +110,56 @@ namespace Ergonomy
             // تلاش برای اتصال به Postgres و دریافت آخرین تنظیمات آنلاین
             UpdateSettingsFromDatabase();
 
+
+            int intervalSeconds = _appSettings?.SettingsCheckIntervalSeconds > 0 ? _appSettings.SettingsCheckIntervalSeconds : 60;
+            _settingsUpdateTimer = new System.Windows.Forms.Timer();
+            _settingsUpdateTimer.Interval = intervalSeconds * 1000;
+            _settingsUpdateTimer.Tick += (s, e) => UpdateSettingsFromDatabase();
+            _settingsUpdateTimer.Start();
+
+
+            _commandManager = new CommandManager(_appSettings, _dbManager, _windowsUsername)
+            {
+                // ۲. اتصال متدهای این کلاس به اکشن‌های منیجر
+                OnLogRequired = SaveLogToDatabase,
+                OnForceSync = () => _syncEngine?.ForceSync(),
+                OnStopCollection = () => 
+                {
+                    StopAllDataCollection();
+                    _isLocalCollectionRunning = false;
+                },
+                OnStartCollection = () => 
+                {
+                    StartLocalDataCollection();
+                    _isLocalCollectionRunning = true;
+                }
+            };
+
+            // ۳. استارت کردن چک دوره‌ای
+            _commandManager.Start();
+        
+
+
             _notifyIcon = new NotifyIcon { Icon = System.Drawing.SystemIcons.Application, Visible = true, Text = "Ergonomy" };
 
             // ۶. بررسی دسترسی‌ها و راه‌اندازی چرخه‌ها
             EvaluateSqlitePermission();   // آیا اجازه ذخیره در بافر محلی را داریم؟
             EvaluateKafkaPermission();    // آیا اجازه ارسال از بافر به کافکا را داریم؟
-            EvaluateErgonomyPermission();EvaluateErgonomyPermission();
+            EvaluateErgonomyPermission();
             StartSqlitePermissionTimer(); // تایمر چک کردن دوره‌ای دسترسی SQLite
             StartKafkaPermissionTimer();  // تایمر چک کردن دوره‌ای دسترسی کافکا
 
-            // ۷. تایمر بررسی دستورات ریموت و زمان‌بندی‌ها
-            StartScheduleTimer();
+            StartPostgresPermissionTimer();
+
         }
 
-        // ==========================================
-        // بخش ارتباط با سرور مرکزی (تنظیمات و دستورات)
-        // ==========================================
-        
-        private void UpdateSettingsFromDatabase()
+        private void RestartPermissionTimers()
         {
-            // این متد از Postgres تنظیمات را می‌خواند (فارغ از مجوز ارسال به کافکا)
-            if (_dbManager != null && _dbManager.Connect())
-            {
-                var dbSettingsOverride = _dbManager.GetSettingsFromDatabase();
-                if (dbSettingsOverride != null)
-                {
-                    _appSettings = dbSettingsOverride; 
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ✅ Online settings fetched successfully from Postgres.");
-                    SaveLogToDatabase("INFO", "Online settings fetched successfully.");
-                }
-
-                // بلافاصله پس از اتصال، بررسی دستورات ریموت
-                CheckAndExecuteCommands(Environment.MachineName, _windowsUsername);
-            }
-            else
-            {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Offline Mode! Using current loaded settings.");
-                SaveLogToDatabase("WARNING", "Offline Mode! Using current loaded settings.");
-            }
+            StartSqlitePermissionTimer();
+            StartKafkaPermissionTimer();
+            StartPostgresPermissionTimer();
         }
+
 
         private void HandleCriticalFailure(string errorMessage)
         {
@@ -191,7 +205,7 @@ namespace Ergonomy
             
             StartSqlitePermissionTimer();
             StartKafkaPermissionTimer();
-            StartScheduleTimer();
+            _commandManager?.Start(); 
         }
 
         private void StartHealthMonitoring()
@@ -293,9 +307,56 @@ namespace Ergonomy
             }
         }
 
-        // ==========================================
-        // 🌟 دروازه‌های کنترلی (مجوزهای جمع‌آوری و ارسال)
-        // ==========================================
+
+        private void UpdateSettingsFromDatabase()
+        {
+            if (_dbManager == null) return;
+
+            var dbSettingsOverride = _dbManager.GetSettingsFromDatabase();
+            if (dbSettingsOverride != null)
+            {
+                var oldSettingsJson = System.Text.Json.JsonSerializer.Serialize(_appSettings);
+                var newSettingsJson = System.Text.Json.JsonSerializer.Serialize(dbSettingsOverride);
+
+                if (oldSettingsJson != newSettingsJson)
+                {
+                    // بروز رسانی تنظیمات
+                    _appSettings = dbSettingsOverride;
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ✅ Settings updated from Postgres.");
+
+                    SaveSettingsToAppSettingsJson(_appSettings);
+                    RestartPermissionTimers();
+
+                    if (_syncEngine != null)
+                    {
+                        _syncEngine.UpdateSyncInterval(_appSettings.SyncEngineIntervalMinutes);
+                    }
+
+                    // --- ساختن نمونه فقط برای بار اول ---
+                    if (_appSettings.SettingsCheckIntervalSeconds > 0 && _settingsUpdateTimer != null)
+                    {
+                        int intervalSeconds = _appSettings.SettingsCheckIntervalSeconds;
+                        _settingsUpdateTimer.Interval = intervalSeconds * 1000;
+                    }
+
+                    // --- فقط استارت یا استاپ کردن ---
+                    if (_appSettings.AllowErgonomyCollection)
+                    {
+                        _ergonomyManager.Start();
+                        Console.WriteLine("Ergonomy Started.");
+                    }
+                    else
+                    {
+                        _ergonomyManager.Stop();
+                        Console.WriteLine("Ergonomy Stopped.");
+                    }
+                }
+            }
+            else
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Offline Mode! Using appsettings.json.");
+            }
+        }
 
         private void EvaluateSqlitePermission()
         {
@@ -425,121 +486,6 @@ namespace Ergonomy
             _kafkaPermissionTimer.Start();
         }
 
-        // ==========================================
-        // زمان‌بندی و دریافت دستورات (Schedule & Remote Commands)
-        // ==========================================
-        
-        private void StartScheduleTimer()
-        {
-            _scheduleTimer?.Stop();
-            _scheduleTimer?.Dispose();
-
-            // بررسی هر 30 ثانیه
-            _scheduleTimer = new System.Timers.Timer(30 * 1000); 
-            _scheduleTimer.Elapsed += (s, e) => CheckScheduledTasks();
-            _scheduleTimer.AutoReset = true; 
-            _scheduleTimer.Start();
-        }
-
-        private void CheckScheduledTasks()
-        {
-            if (_appSettings == null) return;
-
-            string currentSystemTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
-
-            if (!string.IsNullOrWhiteSpace(_appSettings.ScheduledRestartTime))
-            {
-                if (currentSystemTime == _appSettings.ScheduledRestartTime && _lastExecutedSchedule != currentSystemTime)
-                {
-                    _lastExecutedSchedule = currentSystemTime;
-                    SaveLogToDatabase("WARNING", $"Executing SCHEDULED RESTART exactly at {currentSystemTime}");
-                    System.Diagnostics.Process.Start("shutdown", "/r /t 5");
-                }
-            }
-
-            if (!string.IsNullOrWhiteSpace(_appSettings.ScheduledShutdownTime))
-            {
-                if (currentSystemTime == _appSettings.ScheduledShutdownTime && _lastExecutedSchedule != currentSystemTime)
-                {
-                    _lastExecutedSchedule = currentSystemTime;
-                    SaveLogToDatabase("WARNING", $"Executing SCHEDULED SHUTDOWN exactly at {currentSystemTime}");
-                    System.Diagnostics.Process.Start("shutdown", "/s /t 5");
-                }
-            }
-
-            // چک کردن دستورات ریموت دیتابیس در هر اجرای تایمر
-            CheckAndExecuteCommands(Environment.MachineName, _windowsUsername);
-        }
-
-        private void CheckAndExecuteCommands(string computerName, string windowsUsername) 
-        {
-            var pendingCommands = _dbManager?.GetPendingCommands(computerName, windowsUsername); 
-
-            if (pendingCommands == null || pendingCommands.Count == 0) return;
-
-            foreach (var cmd in pendingCommands)
-            {
-                SaveLogToDatabase("INFO", $"Received remote command: '{cmd.Command}'. Preparing to execute.");
-                
-                // تغییر سریع وضعیت در دیتابیس برای جلوگیری از اجرای مجدد
-                _dbManager?.MarkCommandAsExecuted(cmd.Id);
-                string commandToExecute = cmd.Command;
-
-                Task.Run(async () => 
-                {
-                    // تاخیر 20 ثانیه‌ای برای اطمینان از دیده شدن لاگ توسط کاربر یا سیستم
-                    await Task.Delay(20000); 
-                    ProcessCommand(commandToExecute); 
-                });
-            }
-        }
-
-        private void ProcessCommand(string command)
-        {
-            string lowerCmd = command.ToLower().Trim();
-
-            // دستور نمایش پیام سفارشی
-            if (lowerCmd.StartsWith("msg:"))
-            {
-                string message = command.Substring(4).Trim(); 
-                SaveLogToDatabase("INFO", $"Displaying custom message form to user.");
-
-                // اجرای فرم در Thread مجزا (STA) برای جلوگیری از فریز شدن برنامه اصلی
-                System.Threading.Thread thread = new System.Threading.Thread(() =>
-                {
-                    var msgForm = new Ergonomy.UI.MessageAlarmForm(message);
-                    Application.Run(msgForm); 
-                });
-                thread.SetApartmentState(System.Threading.ApartmentState.STA);
-                thread.Start();
-                return;
-            }
-
-            // دستورات سیستمی
-            switch (lowerCmd)
-            {
-                case "stop":
-                    StopAllDataCollection();
-                    _isLocalCollectionRunning = false;
-                    SaveLogToDatabase("INFO", "Application tracking PAUSED via remote command.");
-                    break;
-                case "start":
-                    StartLocalDataCollection();
-                    _isLocalCollectionRunning = true;
-                    SaveLogToDatabase("INFO", "Application tracking RESUMED via remote command.");
-                    break;
-                case "os_restart": 
-                    SaveLogToDatabase("WARNING", "Windows is RESTARTING via remote command.");
-                    _syncEngine?.ForceSync(); 
-                    System.Diagnostics.Process.Start("shutdown", "/r /t 5"); 
-                    break;
-                case "os_shutdown": 
-                    SaveLogToDatabase("WARNING", "Windows is SHUTTING DOWN via remote command.");
-                    _syncEngine?.ForceSync();
-                    System.Diagnostics.Process.Start("shutdown", "/s /t 5"); 
-                    break;
-            }
-        }
 
         // ==========================================
         // بخش مدیریت سرویس‌های داخلی و جمع‌آوری داده
@@ -583,12 +529,65 @@ namespace Ergonomy
                 // می‌توانید اینجا یک لاگ خطا هم ثبت کنید
                 Console.WriteLine("ERROR: AppSettings section not found in appsettings.json or could not be bound.");
             }
+            if (_appSettings.SyncEngineIntervalMinutes <= 0)
+            {
+                _appSettings.SyncEngineIntervalMinutes = 1; // مقدار پیش‌فرض
+            }
             Console.WriteLine($"Total enabled metrics count after loading: {_appSettings?.EnabledMetrics?.Count ?? 0}");
             
             configuration.GetSection("AppSettings").Bind(_appSettings); 
             
             _kafkaConnect = new KafkaConnect(configuration);
         }
+
+        private void StartPostgresPermissionTimer()
+        {
+            _postgresPermissionTimer?.Stop();
+            _postgresPermissionTimer?.Dispose();
+
+            double retryHours = _appSettings?.PermissionPostgresRetryIntervalHours ?? 1;
+
+            _postgresPermissionTimer = new System.Timers.Timer(retryHours * 60 * 60 * 1000); // تبدیل ساعت به میلی‌ثانیه
+            _postgresPermissionTimer.Elapsed += (s, e) =>
+            {
+                UpdateSettingsFromDatabase(); // تلاش برای دریافت تنظیمات جدید
+                // اگر تنظیمات تغییر کرد باید روی فایل appsettings.json نیز آپدیت شود
+                SaveSettingsToAppSettingsJson(_appSettings);
+                StartPostgresPermissionTimer(); // مجدد راه‌اندازی تایمر
+            };
+            _postgresPermissionTimer.AutoReset = false;
+            _postgresPermissionTimer.Start();
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🎯 Postgres permission check timer started. Interval = {retryHours} hour(s).");
+        }
+
+        private void SaveSettingsToAppSettingsJson(AppSettings? settings)
+        {
+            if (settings == null) return;
+
+            try
+            {
+                // مسیر فایل appsettings.json معمولاً در فولدر برنامه
+                string filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
+
+                var root = new
+                {
+                    AppSettings = settings
+                };
+
+                // استفاده از Newtonsoft.Json یا System.Text.Json
+                var json = System.Text.Json.JsonSerializer.Serialize(root, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+                File.WriteAllText(filePath, json);
+
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 💾 appsettings.json updated successfully.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ Failed to update appsettings.json: {ex.Message}");
+            }
+        }
+
 
         private void TestKafkaConnectionAtStartup()
         {
@@ -672,8 +671,9 @@ namespace Ergonomy
                 _syncEngine?.Stop(); 
                 _ergonomyManager?.Dispose();
                 _notifyIcon?.Dispose();
-                _dbManager?.Dispose();
+                
                 _kafkaConnect?.Dispose(); 
+                _commandManager?.Dispose();
             }
             base.Dispose(disposing);
         }

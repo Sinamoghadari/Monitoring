@@ -35,14 +35,26 @@ namespace Ergonomy.Hooks
 
         public void Start()
         {
+            if (_keyboardHookHandle != IntPtr.Zero || _mouseHookHandle != IntPtr.Zero)
+                return;
+
             _keyboardHookHandle = SetHook(WH_KEYBOARD_LL, _keyboardCallback);
             _mouseHookHandle = SetHook(WH_MOUSE_LL, _mouseCallback);
         }
 
         public void Stop()
         {
-            UnhookWindowsHookEx(_keyboardHookHandle);
-            UnhookWindowsHookEx(_mouseHookHandle);
+            if (_keyboardHookHandle != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(_keyboardHookHandle);
+                _keyboardHookHandle = IntPtr.Zero;
+            }
+            
+            if (_mouseHookHandle != IntPtr.Zero)
+            {
+                UnhookWindowsHookEx(_mouseHookHandle);
+                _mouseHookHandle = IntPtr.Zero;
+            }
         }
 
         private IntPtr SetHook(int hookId, HookCallback callback)

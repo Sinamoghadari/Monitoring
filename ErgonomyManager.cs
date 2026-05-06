@@ -47,7 +47,7 @@ namespace Ergonomy.Core
         public void Start()
         {
             if (IsRunning) return;
-                // تلاش برای لود عکس‌ها در زمان استارت
+
             try
             {
                 _alarmManager?.LoadImagesFromDatabase();
@@ -58,13 +58,14 @@ namespace Ergonomy.Core
             _activityMonitor?.Start();
             _dataLogger?.Start();
 
-            LogSessionState("Start");
-            _activityMonitor?.Start();
-            _dataLogger?.Start();
-
-            _notificationTimer = new System.Windows.Forms.Timer();
-            _notificationTimer.Interval = (_appSettings.NotificationIntervalSeconds > 0 ? _appSettings.NotificationIntervalSeconds : 5) * 1000;
-            _notificationTimer.Tick += OnNotificationTimerTick;
+            // اگر تایمر قبلاً ساخته نشده بود آن را بسازید
+            if (_notificationTimer == null)
+            {
+                _notificationTimer = new System.Windows.Forms.Timer();
+                _notificationTimer.Interval = (_appSettings.NotificationIntervalSeconds > 0 ? _appSettings.NotificationIntervalSeconds : 5) * 1000;
+                _notificationTimer.Tick += OnNotificationTimerTick;
+            }
+            
             _notificationTimer.Start();
 
             IsRunning = true;
@@ -78,6 +79,7 @@ namespace Ergonomy.Core
             _dataLogger?.Stop();
             _activityMonitor?.Stop();
             _alarmManager?.StopAlarms();
+            
             LogSessionState("End");
 
             IsRunning = false;

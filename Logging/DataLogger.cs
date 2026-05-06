@@ -14,6 +14,7 @@ namespace Ergonomy.Logging
         private System.Timers.Timer _logTimer;
         private ActivityMonitor _activityMonitor;
         private Func<int> _getTotalCloseCounter;
+        private bool _isRunning = false;
 
         public DataLogger(ActivityMonitor activityMonitor, Func<int> getTotalCloseCounter, AppSettings settings)
         {
@@ -26,11 +27,13 @@ namespace Ergonomy.Logging
 
         public void Start()
         {
+            if (_isRunning) return;
             _logTimer.Start();
         }
 
         public void Stop()
         {
+            if (!_isRunning) return;
             _logTimer.Stop();
         }
 
