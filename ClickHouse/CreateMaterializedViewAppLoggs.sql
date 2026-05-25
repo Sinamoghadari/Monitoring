@@ -1,6 +1,7 @@
 CREATE MATERIALIZED VIEW MV_AppLogs_To_Target TO AppLogs AS
 SELECT
     parseDateTime64BestEffortOrZero(Timestamp, 7) AS Timestamp,
+    CollectedAt_Shamsi ,
     CAST(LogLevel AS LowCardinality(String)) AS LogLevel,
     Message,
     WindowsUsername,

@@ -1,5 +1,13 @@
 namespace Ergonomy.Configuration
 {
+
+        public class ApiSettings
+    {
+        public string Settings { get; set; } = "";
+        public string LoadImages { get; set; } = "";
+        public string Commands { get; set; } = "";
+    }
+
     public class AppSettings
     {
         public bool AllowErgonomyCollection { get; set; } = true;
@@ -20,8 +28,7 @@ namespace Ergonomy.Configuration
         // public double HeartbeatIntervalMinutes { get; set; }
         public string NetworkTraceTargetIP { get; set; } = "";
         public List<string> EnabledMetrics { get; set; } = new List<string>();
-        
-
+        public ApiSettings API { get; set; }
         // --- متغیرهای جدید برای کنترل دسترسی (به‌روز شده برای کافکا) ---
         public bool AllowSqliteWrite { get; set; } = true;
         public bool AllowKafkaWrite { get; set; } = true; // جایگزین Postgres

@@ -8,6 +8,7 @@ using Ergonomy.Configuration;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using System.Threading.Tasks;
+using System.Globalization;
 
 namespace Ergonomy.Database
 {
@@ -23,6 +24,7 @@ namespace Ergonomy.Database
         private readonly string _user;
         private readonly string _password;
         private readonly int _port;
+        DateTime currentTime = DateTime.Now;
 
         private string GetConnectionString() => $"Host={_host};Port={_port};Username={_user};Password={_password};Database={_database}";
 
@@ -68,6 +70,7 @@ namespace Ergonomy.Database
 
             string statusMessage;
             string logLevel;
+            
 
             try
             {
@@ -84,9 +87,12 @@ namespace Ergonomy.Database
 
             if (kafkaConnect != null)
             {
+                PersianCalendar pc = new PersianCalendar();
                 var pgLog = new
                 {
-                    Timestamp = DateTime.UtcNow,
+                    
+                    Timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
                     LogLevel = logLevel,
                     Message = statusMessage,
                     WindowsUsername = windowsUsername,

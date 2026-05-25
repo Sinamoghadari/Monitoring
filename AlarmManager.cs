@@ -1,54 +1,93 @@
 using Ergonomy.Configuration;
-using Ergonomy.Database;
 using Ergonomy.UI;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
+using System.Net.Http;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading.Tasks;
 
 namespace Ergonomy
 {
-    // این کلاس وظیفه مدیریت وضعیت آلارم‌ها، شمارشگرها و نمایش فرم‌ها را بر عهده دارد
+    public class ImageApiResponse
+    {
+        [JsonPropertyName("name")]
+        public string Name { get; set; }
+
+        [JsonPropertyName("data")]
+        public string Data { get; set; }
+    }
+
     public class AlarmManager
     {
         private AppSettings _appSettings;
-        private DatabaseManager _dbManager;
-        private List<string> _imageNames;
+        private List<Image> _loadedImages;
         private int _currentImageIndex = 0;
+        private static readonly HttpClient _httpClient = new HttpClient();
 
         public bool IsAlarmActive { get; private set; } = false;
         public int SessionCloseCounter { get; private set; } = 0;
         public int PrimaryAlarmCount { get; private set; } = 0;
         public int SecondaryAlarmCount { get; private set; } = 0;
 
-        public AlarmManager(AppSettings appSettings, DatabaseManager dbManager)
+        public AlarmManager(AppSettings appSettings)
         {
             _appSettings = appSettings;
-            _dbManager = dbManager;
-            _imageNames = new List<string>();
+            _loadedImages = new List<Image>();
         }
 
-        // بارگذاری نام تصاویر از دیتابیس (فقط یکبار در شروع برنامه)
-        public void LoadImagesFromDatabase()
+        // آدرس به صورت خودکار از تنظیمات خوانده می‌شود
+        public async Task LoadImagesFromApiAsync()
         {
-            if (_dbManager != null)
+            try
             {
-                _imageNames = _dbManager.GetAllImageNames();
-                Console.WriteLine($"✅ {_imageNames.Count} number of image was read from database");
+                // خواندن آدرس از تنظیمات. اگر خالی بود از مقدار پیش‌فرض استفاده می‌شود
+                string apiUrl = !string.IsNullOrEmpty(_appSettings?.API?.LoadImages) 
+                    ? _appSettings.API.LoadImages 
+                    : "http://127.0.0.1:8000/api/images";
+
+                var response = await _httpClient.GetStringAsync(apiUrl);
+                var imagesData = JsonSerializer.Deserialize<List<ImageApiResponse>>(response);
+
+                _loadedImages.Clear();
+                
+                if (imagesData != null)
+                {
+                    foreach (var img in imagesData)
+                    {
+                        try
+                        {
+                            byte[] imageBytes = Convert.FromBase64String(img.Data);
+                            using (var ms = new MemoryStream(imageBytes))
+                            {
+                                _loadedImages.Add(new Bitmap(ms)); 
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"❌ Error decoding image {img.Name}: {ex.Message}");
+                        }
+                    }
+                }
+                Console.WriteLine($"✅ {_loadedImages.Count} images were loaded from API ({apiUrl})");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"❌ Failed to load images from API: {ex.Message}");
             }
         }
 
-        // نمایش آلارم اولیه
         public void ShowPrimaryAlarm()
         {
             IsAlarmActive = true;
             Image? currentImage = null;
 
-            // دریافت تصویر بعدی از دیتابیس
-            if (_imageNames?.Count > 0 && _dbManager != null)
+            if (_loadedImages?.Count > 0)
             {
-                string imageName = _imageNames[_currentImageIndex];
-                currentImage = _dbManager.GetImageFromDatabase(imageName);
-                _currentImageIndex = (_currentImageIndex + 1) % _imageNames.Count;
+                currentImage = _loadedImages[_currentImageIndex];
+                _currentImageIndex = (_currentImageIndex + 1) % _loadedImages.Count;
             }
 
             if (SessionCloseCounter < _appSettings?.SessionCloseLimit)
@@ -78,22 +117,19 @@ namespace Ergonomy
             }
         }
 
-        // نمایش آلارم ثانویه (اجباری)
         private void ShowSecondaryAlarm()
         {
             SecondaryAlarmCount++;
             Image? randomImage = null;
 
-            if (_imageNames?.Count > 0 && _dbManager != null)
+            if (_loadedImages?.Count > 0)
             {
                 var rand = new Random();
-                string randomImageName = _imageNames[rand.Next(_imageNames.Count)];
-                randomImage = _dbManager.GetImageFromDatabase(randomImageName);
+                randomImage = _loadedImages[rand.Next(_loadedImages.Count)];
             }
 
             var secondaryAlarm = new SecondaryAlarmForm(_appSettings, randomImage);
             secondaryAlarm.FormClosed += (s, args) => {
-                // ریست کردن وضعیت بعد از بسته شدن آلارم اجباری
                 SessionCloseCounter = 0;
                 IsAlarmActive = false;
             };

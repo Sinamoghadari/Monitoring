@@ -1,22 +1,23 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+
 
 namespace Ergonomy.Database
 {
     public class SyncEngine
     {
         private readonly LocalDatabaseManager _localDb;
-        private readonly DatabaseManager _remoteDb; // نگه داشته شد چون شاید برای کارهای دیگر (مثل آپدیت وضعیت) نیاز باشد
         private readonly System.Timers.Timer _syncTimer; 
         private bool _isSyncing = false;
         private readonly KafkaConnect _kafkaConnect;
 
-        public SyncEngine(KafkaConnect kafkaConnect, LocalDatabaseManager localDb, DatabaseManager remoteDb, double syncIntervalMinutes = 1)
+        // حذف remoteDb از سازنده
+        public SyncEngine(KafkaConnect kafkaConnect, LocalDatabaseManager localDb, double syncIntervalMinutes = 1)
         {
             _localDb = localDb;
-            _remoteDb = remoteDb;
             _kafkaConnect = kafkaConnect;
             
             double intervalMs = syncIntervalMinutes > 0 ? (syncIntervalMinutes * 60 * 1000) : 60000;
@@ -39,7 +40,7 @@ namespace Ergonomy.Database
         public void ForceSync()
         {
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ FORCE SYNC triggered before shutdown/restart.");
-            Task.Run(async () => await ProcessQueueAsync()).Wait(); // فراخوانی فوری
+            Task.Run(async () => await ProcessQueueAsync()).Wait();
         }
 
         public void UpdateSyncInterval(double intervalMinutes)
@@ -48,7 +49,7 @@ namespace Ergonomy.Database
                 intervalMinutes = 1;
 
             _syncTimer.Stop();
-            _syncTimer.Interval = intervalMinutes * 60 * 1000; // تبدیل دقیقه به میلی‌ثانیه
+            _syncTimer.Interval = intervalMinutes * 60 * 1000; 
             _syncTimer.Start();
 
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🕒 SyncEngine interval updated to {intervalMinutes} minutes.");
@@ -75,34 +76,33 @@ namespace Ergonomy.Database
                     bool success = false;
                     try
                     {
-                    if (record.TargetTable == "advanced_system_metrics")
-                    {
-                        var metrics = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions); 
-                        if (metrics != null)
+                        if (record.TargetTable == "advanced_system_metrics")
                         {
-                            await _kafkaConnect.SendSystemMetricsAsync(metrics);
-                            success = true;
+                            var metrics = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions); 
+                            if (metrics != null)
+                            {
+                                await _kafkaConnect.SendSystemMetricsAsync(metrics);
+                                success = true;
+                            }
                         }
-                    }
-                    else if (record.TargetTable == "user_activity")
-                    {
-                        var activity = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions);
-                        if (activity != null)
+                        else if (record.TargetTable == "user_activity")
                         {
-                            await _kafkaConnect.SendUserActivityAsync(activity);
-                            success = true;
+                            var activity = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions);
+                            if (activity != null)
+                            {
+                                await _kafkaConnect.SendUserActivityAsync(activity);
+                                success = true;
+                            }
                         }
-                    }
-                    else if (record.TargetTable == "app_logs")
-                    {
-                        var logData = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions);
-                        if (logData != null)
+                        else if (record.TargetTable == "app_logs")
                         {
-                            await _kafkaConnect.SendAppLogAsync(logData);
-                            success = true;
+                            var logData = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions);
+                            if (logData != null)
+                            {
+                                await _kafkaConnect.SendAppLogAsync(logData);
+                                success = true;
+                            }
                         }
-                    }
-
                     }
                     catch (Exception ex)
                     {

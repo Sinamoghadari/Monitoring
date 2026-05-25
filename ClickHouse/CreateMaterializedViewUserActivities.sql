@@ -10,5 +10,6 @@ SELECT
     SessionCloseCounter,
     PrimaryAlarmCount,
     SecondaryAlarmCount,
-    parseDateTime64BestEffort(Timestamp, 7, 'UTC') AS Timestamp -- تبدیل String به DateTime64
+    parseDateTime64BestEffort(Timestamp, 7, 'UTC') AS Timestamp,
+    Timestamp_Shamsi -- انتقال فیلد شمسی به جدول اصلی
 FROM Kafka_UserActivities;

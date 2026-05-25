@@ -4,13 +4,13 @@ using Ergonomy.Database;
 using Ergonomy.Hooks;
 using Ergonomy.Logging;
 using System.Windows.Forms;
+using System.Globalization;
 
 namespace Ergonomy.Core
 {
     public class ErgonomyManager : IDisposable
     {
         private readonly AppSettings _appSettings;
-        private readonly DatabaseManager _dbManager;
         private readonly LocalDatabaseManager _localDb;
         
         private GlobalInputHook? _globalInputHook;
@@ -19,17 +19,16 @@ namespace Ergonomy.Core
         private AlarmManager? _alarmManager;
         private System.Windows.Forms.Timer? _notificationTimer;
 
-
         private readonly string _sessionGuid;
         private readonly string _windowsSid;
         private readonly string _windowsUsername;
 
         public bool IsRunning { get; private set; } = false;
 
-        public ErgonomyManager(AppSettings appSettings, DatabaseManager dbManager, LocalDatabaseManager localDb, string sessionGuid, string windowsSid, string windowsUsername)
+        // حذف dbManager از سازنده
+        public ErgonomyManager(AppSettings appSettings, LocalDatabaseManager localDb, string sessionGuid, string windowsSid, string windowsUsername)
         {
             _appSettings = appSettings;
-            _dbManager = dbManager;
             _localDb = localDb;
             _sessionGuid = sessionGuid;
             _windowsSid = windowsSid;
@@ -38,9 +37,9 @@ namespace Ergonomy.Core
             _globalInputHook = new GlobalInputHook();
             _activityMonitor = new ActivityMonitor(_globalInputHook);
             
-            _alarmManager = new AlarmManager(_appSettings, _dbManager);
+            // ⚠️ نکته: باید dbManager را از کلاس AlarmManager هم حذف کنید.
+            _alarmManager = new AlarmManager(_appSettings); 
             
-
             _dataLogger = new DataLogger(_activityMonitor, () => _alarmManager.SessionCloseCounter, _appSettings);
         }
 
@@ -50,15 +49,15 @@ namespace Ergonomy.Core
 
             try
             {
-                _alarmManager?.LoadImagesFromDatabase();
+                // ⚠️ LoadImagesFromDatabase باید در صورت نیاز به API تبدیل شود یا از فایل‌های محلی خوانده شود.
+                Task.Run(async () => await _alarmManager?.LoadImagesFromApiAsync()); 
             }
-            catch { /* error connectiong to postres database */ }
+            catch { /* error handling */ }
 
             LogSessionState("Start");
             _activityMonitor?.Start();
             _dataLogger?.Start();
 
-            // اگر تایمر قبلاً ساخته نشده بود آن را بسازید
             if (_notificationTimer == null)
             {
                 _notificationTimer = new System.Windows.Forms.Timer();
@@ -105,7 +104,10 @@ namespace Ergonomy.Core
             {
                 double keyboardSeconds = _activityMonitor?.TotalKeyboardActiveTime.TotalSeconds ?? 0;
                 double mouseSeconds = _activityMonitor?.TotalMouseActiveTime.TotalSeconds ?? 0;
-
+                DateTime currentTime = DateTime.Now;
+                
+                PersianCalendar pc = new PersianCalendar();
+                
                 var sessionData = new 
                 {
                     SessionId = _sessionGuid,
@@ -118,12 +120,13 @@ namespace Ergonomy.Core
                     SessionCloseCounter = _alarmManager?.SessionCloseCounter ?? 0,
                     PrimaryAlarmCount = _alarmManager?.PrimaryAlarmCount ?? 0,
                     SecondaryAlarmCount = _alarmManager?.SecondaryAlarmCount ?? 0,
-                    Timestamp = DateTime.UtcNow
+                    Timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),                  
+                    Timestamp_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}"
                 };
 
                 _localDb.SaveToLocalQueue("user_activity", sessionData);
             }
-            catch { /* مدیریت خطا در صورت نیاز */ }
+            catch { }
         }
 
         public void Dispose()

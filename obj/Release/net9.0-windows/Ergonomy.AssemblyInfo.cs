@@ -14,7 +14,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Ergonomy")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Release")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+69aefbb56005c4bd295d1808920d134693e1ea42")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+2f450e755819b5c3e28654da306d361cb88ca59a")]
 [assembly: System.Reflection.AssemblyProductAttribute("Ergonomy")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Ergonomy")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

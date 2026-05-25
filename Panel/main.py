@@ -1,9 +1,12 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException , Depends
+from sqlalchemy.orm import Session
+from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 import clickhouse_connect
 import psycopg2
 import json
 from typing import Dict, Any
+import base64
 
 app = FastAPI(
     title="Monitoring Dashboard API",
@@ -33,7 +36,6 @@ PG_USER = 'postgres'
 PG_PASSWORD = 'Root_2118908'
 PG_DATABASE = "Monitoring"
 
-
 def get_clickhouse_client():
     try:
         return clickhouse_connect.get_client(
@@ -58,9 +60,31 @@ def get_pg_connection():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"PostgreSQL Connection Error: {str(e)}")
 
-# ==========================================
-# API های Power BI (کدهای قبلی شما)
-# ==========================================
+
+@app.get("/api/images")
+def get_alarm_images(db: Session = Depends(get_pg_connection)):
+    conn = get_pg_connection()
+    try :
+        cur = conn.cursor()
+        cur.execute("SELECT * FROM alarm_images")
+        result = cur.fetchall()
+        
+
+        images_list = []
+        for row in result:
+            if row[1]: 
+                base64_encoded = base64.b64encode(row[1]).decode('utf-8')
+                images_list.append({
+                    "name": row[0],
+                    "data": base64_encoded
+                })  
+        return images_list
+    
+    finally:
+        cur.close()
+        conn.close()
+
+
 @app.get("/api/system-metrics")
 def get_system_metrics(limit: int = 1000):
     client = get_clickhouse_client()
@@ -77,6 +101,18 @@ def get_app_logs(limit: int = 1000):
     client = get_clickhouse_client()
     try:
         query = f"SELECT * FROM AppLogs ORDER BY Timestamp DESC LIMIT {limit}"
+        result = client.query(query)
+        columns = result.column_names
+        return [dict(zip(columns, row)) for row in result.result_rows]
+    finally:
+        client.close()
+
+
+@app.get("/api/UserActivities")
+def get_user_activities(limit: int = 1000):
+    client = get_clickhouse_client()
+    try:
+        query = f"SELECT * FROM UserActivities ORDER BY Timestamp DESC LIMIT {limit}"
         result = client.query(query)
         columns = result.column_names
         return [dict(zip(columns, row)) for row in result.result_rows]
@@ -125,3 +161,50 @@ def get_logs_chart():
         return [dict(zip(columns, row)) for row in result.result_rows]
     finally:
         client.close()
+
+# ==========================================
+# API های مربوط به دستورات ریموت (Commands)
+# ==========================================
+
+@app.get("/api/commands")
+def get_pending_commands():
+    
+    conn = get_pg_connection()
+    try:
+        cur = conn.cursor()
+        # فرض بر این است که جدولی به نام remote_commands دارید
+        # که شامل ستون‌های id, target_computer, command_json و is_executed است.
+        query = """
+            SELECT * FROM client_commands 
+        """
+        cur.execute(query)
+        return cur.fetchall()
+    
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+    
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
+
+@app.post("/api/commands/{cmd_id}/execute")
+def mark_command_executed(cmd_id: int):
+    """علامت‌گذاری دستور به عنوان اجرا شده پس از موفقیت در کلاینت"""
+    conn = get_pg_connection()
+    try:
+        cur = conn.cursor()
+        # تغییر وضعیت is_executed به True
+        cur.execute("UPDATE remote_commands SET is_executed = TRUE WHERE id = %s", (cmd_id,))
+        conn.commit()
+        
+        # اگر هیچ رکوردی آپدیت نشد
+        if cur.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Command not found")
+            
+        return {"success": True, "message": f"Command {cmd_id} marked as executed"}
+    except Exception as e:
+         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if 'conn' in locals() and conn:
+            conn.close()
+

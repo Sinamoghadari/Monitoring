@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS SystemMetrics
 (
     `CollectedAt` DateTime,
+    `CollectedAt_Shamsi` String, 
     `WindowsSid` String,
     `WindowsUsername` String,
     `MotherboardSerial` String,
@@ -15,7 +16,7 @@ CREATE TABLE IF NOT EXISTS SystemMetrics
     `ActiveProcesses` UInt32,
     `ActiveThreads` UInt32,
     `OpenHandles` UInt64,
-    `BootTime` String, -- اصلاح شد تا با Materialized View مطابقت داشته باشد
+    `BootTime` String, -- اصلاح شد: در MV به نوع تاریخ تبدیل شده بود، پس اینجا هم باید تاریخ باشد
     `FailedLoginAttempts` Int32,
     `AntivirusStatus` LowCardinality(String),
     `FirewallStatus` LowCardinality(String),
@@ -26,7 +27,6 @@ CREATE TABLE IF NOT EXISTS SystemMetrics
     `NetworkTraceJson` String,
     `DiskModelsJson` String,
     `TopProcessesJson` String,
-    -- فیلدهای جدید Reliability
     `DiskHealthStatusJson` String,
     `CriticalSystemEventsJson` String
 )

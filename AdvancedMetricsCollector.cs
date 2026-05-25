@@ -8,6 +8,8 @@ using System.Security.Principal;
 using System.Text.Json;
 using LibreHardwareMonitor.Hardware;
 using System.Diagnostics.Eventing.Reader;
+using System.Globalization;
+
 
 public class AdvancedMetricsCollector
 {
@@ -43,6 +45,16 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
 public Dictionary<string, object> Collect()
 {
     var EnabledMetrics = new Dictionary<string, object>();
+
+    DateTime currentTime = DateTime.Now;
+
+    // ثبت تاریخ میلادی با زمان محلی
+    EnabledMetrics["CollectedAt"] = currentTime.ToString("yyyy-MM-dd HH:mm:ss");
+
+    // ثبت تاریخ شمسی با زمان محلی
+    PersianCalendar pc = new PersianCalendar();
+    EnabledMetrics["CollectedAt_Shamsi"] = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}";
+    
     
     // شناسه‌های پایه
     EnabledMetrics["ComputerName"] = Environment.MachineName;
@@ -181,8 +193,17 @@ public Dictionary<string, object> Collect()
                 {
                     if (_enabledMetrics.Contains("CpuUsagePercent") && sensor.SensorType == SensorType.Load && sensor.Name.Contains("Total"))
                         metrics["CpuUsagePercent"] = sensor.Value ?? 0;
-                    else if (_enabledMetrics.Contains("CpuTemperature") && sensor.SensorType == SensorType.Temperature && sensor.Name.Contains("Core Average"))
-                        metrics["CpuTemperature"] = sensor.Value ?? 0;
+                    else if (_enabledMetrics.Contains("CpuTemperature") && sensor.SensorType == SensorType.Temperature)
+                    {
+                        // پشتیبانی از Intel (CPU Package) و AMD (Tctl/Tdie) و Core Average
+                        if (sensor.Name.Contains("Core Average") || 
+                            sensor.Name.Contains("CPU Package") || 
+                            sensor.Name.Contains("Tctl") || 
+                            sensor.Name.Contains("Tdie"))
+                        {
+                            metrics["CpuTemperature"] = sensor.Value ?? 0;
+                        }
+                    }
                 }
                 if (_enabledMetrics.Contains("LogicalCores")) metrics["LogicalCores"] = Environment.ProcessorCount;
                 if (_enabledMetrics.Contains("PhysicalCores")) metrics["PhysicalCores"] = GetPhysicalCoresViaWmi();
@@ -301,14 +322,42 @@ public Dictionary<string, object> Collect()
     {
         try
         {
+            // 1. تلاش برای دریافت از BaseBoard
             using (var searcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard"))
             {
-                foreach (var item in searcher.Get()) return item["SerialNumber"]?.ToString()?.Trim() ?? "Unknown";
+                foreach (var item in searcher.Get())
+                {
+                    string serial = item["SerialNumber"]?.ToString()?.Trim();
+                    if (IsValidSerial(serial)) return serial;
+                }
+            }
+
+            // 2. تلاش برای دریافت از BIOS در صورت شکست مرحله اول
+            using (var searcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BIOS"))
+            {
+                foreach (var item in searcher.Get())
+                {
+                    string serial = item["SerialNumber"]?.ToString()?.Trim();
+                    if (IsValidSerial(serial)) return serial;
+                }
             }
         }
         catch { }
+        
         return "Unknown";
     }
+
+    // متد کمکی برای بررسی معتبر بودن سریال
+    private bool IsValidSerial(string serial)
+    {
+        if (string.IsNullOrWhiteSpace(serial)) return false;
+        
+        string lower = serial.ToLower();
+        if (lower.Contains("default string") || lower.Contains("o.e.m")) return false;
+        
+        return true;
+    }
+
 
     private Dictionary<string, string> GetDiskSerialsViaWmi()
     {

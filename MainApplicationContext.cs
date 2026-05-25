@@ -1,7 +1,7 @@
 using Ergonomy.Configuration;
-using Ergonomy.Database;
 using Ergonomy.Hooks;
 using Ergonomy.Logging;
+using Ergonomy.Database;
 using Microsoft.Extensions.Configuration;
 using System;
 using System.IO;
@@ -13,6 +13,9 @@ using System.Net.NetworkInformation;
 using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 using Ergonomy.Core; 
+using System.Globalization;
+using System.Net.Http; // اضافه شد برای API
+using System.Text.Json; // اضافه شد برای API
 
 namespace Ergonomy
 {
@@ -26,12 +29,16 @@ namespace Ergonomy
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
             .Build();
 
+        // اضافه شد: کلاینت Http برای ارتباط با API
+        private static readonly HttpClient _httpClient = new HttpClient();
 
         private CommandManager _commandManager;
         private System.Timers.Timer _healthCheckTimer;
         private AppSettings? _appSettings;
         private System.Timers.Timer? _wakeUpTimer;
-        private System.Timers.Timer? _postgresPermissionTimer;
+        
+        // تغییر نام: از Postgres به API
+        private System.Timers.Timer? _apiPermissionTimer;
         private System.Windows.Forms.Timer _settingsUpdateTimer;
         
         // تایمرهای اصلی جمع‌آوری داده
@@ -39,7 +46,7 @@ namespace Ergonomy
         
         // 🌟 تایمرهای بررسی سطح دسترسی برنامه‌ (دروازه‌های کنترلی)
         private System.Timers.Timer? _sqlitePermissionTimer;
-        private System.Timers.Timer? _kafkaPermissionTimer; // جایگزین Postgres
+        private System.Timers.Timer? _kafkaPermissionTimer;
 
         // تایمر زمان‌بندی (اجرای دستورات خاموش/روشن و ریموت)
         private System.Timers.Timer? _scheduleTimer;
@@ -50,23 +57,20 @@ namespace Ergonomy
         private bool _isSyncEngineRunning = false;
 
         // سرویس‌ها
-        private DatabaseManager? _dbManager;      // اتصال به Postgres (برای تنظیمات و دستورات)
+        // private DatabaseManager? _dbManager;   // ❌ حذف شد
         private LocalDatabaseManager _localDb;    // اتصال به SQLite (بافر محلی)
         private SyncEngine? _syncEngine;          // موتور ارسال داده از SQLite به کافکا
         private NotifyIcon? _notifyIcon;
         private KafkaConnect? _kafkaConnect;      // کلاینت کافکا
         private ErgonomyManager? _ergonomyManager;
-
         
         // اطلاعات نشست
         private string _windowsSid;
         private string _windowsUsername;
         private string _sessionGuid; 
-       
 
         public MainApplicationContext()
         {
-
             Application.ThreadException += (s, e) => HandleCriticalFailure(e.Exception.Message);
             AppDomain.CurrentDomain.UnhandledException += (s, e) => 
             {
@@ -85,42 +89,28 @@ namespace Ergonomy
             // ۲. راه‌اندازی بافر محلی (SQLite)
             _localDb = new LocalDatabaseManager();
 
-            if (_appSettings?.Database == null)
-            {
-                Console.WriteLine("❌ Database settings in appsettings.json were not found!");
-                SaveLogToDatabase("ERROR", "Database settings in appsettings.json were not found!");
-                return;
-            }
-
             // ۳. تست اتصال به کافکا در لحظه شروع
             TestKafkaConnectionAtStartup();
 
             StartHealthMonitoring(); 
-            // ۴. مقداردهی اولیه سرویس‌ها
-            var dbSettings = _appSettings.Database;
-            _dbManager = new DatabaseManager(dbSettings.Host, dbSettings.Name, dbSettings.User, dbSettings.Password, dbSettings.Port);
             
-            // موتور سینک حالا با استفاده از KafkaConnect و LocalDb کار می‌کند
-            _syncEngine = new SyncEngine(_kafkaConnect!, _localDb, _dbManager, _appSettings?.SyncEngineIntervalMinutes ?? 1);
+            // ۴. مقداردهی اولیه سرویس‌ها (بدون dbManager)
+            // ⚠️ نکته مهم: باید در کلاس‌های زیر، DatabaseManager را از Constructor حذف کنید.
+            _syncEngine = new SyncEngine(_kafkaConnect!, _localDb, _appSettings?.SyncEngineIntervalMinutes ?? 1);
+            _ergonomyManager = new ErgonomyManager(_appSettings, _localDb, _sessionGuid, _windowsSid, _windowsUsername);
 
-            
-            _ergonomyManager = new ErgonomyManager(_appSettings, _dbManager, _localDb, _sessionGuid, _windowsSid, _windowsUsername);
-            
-
-            // تلاش برای اتصال به Postgres و دریافت آخرین تنظیمات آنلاین
-            UpdateSettingsFromDatabase();
-
+            // ۵. تلاش برای دریافت آخرین تنظیمات آنلاین از API به جای Postgres
+            Task.Run(() => UpdateSettingsFromApiAsync());
 
             int intervalSeconds = _appSettings?.SettingsCheckIntervalSeconds > 0 ? _appSettings.SettingsCheckIntervalSeconds : 60;
             _settingsUpdateTimer = new System.Windows.Forms.Timer();
             _settingsUpdateTimer.Interval = intervalSeconds * 1000;
-            _settingsUpdateTimer.Tick += (s, e) => UpdateSettingsFromDatabase();
+            _settingsUpdateTimer.Tick += async (s, e) => await UpdateSettingsFromApiAsync();
             _settingsUpdateTimer.Start();
 
-
-            _commandManager = new CommandManager(_appSettings, _dbManager, _windowsUsername)
+            
+            _commandManager = new CommandManager(_appSettings, _windowsUsername)
             {
-                // ۲. اتصال متدهای این کلاس به اکشن‌های منیجر
                 OnLogRequired = SaveLogToDatabase,
                 OnForceSync = () => _syncEngine?.ForceSync(),
                 OnStopCollection = () => 
@@ -134,32 +124,26 @@ namespace Ergonomy
                     _isLocalCollectionRunning = true;
                 }
             };
-
-            // ۳. استارت کردن چک دوره‌ای
             _commandManager.Start();
         
-
-
             _notifyIcon = new NotifyIcon { Icon = System.Drawing.SystemIcons.Application, Visible = true, Text = "Ergonomy" };
 
             // ۶. بررسی دسترسی‌ها و راه‌اندازی چرخه‌ها
-            EvaluateSqlitePermission();   // آیا اجازه ذخیره در بافر محلی را داریم؟
-            EvaluateKafkaPermission();    // آیا اجازه ارسال از بافر به کافکا را داریم؟
+            EvaluateSqlitePermission();
+            EvaluateKafkaPermission();
             EvaluateErgonomyPermission();
-            StartSqlitePermissionTimer(); // تایمر چک کردن دوره‌ای دسترسی SQLite
-            StartKafkaPermissionTimer();  // تایمر چک کردن دوره‌ای دسترسی کافکا
-
-            StartPostgresPermissionTimer();
-
+            
+            StartSqlitePermissionTimer();
+            StartKafkaPermissionTimer();
+            StartApiPermissionTimer(); // تغییر یافت
         }
 
         private void RestartPermissionTimers()
         {
             StartSqlitePermissionTimer();
             StartKafkaPermissionTimer();
-            StartPostgresPermissionTimer();
+            StartApiPermissionTimer();
         }
-
 
         private void HandleCriticalFailure(string errorMessage)
         {
@@ -171,7 +155,6 @@ namespace Ergonomy
         {
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 💤 Entering Sleep Mode due to critical failures...");
             
-            // متوقف کردن تمام سرویس‌ها برای جلوگیری از تولید خطای مجدد
             StopAllDataCollection();
             _isLocalCollectionRunning = false;
             
@@ -182,15 +165,14 @@ namespace Ergonomy
             _kafkaPermissionTimer?.Stop();
             _scheduleTimer?.Stop();
 
-            // دریافت زمان خواب از تنظیمات یا 5 دقیقه پیش‌فرض
             double sleepMinutes = _appSettings?.ConnectionFailureSleepMinutes ?? 5;
             
-            // راه‌اندازی تایمر بیداری
             _wakeUpTimer?.Stop();
             _wakeUpTimer?.Dispose();
-            _wakeUpTimer = new System.Timers.Timer(sleepMinutes * 60 * 1000); // محاسبه ریاضی: $sleepMinutes \times 60 \times 1000$
+            // فرمول محاسبه: $sleepMinutes \times 60 \times 1000$
+            _wakeUpTimer = new System.Timers.Timer(sleepMinutes * 60 * 1000);
             _wakeUpTimer.Elapsed += (s, e) => WakeUp();
-            _wakeUpTimer.AutoReset = false; // فقط یک بار اجرا شود
+            _wakeUpTimer.AutoReset = false;
             _wakeUpTimer.Start();
         }
 
@@ -198,8 +180,7 @@ namespace Ergonomy
         {
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ☀️ Waking up and re-evaluating connections...");
             
-            // تلاش مجدد برای دریافت تنظیمات و اجرای دروازه‌های کنترلی
-            UpdateSettingsFromDatabase();
+            Task.Run(() => UpdateSettingsFromApiAsync());
             EvaluateSqlitePermission();
             EvaluateKafkaPermission();
             
@@ -217,21 +198,41 @@ namespace Ergonomy
             _healthCheckTimer.AutoReset = true;
             _healthCheckTimer.Start();
 
-            // اجرای اولیه در زمان استارتاپ
             Task.Run(async () => await PerformAllHealthChecksAsync());
         }
 
         private async Task PerformAllHealthChecksAsync()
         {
-            // 1. بررسی دیتابیس Postgres
-            await _dbManager.CheckAndLogPostgresConnectionAsync(_kafkaConnect, _windowsUsername);
-
-            // 2. بررسی دیتابیس SQLite
+            // جایگزین شد: بررسی سلامت API
+            await CheckApiHealthAsync();
             await CheckSqliteHealthAsync();
-
-            // 3. بررسی منابع برنامه (RAM)
             await CheckSelfPerformanceAsync();
         }
+
+        // بررسی سلامت API
+        private async Task CheckApiHealthAsync()
+        {
+            string? apiUrl = _configuration["AppSettings:API:Settings"];
+            if (string.IsNullOrEmpty(apiUrl)) return;
+
+            try
+            {
+                var response = await _httpClient.GetAsync(apiUrl);
+                if (response.IsSuccessStatusCode)
+                {
+                    await SendHealthLogAsync("INFO", "Settings API is healthy and accessible.", "ApiHealth");
+                }
+                else
+                {
+                    await SendHealthLogAsync("WARN", $"Settings API returned status code: {response.StatusCode}", "ApiHealth");
+                }
+            }
+            catch (Exception ex)
+            {
+                await SendHealthLogAsync("ERROR", $"API Health Check Error: {ex.Message}", "ApiHealth");
+            }
+        }
+
         private async Task CheckSqliteHealthAsync()
         {
             string statusMessage;
@@ -253,8 +254,6 @@ namespace Ergonomy
             {
                 statusMessage = $"SQLite Error (Possible lock or corruption): {ex.Message}";
                 logLevel = "ERROR";
-                
-                // 🌟 اگر SQLite (بافر اصلی ما) هم قطع شد، برنامه به خواب برود
                 HandleCriticalFailure("SQLite is inaccessible. Data collection cannot continue.");
             }
 
@@ -266,12 +265,11 @@ namespace Ergonomy
             try
             {
                 var process = Process.GetCurrentProcess();
-                // فرمول محاسبه مگابایت
-                // $$MB = \frac{Bytes}{1024 \times 1024}$$
+                // فرمول محاسبه مگابایت: $MB = \frac{Bytes}{1024 \times 1024}$
                 long memoryUsedMB = process.WorkingSet64 / (1024 * 1024);
                 
                 string statusMessage = $"Agent Performance: Memory Usage is {memoryUsedMB} MB. Thread Count: {process.Threads.Count}";
-                string logLevel = memoryUsedMB > 500 ? "WARN" : "INFO"; // اگر بیش از 500 مگابایت بود هشدار بده
+                string logLevel = memoryUsedMB > 500 ? "WARN" : "INFO";
 
                 await SendHealthLogAsync(logLevel, statusMessage, "AgentPerformance");
             }
@@ -281,14 +279,14 @@ namespace Ergonomy
             }
         }
 
-        // یک متد کمکی برای جلوگیری از تکرار کد ارسال لاگ
         private async Task SendHealthLogAsync(string logLevel, string message, string category)
         {
+            DateTime currentTime = DateTime.Now;
             if (_kafkaConnect == null) return;
 
             var logObj = new
             {
-                Timestamp = DateTime.UtcNow,
+                Timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
                 LogLevel = logLevel,
                 Message = message,
                 WindowsUsername = _windowsUsername,
@@ -307,54 +305,63 @@ namespace Ergonomy
             }
         }
 
-
-        private void UpdateSettingsFromDatabase()
+        // متد جدید: آپدیت تنظیمات از طریق API
+        private async Task UpdateSettingsFromApiAsync()
         {
-            if (_dbManager == null) return;
-
-            var dbSettingsOverride = _dbManager.GetSettingsFromDatabase();
-            if (dbSettingsOverride != null)
+            try
             {
-                var oldSettingsJson = System.Text.Json.JsonSerializer.Serialize(_appSettings);
-                var newSettingsJson = System.Text.Json.JsonSerializer.Serialize(dbSettingsOverride);
+                string? apiUrl = _configuration["AppSettings:API:Settings"];
+                if (string.IsNullOrEmpty(apiUrl)) return;
 
-                if (oldSettingsJson != newSettingsJson)
+                HttpResponseMessage response = await _httpClient.GetAsync(apiUrl);
+                if (response.IsSuccessStatusCode)
                 {
-                    // بروز رسانی تنظیمات
-                    _appSettings = dbSettingsOverride;
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ✅ Settings updated from Postgres.");
+                    string jsonString = await response.Content.ReadAsStringAsync();
+                    
+                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                    var apiSettingsOverride = JsonSerializer.Deserialize<AppSettings>(jsonString, options);
 
-                    SaveSettingsToAppSettingsJson(_appSettings);
-                    RestartPermissionTimers();
+                    if (apiSettingsOverride != null)
+                    {
+                        var oldSettingsJson = JsonSerializer.Serialize(_appSettings);
+                        var newSettingsJson = JsonSerializer.Serialize(apiSettingsOverride);
 
-                    if (_syncEngine != null)
-                    {
-                        _syncEngine.UpdateSyncInterval(_appSettings.SyncEngineIntervalMinutes);
-                    }
+                        if (oldSettingsJson != newSettingsJson)
+                        {
+                            _appSettings = apiSettingsOverride;
+                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ✅ Settings updated securely from API.");
 
-                    // --- ساختن نمونه فقط برای بار اول ---
-                    if (_appSettings.SettingsCheckIntervalSeconds > 0 && _settingsUpdateTimer != null)
-                    {
-                        int intervalSeconds = _appSettings.SettingsCheckIntervalSeconds;
-                        _settingsUpdateTimer.Interval = intervalSeconds * 1000;
-                    }
+                            SaveSettingsToAppSettingsJson(_appSettings);
+                            RestartPermissionTimers();
 
-                    // --- فقط استارت یا استاپ کردن ---
-                    if (_appSettings.AllowErgonomyCollection)
-                    {
-                        _ergonomyManager.Start();
-                        Console.WriteLine("Ergonomy Started.");
-                    }
-                    else
-                    {
-                        _ergonomyManager.Stop();
-                        Console.WriteLine("Ergonomy Stopped.");
+                            if (_syncEngine != null)
+                            {
+                                _syncEngine.UpdateSyncInterval(_appSettings.SyncEngineIntervalMinutes);
+                            }
+
+                            if (_appSettings.SettingsCheckIntervalSeconds > 0 && _settingsUpdateTimer != null)
+                            {
+                                int intervalSeconds = _appSettings.SettingsCheckIntervalSeconds;
+                                _settingsUpdateTimer.Interval = intervalSeconds * 1000;
+                            }
+
+                            if (_appSettings.AllowErgonomyCollection)
+                            {
+                                _ergonomyManager?.Start();
+                                Console.WriteLine("Ergonomy Started.");
+                            }
+                            else
+                            {
+                                _ergonomyManager?.Stop();
+                                Console.WriteLine("Ergonomy Stopped.");
+                            }
+                        }
                     }
                 }
             }
-            else
+            catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Offline Mode! Using appsettings.json.");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Offline Mode or API Error! Using appsettings.json. Msg: {ex.Message}");
             }
         }
 
@@ -369,7 +376,6 @@ namespace Ergonomy
 
             if (allowSqlite)
             {
-                // اگر اجازه داریم و سرویس خاموش است، روشنش کن
                 if (!_isLocalCollectionRunning)
                 {
                     StartLocalDataCollection();
@@ -378,13 +384,11 @@ namespace Ergonomy
             }
             else
             {
-                // اگر اجازه نداریم و سرویس روشن است، خاموشش کن
                 if (_isLocalCollectionRunning)
                 {
                     StopAllDataCollection();
                     _isLocalCollectionRunning = false;
                     
-                    // اگر جمع‌آوری محلی متوقف شود، سینک به کافکا هم باید متوقف شود
                     if (_isSyncEngineRunning)
                     {
                         _syncEngine?.Stop();
@@ -398,14 +402,13 @@ namespace Ergonomy
         private void EvaluateKafkaPermission()
         {
             bool allowSqlite = _appSettings?.AllowSqliteWrite ?? true;
-            bool allowKafka = _appSettings?.AllowKafkaWrite ?? true; // استفاده از متغیر جدید
+            bool allowKafka = _appSettings?.AllowKafkaWrite ?? true; 
             double intervalHours = _appSettings?.PermissionKafkaRetryIntervalHours ?? 1;
 
             string msg = $"[Kafka Sync Status] Permission: {allowKafka} | Checking continuously every {intervalHours} hour(s).";
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🔍 {msg}");
             SaveLogToDatabase("INFO", msg);
 
-            // فقط در صورتی به کافکا می‌فرستیم که هم SQLite روشن باشد هم اجازه کافکا داشته باشیم
             if (allowSqlite && allowKafka)
             {
                 if (!_isSyncEngineRunning)
@@ -426,13 +429,8 @@ namespace Ergonomy
             }
         }
 
-        // ==========================================
-        // تایمرهای بررسی دوره‌ای تنظیمات
-        // ==========================================
         private void EvaluateErgonomyPermission()
         {
-            // فرض بر این است که پراپرتی AllowErgonomyCollection در AppSettings اضافه شده باشد.
-            // در غیر اینصورت پیش‌فرض true در نظر گرفته می‌شود
             bool allowErgonomy = _appSettings?.AllowErgonomyCollection ?? true;
 
             string msg = $"[Ergonomy Status] Permission: {allowErgonomy}";
@@ -457,12 +455,12 @@ namespace Ergonomy
 
             double retryHours = _appSettings?.PermissionSqliteRetryIntervalHours ?? 1;
             _sqlitePermissionTimer = new System.Timers.Timer(retryHours * 60 * 60 * 1000); 
-            _sqlitePermissionTimer.Elapsed += (s, e) => 
+            _sqlitePermissionTimer.Elapsed += async (s, e) => 
             {
-                UpdateSettingsFromDatabase(); 
+                await UpdateSettingsFromApiAsync(); 
                 EvaluateSqlitePermission(); 
                 EvaluateErgonomyPermission();
-                StartSqlitePermissionTimer(); // استارت مجدد با تنظیمات احتمالاً جدید
+                StartSqlitePermissionTimer(); 
             };
             _sqlitePermissionTimer.AutoReset = false; 
             _sqlitePermissionTimer.Start();
@@ -473,12 +471,11 @@ namespace Ergonomy
             _kafkaPermissionTimer?.Stop();
             _kafkaPermissionTimer?.Dispose();
 
-            // استفاده از بازه زمانی مخصوص کافکا
             double retryHours = _appSettings?.PermissionKafkaRetryIntervalHours ?? 1;
             _kafkaPermissionTimer = new System.Timers.Timer(retryHours * 60 * 60 * 1000); 
-            _kafkaPermissionTimer.Elapsed += (s, e) => 
+            _kafkaPermissionTimer.Elapsed += async (s, e) => 
             {
-                UpdateSettingsFromDatabase(); 
+                await UpdateSettingsFromApiAsync(); 
                 EvaluateKafkaPermission(); 
                 StartKafkaPermissionTimer(); 
             };
@@ -486,17 +483,9 @@ namespace Ergonomy
             _kafkaPermissionTimer.Start();
         }
 
-
-        // ==========================================
-        // بخش مدیریت سرویس‌های داخلی و جمع‌آوری داده
-        // ==========================================
-
         private void StartLocalDataCollection()
         {
             StopAllDataCollection();
-
-            // در اینجا فقط متریک‌های سیستم (Advanced Metrics) استارت می‌خورد
-            // چون ارگونومی توسط EvaluateErgonomyPermission کنترل می‌شود
             
             _advancedMetricsTimer = new System.Windows.Forms.Timer();
             double advancedIntervalMinutes = (_appSettings?.AdvancedMetricsIntervalMinutes ?? 120) > 0 ? (_appSettings?.AdvancedMetricsIntervalMinutes ?? 120) : 120;
@@ -510,7 +499,6 @@ namespace Ergonomy
         private void StopAllDataCollection()
         {
             _advancedMetricsTimer?.Stop();
-            // ارگونومی را هم اینجا متوقف می‌کنیم که در مواقع خطای بحرانی کامل خاموش شود
             _ergonomyManager?.Stop();
         }
 
@@ -526,12 +514,11 @@ namespace Ergonomy
             if (_appSettings == null)
             {
                 _appSettings = new AppSettings();
-                // می‌توانید اینجا یک لاگ خطا هم ثبت کنید
                 Console.WriteLine("ERROR: AppSettings section not found in appsettings.json or could not be bound.");
             }
             if (_appSettings.SyncEngineIntervalMinutes <= 0)
             {
-                _appSettings.SyncEngineIntervalMinutes = 1; // مقدار پیش‌فرض
+                _appSettings.SyncEngineIntervalMinutes = 1; 
             }
             Console.WriteLine($"Total enabled metrics count after loading: {_appSettings?.EnabledMetrics?.Count ?? 0}");
             
@@ -540,25 +527,25 @@ namespace Ergonomy
             _kafkaConnect = new KafkaConnect(configuration);
         }
 
-        private void StartPostgresPermissionTimer()
+        // تغییر نام و منطق از Postgres به API
+        private void StartApiPermissionTimer()
         {
-            _postgresPermissionTimer?.Stop();
-            _postgresPermissionTimer?.Dispose();
+            _apiPermissionTimer?.Stop();
+            _apiPermissionTimer?.Dispose();
 
-            double retryHours = _appSettings?.PermissionPostgresRetryIntervalHours ?? 1;
-
-            _postgresPermissionTimer = new System.Timers.Timer(retryHours * 60 * 60 * 1000); // تبدیل ساعت به میلی‌ثانیه
-            _postgresPermissionTimer.Elapsed += (s, e) =>
+            // استفاده از تایمر جایگزین (یا یک ویژگی جدید در صورت نیاز تعریف کنید)
+            double retryHours = 1; 
+            
+            _apiPermissionTimer = new System.Timers.Timer(retryHours * 60 * 60 * 1000); 
+            _apiPermissionTimer.Elapsed += async (s, e) =>
             {
-                UpdateSettingsFromDatabase(); // تلاش برای دریافت تنظیمات جدید
-                // اگر تنظیمات تغییر کرد باید روی فایل appsettings.json نیز آپدیت شود
-                SaveSettingsToAppSettingsJson(_appSettings);
-                StartPostgresPermissionTimer(); // مجدد راه‌اندازی تایمر
+                await UpdateSettingsFromApiAsync();
+                StartApiPermissionTimer(); 
             };
-            _postgresPermissionTimer.AutoReset = false;
-            _postgresPermissionTimer.Start();
+            _apiPermissionTimer.AutoReset = false;
+            _apiPermissionTimer.Start();
 
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🎯 Postgres permission check timer started. Interval = {retryHours} hour(s).");
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🎯 API permission check timer started. Interval = {retryHours} hour(s).");
         }
 
         private void SaveSettingsToAppSettingsJson(AppSettings? settings)
@@ -567,19 +554,10 @@ namespace Ergonomy
 
             try
             {
-                // مسیر فایل appsettings.json معمولاً در فولدر برنامه
                 string filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
-
-                var root = new
-                {
-                    AppSettings = settings
-                };
-
-                // استفاده از Newtonsoft.Json یا System.Text.Json
-                var json = System.Text.Json.JsonSerializer.Serialize(root, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-
+                var root = new { AppSettings = settings };
+                var json = JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true });
                 File.WriteAllText(filePath, json);
-
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 💾 appsettings.json updated successfully.");
             }
             catch (Exception ex)
@@ -588,16 +566,16 @@ namespace Ergonomy
             }
         }
 
-
         private void TestKafkaConnectionAtStartup()
         {
+            DateTime currentTime = DateTime.Now;
             Task.Run(async () => 
             {
                 try
                 {
                     var startupLog = new
                     {
-                        Timestamp = DateTime.UtcNow,
+                        Timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
                         LogLevel = "INFO",
                         Message = "Application Started and Successfully Connected to Kafka.",
                         WindowsUsername = _windowsUsername,
@@ -619,9 +597,7 @@ namespace Ergonomy
             {
                 try
                 {
-
                     var collector = new AdvancedMetricsCollector(_appSettings.EnabledMetrics, _appSettings.TopProcessesCount, _appSettings.NetworkTraceTargetIP);
-
                     var metrics = collector.Collect();
                     _localDb.SaveToLocalQueue("advanced_system_metrics", metrics);
                 }
@@ -640,12 +616,15 @@ namespace Ergonomy
 
         private void SaveLogToDatabase(string level, string message)
         {
+            DateTime currentTime = DateTime.Now;
+            PersianCalendar pc = new PersianCalendar();
             try
             {
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{level}] {message}");
                 var logEntry = new
                 {
-                    Timestamp = DateTime.UtcNow,
+                    Timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
                     LogLevel = level,
                     Message = message,
                     WindowsUsername = _windowsUsername,
@@ -666,6 +645,7 @@ namespace Ergonomy
                 _scheduleTimer?.Stop(); _scheduleTimer?.Dispose();
                 _sqlitePermissionTimer?.Stop(); _sqlitePermissionTimer?.Dispose();
                 _kafkaPermissionTimer?.Stop(); _kafkaPermissionTimer?.Dispose();
+                _apiPermissionTimer?.Stop(); _apiPermissionTimer?.Dispose();
                 
                 StopAllDataCollection();
                 _syncEngine?.Stop(); 
@@ -674,6 +654,7 @@ namespace Ergonomy
                 
                 _kafkaConnect?.Dispose(); 
                 _commandManager?.Dispose();
+                _httpClient?.Dispose();
             }
             base.Dispose(disposing);
         }

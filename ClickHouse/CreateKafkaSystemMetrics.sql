@@ -1,5 +1,7 @@
 CREATE TABLE IF NOT EXISTS Kafka_SystemMetrics
 (
+    CollectedAt String, 
+    CollectedAt_Shamsi String, 
     WindowsSid String,
     WindowsUsername String,
     MotherboardSerial String,
@@ -25,7 +27,6 @@ CREATE TABLE IF NOT EXISTS Kafka_SystemMetrics
     NetworkTraceJson String,
     DiskModelsJson String,
     TopProcessesJson String,
-    -- فیلدهای جدید Reliability
     DiskHealthStatusJson String,
     CriticalSystemEventsJson String
 ) ENGINE = Kafka()

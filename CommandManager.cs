@@ -3,30 +3,38 @@ using System.Collections.Generic;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Net.Http;
+using System.Text;
 using SysTimer = System.Timers.Timer;
 
 namespace Ergonomy 
 {
+    // کلاس کمکی برای نگهداری ساختار دستورات دریافتی از API
+    public class RemoteCommand
+    {
+        public int Id { get; set; }
+        public string Command { get; set; } = string.Empty;
+    }
+
     public class CommandManager : IDisposable
     {
         private SysTimer _scheduleTimer;
-        private string _lastExecutedSchedule;
+        private string _lastExecutedSchedule = "";
         private string _windowsUsername;
+        private static readonly HttpClient _httpClient = new HttpClient();
         
-        // وابستگی‌ها
+        
         private dynamic _appSettings; 
-        private dynamic _dbManager; 
 
         // Callbacks
-        public Action<string, string> OnLogRequired { get; set; }
-        public Action OnStopCollection { get; set; }
-        public Action OnStartCollection { get; set; }
-        public Action OnForceSync { get; set; }
+        public Action<string, string>? OnLogRequired { get; set; }
+        public Action? OnStopCollection { get; set; }
+        public Action? OnStartCollection { get; set; }
+        public Action? OnForceSync { get; set; }
 
-        public CommandManager(dynamic appSettings, dynamic dbManager, string windowsUsername)
+        public CommandManager(dynamic appSettings, string windowsUsername)
         {
             _appSettings = appSettings;
-            _dbManager = dbManager;
             _windowsUsername = windowsUsername;
 
             double intervalSec = _appSettings?.CommandCheckIntervalSeconds ?? 30;
@@ -54,8 +62,8 @@ namespace Ergonomy
 
             string currentSystemTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
 
-            if (!string.IsNullOrWhiteSpace(_appSettings.ScheduledRestartTime) && 
-                currentSystemTime == _appSettings.ScheduledRestartTime && 
+            if (!string.IsNullOrWhiteSpace((string)_appSettings.ScheduledRestartTime) && 
+                currentSystemTime == (string)_appSettings.ScheduledRestartTime && 
                 _lastExecutedSchedule != currentSystemTime)
             {
                 _lastExecutedSchedule = currentSystemTime;
@@ -63,8 +71,8 @@ namespace Ergonomy
                 System.Diagnostics.Process.Start("shutdown", "/r /t 5");
             }
 
-            if (!string.IsNullOrWhiteSpace(_appSettings.ScheduledShutdownTime) && 
-                currentSystemTime == _appSettings.ScheduledShutdownTime && 
+            if (!string.IsNullOrWhiteSpace((string)_appSettings.ScheduledShutdownTime) && 
+                currentSystemTime == (string)_appSettings.ScheduledShutdownTime && 
                 _lastExecutedSchedule != currentSystemTime)
             {
                 _lastExecutedSchedule = currentSystemTime;
@@ -72,104 +80,117 @@ namespace Ergonomy
                 System.Diagnostics.Process.Start("shutdown", "/s /t 5");
             }
 
-            CheckAndExecuteCommands(Environment.MachineName, _windowsUsername);
+            Task.Run(async () => await CheckAndExecuteCommandsFromApi(Environment.MachineName, _windowsUsername));
         }
 
-        private void CheckAndExecuteCommands(string computerName, string windowsUsername) 
+        private async Task CheckAndExecuteCommandsFromApi(string computerName, string windowsUsername) 
         {
-            var pendingCommands = _dbManager?.GetPendingCommands(computerName, windowsUsername); 
-            if (pendingCommands == null || pendingCommands.Count == 0) return;
-
-            foreach (var cmd in pendingCommands)
+            
+            string? baseUrl = _appSettings?.API?.Commands;
+            
+            if (string.IsNullOrWhiteSpace(baseUrl))
             {
-                OnLogRequired?.Invoke("INFO", $"Received remote command batch (ID: {cmd.Id}): '{cmd.Command}'. Preparing to execute.");
-                
-                string jsonCommandToExecute = cmd.Command;
+                OnLogRequired?.Invoke("ERROR", "CommandsApiUrl is not configured in AppSettings.");
+                baseUrl = "http://127.0.0.1:8000/api/commands"; 
+            }
 
-                Task.Run(async () => 
+            baseUrl = baseUrl.TrimEnd('/'); // جلوگیری از مشکلات مربوط به اسلش اضافی
+            string apiUrl = $"{baseUrl}?computer={computerName}&user={windowsUsername}";
+
+            try
+            {
+                HttpResponseMessage response = await _httpClient.GetAsync(apiUrl);
+                if (!response.IsSuccessStatusCode) return;
+
+                string jsonString = await response.Content.ReadAsStringAsync();
+                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                var pendingCommands = JsonSerializer.Deserialize<List<RemoteCommand>>(jsonString, options);
+
+                if (pendingCommands == null || pendingCommands.Count == 0) return;
+
+                foreach (var cmd in pendingCommands)
                 {
-                    await Task.Delay(20000); 
+                    OnLogRequired?.Invoke("INFO", $"Received remote command batch (ID: {cmd.Id}): '{cmd.Command}'. Preparing to execute.");
+                    
+                    string jsonCommandToExecute = cmd.Command;
 
-                    bool success = false; // پرچم برای بررسی موفقیت‌آمیز بودن پردازش
-
-                    try
+                    _ = Task.Run(async () => 
                     {
-                        using (JsonDocument doc = JsonDocument.Parse(jsonCommandToExecute))
-                        {
-                            if (doc.RootElement.ValueKind == JsonValueKind.Array)
-                            {
-                                foreach (JsonElement element in doc.RootElement.EnumerateArray())
-                                {
-                                    if (element.ValueKind == JsonValueKind.String)
-                                    {
-                                        ProcessCommand(element.GetString());
-                                    }
-                                }
-                            }
-                            else if (doc.RootElement.ValueKind == JsonValueKind.Object)
-                            {
-                                foreach (JsonProperty prop in doc.RootElement.EnumerateObject())
-                                {
-                                    string key = prop.Name.ToLower();
-                                    string value = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : prop.Value.GetRawText();
+                        await Task.Delay(20000); 
+                        bool success = false; 
 
-                                    if (key == "msg" || key == "message")
-                                    {
-                                        ProcessCommand($"msg:{value}");
-                                    }
-                                    else if (key == "command" || key == "action")
-                                    {
-                                        ProcessCommand(value);
-                                    }
-                                    else
-                                    {
-                                        ProcessCommand(key); 
-                                    }
-                                }
-                            }
-                        }
-                        
-                        // اگر کد به اینجا رسید، یعنی خواندن و پارس کردن JSON موفق بوده است
-                        success = true; 
-                    }
-                    catch (JsonException)
-                    {
                         try
                         {
-                            // اگر JSON نبود (متن ساده بود)
-                            OnLogRequired?.Invoke("WARNING", $"Command ID {cmd.Id} is not valid JSON. Executing as a raw string.");
-                            ProcessCommand(jsonCommandToExecute);
-                            success = true; // اجرای موفق به عنوان رشته متنی
+                            using (JsonDocument doc = JsonDocument.Parse(jsonCommandToExecute))
+                            {
+                                if (doc.RootElement.ValueKind == JsonValueKind.Array)
+                                {
+                                    foreach (JsonElement element in doc.RootElement.EnumerateArray())
+                                    {
+                                        if (element.ValueKind == JsonValueKind.String)
+                                            ProcessCommand(element.GetString());
+                                    }
+                                }
+                                else if (doc.RootElement.ValueKind == JsonValueKind.Object)
+                                {
+                                    foreach (JsonProperty prop in doc.RootElement.EnumerateObject())
+                                    {
+                                        string key = prop.Name.ToLower();
+                                        string value = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString()! : prop.Value.GetRawText();
+
+                                        if (key == "msg" || key == "message")
+                                            ProcessCommand($"msg:{value}");
+                                        else if (key == "command" || key == "action")
+                                            ProcessCommand(value);
+                                        else
+                                            ProcessCommand(key); 
+                                    }
+                                }
+                            }
+                            success = true; 
+                        }
+                        catch (JsonException)
+                        {
+                            try
+                            {
+                                OnLogRequired?.Invoke("WARNING", $"Command ID {cmd.Id} is not valid JSON. Executing as a raw string.");
+                                ProcessCommand(jsonCommandToExecute);
+                                success = true; 
+                            }
+                            catch (Exception ex)
+                            {
+                                OnLogRequired?.Invoke("ERROR", $"Error processing command ID {cmd.Id} as raw string: {ex.Message}");
+                            }
                         }
                         catch (Exception ex)
                         {
-                            OnLogRequired?.Invoke("ERROR", $"Error processing command ID {cmd.Id} as raw string: {ex.Message}");
+                            OnLogRequired?.Invoke("ERROR", $"Error processing command ID {cmd.Id}: {ex.Message}");
                         }
-                    }
-                    catch (Exception ex)
-                    {
-                        // در صورت بروز هرگونه خطای پیش‌بینی نشده در پردازش
-                        OnLogRequired?.Invoke("ERROR", $"Error processing command ID {cmd.Id}: {ex.Message}");
-                    }
 
-                    // ثبت در دیتابیس فقط در صورت موفقیت‌آمیز بودن خواندن و پردازش انجام می‌شود
-                    if (success)
-                    {
-                        _dbManager?.MarkCommandAsExecuted(cmd.Id);
-                        OnLogRequired?.Invoke("INFO", $"Command ID {cmd.Id} successfully processed and marked as executed in database.");
-                    }
-                    else
-                    {
-                        OnLogRequired?.Invoke("WARNING", $"Command ID {cmd.Id} failed to process. Status in database remains unchanged.");
-                    }
-                });
+                        if (success)
+                        {
+                            // استفاده از همان Base URL برای ارسال درخواست POST
+                            string markExecutedUrl = $"{baseUrl}/{cmd.Id}/execute";
+                            var postResponse = await _httpClient.PostAsync(markExecutedUrl, new StringContent("{}", Encoding.UTF8, "application/json"));
+                            
+                            if (postResponse.IsSuccessStatusCode)
+                                OnLogRequired?.Invoke("INFO", $"Command ID {cmd.Id} successfully processed and marked as executed via API.");
+                            else
+                                OnLogRequired?.Invoke("WARNING", $"Command ID {cmd.Id} failed to be marked as executed in API.");
+                        }
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                OnLogRequired?.Invoke("ERROR", $"Error fetching commands from API: {ex.Message}");
             }
         }
 
-
-
-        private void ProcessCommand(string command)
+        private void ProcessCommand(string? command)
         {
+            if (string.IsNullOrWhiteSpace(command)) return;
+
             string lowerCmd = command.ToLower().Trim();
 
             if (lowerCmd.StartsWith("msg:"))

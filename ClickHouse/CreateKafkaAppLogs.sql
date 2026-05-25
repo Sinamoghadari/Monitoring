@@ -1,6 +1,7 @@
-CREATE TABLE Kafka_AppLogs
+CREATE TABLE IF NOT EXISTS Kafka_AppLogs
 (
     Timestamp String,
+    CollectedAt_Shamsi String,
     LogLevel String,
     Message String,
     WindowsUsername String,

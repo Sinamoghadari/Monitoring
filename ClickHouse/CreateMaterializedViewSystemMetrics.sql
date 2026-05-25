@@ -1,6 +1,7 @@
 CREATE MATERIALIZED VIEW IF NOT EXISTS MV_SystemMetrics_To_Target TO SystemMetrics AS
 SELECT
-    now() AS CollectedAt,
+    toDateTime(CollectedAt) AS CollectedAt, 
+    CollectedAt_Shamsi, 
     WindowsSid,
     WindowsUsername,
     MotherboardSerial,
@@ -26,7 +27,6 @@ SELECT
     NetworkTraceJson,
     DiskModelsJson,
     TopProcessesJson,
-    -- فیلدهای جدید Reliability
     DiskHealthStatusJson,
     CriticalSystemEventsJson
 FROM Kafka_SystemMetrics;
