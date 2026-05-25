@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException , Depends
+from fastapi import FastAPI, HTTPException , Depends , Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
@@ -100,7 +100,7 @@ def get_system_metrics(limit: int = 1000):
 def get_app_logs(limit: int = 1000):
     client = get_clickhouse_client()
     try:
-        query = f"SELECT * FROM AppLogs ORDER BY Timestamp DESC LIMIT {limit}"
+        query = f"SELECT * FROM AppLogs ORDER BY CollectedAt DESC LIMIT {limit}"
         result = client.query(query)
         columns = result.column_names
         return [dict(zip(columns, row)) for row in result.result_rows]
@@ -112,7 +112,7 @@ def get_app_logs(limit: int = 1000):
 def get_user_activities(limit: int = 1000):
     client = get_clickhouse_client()
     try:
-        query = f"SELECT * FROM UserActivities ORDER BY Timestamp DESC LIMIT {limit}"
+        query = f"SELECT * FROM UserActivities ORDER BY CollectedAt DESC LIMIT {limit}"
         result = client.query(query)
         columns = result.column_names
         return [dict(zip(columns, row)) for row in result.result_rows]
@@ -167,21 +167,41 @@ def get_logs_chart():
 # ==========================================
 
 @app.get("/api/commands")
-def get_pending_commands():
-    
+def get_pending_commands(computer: str = Query(None), user: str = Query(None)):
     conn = get_pg_connection()
     try:
+        commands_list = []
         cur = conn.cursor()
-        # فرض بر این است که جدولی به نام remote_commands دارید
-        # که شامل ستون‌های id, target_computer, command_json و is_executed است.
+        # فقط دستوراتی را بگیر که اجرا نشده‌اند
         query = """
-            SELECT * FROM client_commands 
+            SELECT id, command
+            FROM client_commands 
+            WHERE status = 'pending'
+              AND (
+                  computer_name = %s 
+                  OR windows_username = %s 
+                  OR (computer_name IS NULL AND windows_username IS NULL)
+              )
         """
-        cur.execute(query)
-        return cur.fetchall()
-    
+        cur.execute(query, (computer, user))
+        rows = cur.fetchall()
+        
+        commands_list = []
+        for row in rows:
+            cmd_id = row[0]
+            cmd_data = row[1] # به دلیل تغییر SELECT، اندیس فیلد command تغییر کرد
+            
+            # تبدیل به رشته JSON برای کلاس سی‌شارپ
+            command_string = json.dumps(cmd_data, ensure_ascii=False) if cmd_data else ""
+            
+            commands_list.append({
+                "Id": cmd_id,
+                "Command": command_string  
+            })
+            
+        return commands_list
     except Exception as e:
-         raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e))
     
     finally:
         if 'conn' in locals() and conn:
@@ -193,8 +213,8 @@ def mark_command_executed(cmd_id: int):
     conn = get_pg_connection()
     try:
         cur = conn.cursor()
-        # تغییر وضعیت is_executed به True
-        cur.execute("UPDATE remote_commands SET is_executed = TRUE WHERE id = %s", (cmd_id,))
+        # نام جدول اصلاح شد و آپدیت روی فیلد status انجام می‌شود
+        cur.execute("UPDATE client_commands SET status = 'executed' WHERE id = %s", (cmd_id,))
         conn.commit()
         
         # اگر هیچ رکوردی آپدیت نشد

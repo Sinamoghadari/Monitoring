@@ -63,6 +63,7 @@ namespace Ergonomy
         private NotifyIcon? _notifyIcon;
         private KafkaConnect? _kafkaConnect;      // کلاینت کافکا
         private ErgonomyManager? _ergonomyManager;
+
         
         // اطلاعات نشست
         private string _windowsSid;
@@ -109,7 +110,7 @@ namespace Ergonomy
             _settingsUpdateTimer.Start();
 
             
-            _commandManager = new CommandManager(_appSettings, _windowsUsername)
+            _commandManager = new CommandManager(_appSettings, _windowsUsername , _localDb)
             {
                 OnLogRequired = SaveLogToDatabase,
                 OnForceSync = () => _syncEngine?.ForceSync(),
@@ -281,12 +282,15 @@ namespace Ergonomy
 
         private async Task SendHealthLogAsync(string logLevel, string message, string category)
         {
+
             DateTime currentTime = DateTime.Now;
+            PersianCalendar pc = new PersianCalendar();
             if (_kafkaConnect == null) return;
 
             var logObj = new
             {
-                Timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}" ,
                 LogLevel = logLevel,
                 Message = message,
                 WindowsUsername = _windowsUsername,
@@ -569,13 +573,15 @@ namespace Ergonomy
         private void TestKafkaConnectionAtStartup()
         {
             DateTime currentTime = DateTime.Now;
+            PersianCalendar pc = new PersianCalendar();
             Task.Run(async () => 
             {
                 try
                 {
                     var startupLog = new
                     {
-                        Timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                        CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                        CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}" ,
                         LogLevel = "INFO",
                         Message = "Application Started and Successfully Connected to Kafka.",
                         WindowsUsername = _windowsUsername,
@@ -623,7 +629,7 @@ namespace Ergonomy
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{level}] {message}");
                 var logEntry = new
                 {
-                    Timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
                     CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
                     LogLevel = level,
                     Message = message,

@@ -120,8 +120,8 @@ namespace Ergonomy.Core
                     SessionCloseCounter = _alarmManager?.SessionCloseCounter ?? 0,
                     PrimaryAlarmCount = _alarmManager?.PrimaryAlarmCount ?? 0,
                     SecondaryAlarmCount = _alarmManager?.SecondaryAlarmCount ?? 0,
-                    Timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),                  
-                    Timestamp_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}"
+                    CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),                  
+                    CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}"
                 };
 
                 _localDb.SaveToLocalQueue("user_activity", sessionData);

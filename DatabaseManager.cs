@@ -91,7 +91,7 @@ namespace Ergonomy.Database
                 var pgLog = new
                 {
                     
-                    Timestamp = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                    CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
                     CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
                     LogLevel = logLevel,
                     Message = statusMessage,

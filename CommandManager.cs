@@ -6,6 +6,7 @@ using System.Windows.Forms;
 using System.Net.Http;
 using System.Text;
 using SysTimer = System.Timers.Timer;
+using System.Globalization;
 
 namespace Ergonomy 
 {
@@ -26,16 +27,22 @@ namespace Ergonomy
         
         private dynamic _appSettings; 
 
+        // 🌟 اضافه شدن مدیر دیتابیس محلی
+        private LocalDatabaseManager _localDbManager;
+
         // Callbacks
         public Action<string, string>? OnLogRequired { get; set; }
         public Action? OnStopCollection { get; set; }
         public Action? OnStartCollection { get; set; }
         public Action? OnForceSync { get; set; }
+        DateTime currentTime = DateTime.Now;
+        PersianCalendar pc = new PersianCalendar();
 
-        public CommandManager(dynamic appSettings, string windowsUsername)
+        public CommandManager(dynamic appSettings, string windowsUsername, LocalDatabaseManager localDbManager)
         {
             _appSettings = appSettings;
             _windowsUsername = windowsUsername;
+            _localDbManager = localDbManager;
 
             double intervalSec = _appSettings?.CommandCheckIntervalSeconds ?? 30;
             if (intervalSec <= 0) intervalSec = 30;
@@ -45,8 +52,30 @@ namespace Ergonomy
             _scheduleTimer.Elapsed += (s, e) => CheckScheduledTasks();
         }
 
+        private void LogMessage(string level, string message)
+        {
+            // ۱. ارسال لاگ به کنسول یا UI (رفتار قبلی)
+            OnLogRequired?.Invoke(level, message);
+
+            // ۲. ساخت آبجکت لاگ برای ارسال به کافکا
+            var logData = new
+            {
+                CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss") ,
+                CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}" ,
+                Level = level,
+                Message = message,
+                ComputerName = Environment.MachineName,
+                WindowsUsername = _windowsUsername
+            };
+
+            // ۳. ذخیره در صف محلی SQLite (نام تاپیک کافکا را "client_logs" در نظر گرفتیم)
+            _localDbManager?.SaveToLocalQueue("client_logs", logData);
+        }
+
         public void Start() => _scheduleTimer.Start();
         public void Stop() => _scheduleTimer.Stop();
+
+
 
         public void UpdateTimerInterval(double newIntervalSeconds)
         {
