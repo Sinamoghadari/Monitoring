@@ -10,7 +10,6 @@ using LibreHardwareMonitor.Hardware;
 using System.Diagnostics.Eventing.Reader;
 using System.Globalization;
 
-
 public class AdvancedMetricsCollector
 {
     private readonly int _topProcessesCount;
@@ -185,6 +184,16 @@ public Dictionary<string, object> Collect()
         var networkDict = new Dictionary<string, object>();
         var diskSerials = GetDiskSerialsViaWmi();
 
+        // 1. فراخوانی متدهای جدید قبل از حلقه برای جلوگیری از اجرای تکراری
+        Dictionary<string, object> advancedSmartData = null;
+        Dictionary<string, object> diskPerfData = null;
+
+        if (_enabledMetrics.Contains("StorageDetails"))
+        {
+            advancedSmartData = GetAdvancedSmartData();
+            diskPerfData = GetDiskPerformanceMetrics();
+        }
+
         foreach (IHardware hardware in computer.Hardware)
         {
             if (hardware.HardwareType == HardwareType.Cpu)
@@ -195,7 +204,6 @@ public Dictionary<string, object> Collect()
                         metrics["CpuUsagePercent"] = sensor.Value ?? 0;
                     else if (_enabledMetrics.Contains("CpuTemperature") && sensor.SensorType == SensorType.Temperature)
                     {
-                        // پشتیبانی از Intel (CPU Package) و AMD (Tctl/Tdie) و Core Average
                         if (sensor.Name.Contains("Core Average") || 
                             sensor.Name.Contains("CPU Package") || 
                             sensor.Name.Contains("Tctl") || 
@@ -208,7 +216,6 @@ public Dictionary<string, object> Collect()
                 if (_enabledMetrics.Contains("LogicalCores")) metrics["LogicalCores"] = Environment.ProcessorCount;
                 if (_enabledMetrics.Contains("PhysicalCores")) metrics["PhysicalCores"] = GetPhysicalCoresViaWmi();
             }
-
             else if (hardware.HardwareType == HardwareType.Memory)
             {
                 float usedRam = 0, freeRam = 0;
@@ -227,24 +234,145 @@ public Dictionary<string, object> Collect()
             else if (hardware.HardwareType == HardwareType.Storage && _enabledMetrics.Contains("StorageDetails"))
             {
                 var driveDetails = new Dictionary<string, object>();
-                driveDetails["SerialNumber"] = diskSerials.ContainsKey(hardware.Name) ? diskSerials[hardware.Name] : "Unknown";
+                string diskName = hardware.Name;
+
+                driveDetails["SerialNumber"] = diskSerials.ContainsKey(diskName) ? diskSerials[diskName] : "Unknown";
 
                 foreach (var sensor in hardware.Sensors) driveDetails[sensor.Name] = sensor.Value ?? 0;
-                storageDict[hardware.Name] = driveDetails;
+                
+                // 2. تلاش برای تطبیق و جاسازی دیتای S.M.A.R.T پیشرفته برای همین دیسک
+                if (advancedSmartData != null)
+                {
+                    var smartMatch = advancedSmartData.FirstOrDefault(k => k.Key.IndexOf(diskName, StringComparison.OrdinalIgnoreCase) >= 0 || diskName.IndexOf(k.Key, StringComparison.OrdinalIgnoreCase) >= 0);
+                    if (smartMatch.Key != null) driveDetails["AdvancedSMART"] = smartMatch.Value;
+                }
+
+                storageDict[diskName] = driveDetails;
             }
             else if (hardware.HardwareType == HardwareType.Network && _enabledMetrics.Contains("NetworkDetails"))
             {
-                var netDetails = new Dictionary<string, float>();
-                foreach (var sensor in hardware.Sensors) netDetails[sensor.Name] = sensor.Value ?? 0;
-                networkDict[hardware.Name] = netDetails;
+                string name = hardware.Name;
+                
+                // فیلتر کردن: فقط نام‌هایی که با Ethernet یا Wi-Fi شروع می‌شوند و شامل خط تیره یا پرانتز (فیلترهای مجازی) نیستند
+                bool isMainAdapter = (name.StartsWith("Ethernet") || name.StartsWith("Wi-Fi") || name.StartsWith("WiFi")) 
+                                    && !name.Contains("-QoS", StringComparison.OrdinalIgnoreCase)
+                                    && !name.Contains("-WFP", StringComparison.OrdinalIgnoreCase)
+                                    && !name.Contains("Filter", StringComparison.OrdinalIgnoreCase)
+                                    && !name.Contains("Virtual", StringComparison.OrdinalIgnoreCase)
+                                    && !name.Contains("WSL", StringComparison.OrdinalIgnoreCase)
+                                    && !name.Contains("Bluetooth", StringComparison.OrdinalIgnoreCase)
+                                    && !name.Contains("Kaspersky", StringComparison.OrdinalIgnoreCase);
+
+                if (isMainAdapter)
+                {
+                    var netDetails = new Dictionary<string, float>();
+                    foreach (var sensor in hardware.Sensors) netDetails[sensor.Name] = sensor.Value ?? 0;
+                    networkDict[name] = netDetails;
+                }
             }
         }
         
+        // 3. اضافه کردن دیتای Performance به صورت کلی در JSON
+        if (_enabledMetrics.Contains("StorageDetails") && diskPerfData != null && diskPerfData.Count > 0)
+        {
+            storageDict["System_DiskPerformance"] = diskPerfData;
+        }
+
         if (_enabledMetrics.Contains("StorageDetails")) metrics["StorageDetailsJson"] = JsonSerializer.Serialize(storageDict, _jsonOptions);
         if (_enabledMetrics.Contains("NetworkDetails")) metrics["NetworkDetailsJson"] = JsonSerializer.Serialize(networkDict, _jsonOptions);
 
         computer.Close();
     }
+
+
+    private Dictionary<string, object> GetDiskPerformanceMetrics()
+    {
+        var dict = new Dictionary<string, object>();
+        try
+        {
+            // استفاده از کلمه کلیدی using برای آزادسازی منابع
+            using (var diskTime = new PerformanceCounter("PhysicalDisk", "% Disk Time", "_Total"))
+            using (var queueLength = new PerformanceCounter("PhysicalDisk", "Avg. Disk Queue Length", "_Total"))
+            using (var diskLatency = new PerformanceCounter("PhysicalDisk", "Avg. Disk sec/Transfer", "_Total"))
+            {
+                // فراخوانی اولیه برای مقداردهی
+                diskTime.NextValue();
+                queueLength.NextValue();
+                diskLatency.NextValue();
+
+                // وقفه کوتاه $100$ میلی‌ثانیه‌ای برای محاسبه نرخ تغییرات توسط ویندوز
+                System.Threading.Thread.Sleep(100);
+
+                dict["PercentDiskTime"] = diskTime.NextValue();
+                dict["AvgQueueLength"] = queueLength.NextValue();
+                // تبدیل ثانیه به میلی‌ثانیه با ضرب در $1000$
+                dict["AvgDiskLatencyMs"] = diskLatency.NextValue() * 1000; 
+            }
+        }
+        catch (System.Exception ex)
+        {
+            dict["Error"] = "Performance Counter Error: " + ex.Message;
+        }
+
+        return dict;
+    }
+
+    private Dictionary<string, object> GetAdvancedSmartData()
+    {
+        var dict = new Dictionary<string, object>();
+        try
+        {
+            // نیازمند دسترسی ادمین
+            using (var searcher = new ManagementObjectSearcher("root\\WMI", "SELECT * FROM MSStorageDriver_FailurePredictData"))
+            {
+                foreach (ManagementObject queryObj in searcher.Get())
+                {
+                    string instanceName = queryObj["InstanceName"].ToString();
+                    byte[] vendorSpecific = (byte[])queryObj["VendorSpecific"];
+                    var smartData = new Dictionary<string, object>();
+
+                    // دیتای SMART در آرایه بایتی از ایندکس $2$ شروع می‌شود و هر رکورد $12$ بایت است
+                    for (int i = 2; i < 362; i += 12)
+                    {
+                        if (i + 11 < vendorSpecific.Length)
+                        {
+                            byte attributeId = vendorSpecific[i];
+
+                            // بررسی شناسه‌های حیاتی: 0x05, 0xC5, 0xC6
+                            if (attributeId == 5 || attributeId == 197 || attributeId == 198)
+                            {
+                                // استخراج مقدار خام (معمولاً بایت‌های $5$ تا $8$ شامل دیتای اصلی هستند)
+                                int rawValue = vendorSpecific[i + 5] | 
+                                            (vendorSpecific[i + 6] << 8) | 
+                                            (vendorSpecific[i + 7] << 16) | 
+                                            (vendorSpecific[i + 8] << 24);
+
+                                if (attributeId == 5)
+                                    smartData["ReallocatedSectorsCount"] = rawValue;
+                                else if (attributeId == 197)
+                                    smartData["CurrentPendingSectorCount"] = rawValue;
+                                else if (attributeId == 198)
+                                    smartData["UncorrectableSectorCount"] = rawValue;
+                            }
+                        }
+                    }
+                    
+                    // در صورت وجود داده، آن را با کلید نام اینستنس دیسک ذخیره می‌کنیم
+                    if (smartData.Count > 0)
+                    {
+                        dict[instanceName] = smartData;
+                    }
+                }
+            }
+        }
+        catch (System.Exception ex)
+        {
+            dict["Error"] = "WMI SMART Error (Run as Admin): " + ex.Message;
+        }
+
+        return dict;
+    }
+
 
     // --- توابع کمکی ---
 

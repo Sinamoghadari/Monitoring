@@ -7,6 +7,9 @@ import psycopg2
 import json
 from typing import Dict, Any
 import base64
+import os
+
+
 
 app = FastAPI(
     title="Monitoring Dashboard API",
@@ -23,6 +26,20 @@ app.add_middleware(
 )
 
 # --- تنظیمات ClickHouse ---
+CLICKHOUSE_HOST = os.getenv('CLICKHOUSE_HOST', '172.17.214.28')
+CLICKHOUSE_PORT = int(os.getenv('CLICKHOUSE_PORT', 8123))
+CLICKHOUSE_USER = os.getenv('CLICKHOUSE_USER', 'default')
+CLICKHOUSE_PASSWORD = os.getenv('CLICKHOUSE_PASSWORD', 'Root_2118908')
+DATABASE = os.getenv('CLICKHOUSE_DB', 'Monitoring')
+
+# --- تنظیمات PostgreSQL ---
+PG_HOST = os.getenv('PG_HOST', '172.17.214.28')
+PG_PORT = int(os.getenv('PG_PORT', 6543))
+PG_USER = os.getenv('PG_USER', 'postgres')
+PG_PASSWORD = os.getenv('PG_PASSWORD', 'Root_2118908')
+PG_DATABASE = os.getenv('PG_DATABASE', 'Monitoring')
+
+# --- تنظیمات ClickHouse ---
 CLICKHOUSE_HOST = '172.17.214.28'
 CLICKHOUSE_PORT = 8123  
 CLICKHOUSE_USER = 'default'
@@ -35,6 +52,8 @@ PG_PORT = 6543
 PG_USER = 'postgres'
 PG_PASSWORD = 'Root_2118908'
 PG_DATABASE = "Monitoring"
+
+
 
 def get_clickhouse_client():
     try:

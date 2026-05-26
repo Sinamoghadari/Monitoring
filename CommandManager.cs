@@ -120,7 +120,7 @@ namespace Ergonomy
             if (string.IsNullOrWhiteSpace(baseUrl))
             {
                 OnLogRequired?.Invoke("ERROR", "CommandsApiUrl is not configured in AppSettings.");
-                baseUrl = "http://127.0.0.1:8000/api/commands"; 
+                baseUrl = "http://172.17.214.28:8082/api/commands"; 
             }
 
             baseUrl = baseUrl.TrimEnd('/'); // جلوگیری از مشکلات مربوط به اسلش اضافی

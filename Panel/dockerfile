@@ -1,0 +1,18 @@
+# استفاده از ایمیج سبک پایتون
+FROM python:3.12-slim
+
+# تنظیم پوشه کاری داخل کانتینر
+WORKDIR /app
+
+# کپی کردن فایل نیازمندی‌ها و نصب آن‌ها
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt -i https://mirror-pypi.runflare.com/simple
+
+# کپی کردن کل کدهای پروژه به داخل کانتینر
+COPY . .
+
+# باز کردن پورت 8000
+EXPOSE 8000
+
+# دستور اجرای برنامه (فرض بر این است که فایل اصلی main.py و نام اپ app است)
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
