@@ -41,75 +41,62 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
     NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals
 };
 
-public Dictionary<string, object> Collect()
-{
-    var EnabledMetrics = new Dictionary<string, object>();
-
-    DateTime currentTime = DateTime.Now;
-
-    // ثبت تاریخ میلادی با زمان محلی
-    EnabledMetrics["CollectedAt"] = currentTime.ToString("yyyy-MM-dd HH:mm:ss");
-
-    // ثبت تاریخ شمسی با زمان محلی
-    PersianCalendar pc = new PersianCalendar();
-    EnabledMetrics["CollectedAt_Shamsi"] = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}";
-    
-    
-    // شناسه‌های پایه
-    EnabledMetrics["ComputerName"] = Environment.MachineName;
-
-    // ویندوز و سیستم
-    if (_enabledMetrics.Contains("WindowsSid")) EnabledMetrics["WindowsSid"] = WindowsIdentity.GetCurrent().User?.Value ?? "Unknown";
-    if (_enabledMetrics.Contains("WindowsUsername")) EnabledMetrics["WindowsUsername"] = WindowsIdentity.GetCurrent().Name;
-    if (_enabledMetrics.Contains("MotherboardSerial")) EnabledMetrics["MotherboardSerial"] = GetMotherboardSerial();
-
-    // زمان و آپتایم
-    if (_enabledMetrics.Contains("BootTime") || _enabledMetrics.Contains("SystemUptimeSeconds"))
+    public Dictionary<string, object> Collect()
     {
-        var bootTime = GetBootTime();
-        if (_enabledMetrics.Contains("BootTime")) EnabledMetrics["BootTime"] = bootTime.ToString("yyyy-MM-dd HH:mm:ss");
-        if (_enabledMetrics.Contains("SystemUptimeSeconds")) EnabledMetrics["SystemUptimeSeconds"] = (long)(DateTime.Now - bootTime).TotalSeconds;
+        var EnabledMetrics = new Dictionary<string, object>();
+
+        DateTime currentTime = DateTime.Now;
+
+        EnabledMetrics["CollectedAt"] = currentTime.ToString("yyyy-MM-dd HH:mm:ss");
+
+        PersianCalendar pc = new PersianCalendar();
+        EnabledMetrics["CollectedAt_Shamsi"] = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}";
+        
+        EnabledMetrics["ComputerName"] = Environment.MachineName;
+
+        if (_enabledMetrics.Contains("WindowsSid")) EnabledMetrics["WindowsSid"] = WindowsIdentity.GetCurrent().User?.Value ?? "Unknown";
+        if (_enabledMetrics.Contains("WindowsUsername")) EnabledMetrics["WindowsUsername"] = WindowsIdentity.GetCurrent().Name;
+        if (_enabledMetrics.Contains("MotherboardSerial")) EnabledMetrics["MotherboardSerial"] = GetMotherboardSerial();
+
+        if (_enabledMetrics.Contains("BootTime") || _enabledMetrics.Contains("SystemUptimeSeconds"))
+        {
+            var bootTime = GetBootTime();
+            if (_enabledMetrics.Contains("BootTime")) EnabledMetrics["BootTime"] = bootTime.ToString("yyyy-MM-dd HH:mm:ss");
+            if (_enabledMetrics.Contains("SystemUptimeSeconds")) EnabledMetrics["SystemUptimeSeconds"] = (long)(DateTime.Now - bootTime).TotalSeconds;
+        }
+
+        if (_enabledMetrics.Contains("FailedLoginAttempts")) EnabledMetrics["FailedLoginAttempts"] = GetFailedLoginsCount();
+        if (_enabledMetrics.Contains("AntivirusStatus")) EnabledMetrics["AntivirusStatus"] = GetSecurityStatus("AntiVirusProduct");
+        if (_enabledMetrics.Contains("FirewallStatus")) EnabledMetrics["FirewallStatus"] = GetSecurityStatus("FirewallProduct");
+        
+        if (_enabledMetrics.Contains("ActiveProcesses")) EnabledMetrics["ActiveProcesses"] = Process.GetProcesses().Length;
+        if (_enabledMetrics.Contains("ActiveThreads")) EnabledMetrics["ActiveThreads"] = GetTotalThreads();
+        if (_enabledMetrics.Contains("OpenHandles")) EnabledMetrics["OpenHandles"] = GetTotalHandles();
+        if (_enabledMetrics.Contains("UsbDevicesCount")) EnabledMetrics["UsbDevicesCount"] = GetUsbDevicesCount();
+
+        if (_enabledMetrics.Contains("NetworkTrace")) EnabledMetrics["NetworkTraceJson"] = PerformNetworkTrace();
+        if (_enabledMetrics.Contains("DiskModels")) EnabledMetrics["DiskModelsJson"] = GetDiskModels();
+        if (_enabledMetrics.Contains("TopProcesses")) EnabledMetrics["TopProcessesJson"] = GetTopProcesses();
+        if (_enabledMetrics.Contains("GpuDetails")) EnabledMetrics["GpuDetailsJson"] = GetGpuDetails();
+
+        if (_enabledMetrics.Contains("DiskHealthStatus")) EnabledMetrics["DiskHealthStatusJson"] = GetDiskHealthStatus();
+        if (_enabledMetrics.Contains("CriticalSystemEvents")) EnabledMetrics["CriticalSystemEventsJson"] = GetCriticalSystemEvents();
+        
+        // شرط آپدیت شده: حذف متریک‌های تکی CPU و جایگزینی با CPUJson
+        bool needsHardware = _enabledMetrics.Contains("CPUJson") ||
+                             _enabledMetrics.Contains("TotalRamMb") || 
+                             _enabledMetrics.Contains("UsedRamMb") || 
+                             _enabledMetrics.Contains("FreeRamMb") || 
+                             _enabledMetrics.Contains("StorageDetails") || 
+                             _enabledMetrics.Contains("NetworkDetails");
+        
+        if (needsHardware)
+        {
+            CollectHardwareData(EnabledMetrics);
+        }
+
+        return EnabledMetrics;
     }
-
-    // امنیت و لاگین
-    if (_enabledMetrics.Contains("FailedLoginAttempts")) EnabledMetrics["FailedLoginAttempts"] = GetFailedLoginsCount();
-    if (_enabledMetrics.Contains("AntivirusStatus")) EnabledMetrics["AntivirusStatus"] = GetSecurityStatus("AntiVirusProduct");
-    if (_enabledMetrics.Contains("FirewallStatus")) EnabledMetrics["FirewallStatus"] = GetSecurityStatus("FirewallProduct");
-    
-    // پردازش‌ها و هندل‌ها
-    if (_enabledMetrics.Contains("ActiveProcesses")) EnabledMetrics["ActiveProcesses"] = Process.GetProcesses().Length;
-    if (_enabledMetrics.Contains("ActiveThreads")) EnabledMetrics["ActiveThreads"] = GetTotalThreads();
-    if (_enabledMetrics.Contains("OpenHandles")) EnabledMetrics["OpenHandles"] = GetTotalHandles();
-    if (_enabledMetrics.Contains("UsbDevicesCount")) EnabledMetrics["UsbDevicesCount"] = GetUsbDevicesCount();
-
-    // JSON های تو در تو
-    if (_enabledMetrics.Contains("NetworkTrace")) EnabledMetrics["NetworkTraceJson"] = PerformNetworkTrace();
-    if (_enabledMetrics.Contains("DiskModels")) EnabledMetrics["DiskModelsJson"] = GetDiskModels();
-    if (_enabledMetrics.Contains("TopProcesses")) EnabledMetrics["TopProcessesJson"] = GetTopProcesses();
-
-    // Reliability 
-    if (_enabledMetrics.Contains("DiskHealthStatus")) EnabledMetrics["DiskHealthStatusJson"] = GetDiskHealthStatus();
-    if (_enabledMetrics.Contains("CriticalSystemEvents")) EnabledMetrics["CriticalSystemEventsJson"] = GetCriticalSystemEvents();
-    
-    // داده‌های سخت‌افزاری
-    bool needsHardware = _enabledMetrics.Contains("CpuUsagePercent") || 
-                         _enabledMetrics.Contains("LogicalCores") || 
-                         _enabledMetrics.Contains("PhysicalCores") || 
-                         _enabledMetrics.Contains("CpuTemperature") || 
-                         _enabledMetrics.Contains("TotalRamMb") || 
-                         _enabledMetrics.Contains("UsedRamMb") || 
-                         _enabledMetrics.Contains("FreeRamMb") || 
-                         _enabledMetrics.Contains("StorageDetails") || 
-                         _enabledMetrics.Contains("NetworkDetails");
-    
-    if (needsHardware)
-    {
-        CollectHardwareData(EnabledMetrics);
-    }
-    
-
-    return EnabledMetrics;
-}
     // 1. متد جمع آوری وضعیت سلامت دیسک (S.M.A.R.T)
     private string GetDiskHealthStatus()
     {
@@ -182,9 +169,10 @@ public Dictionary<string, object> Collect()
 
         var storageDict = new Dictionary<string, object>();
         var networkDict = new Dictionary<string, object>();
-        var diskSerials = GetDiskSerialsViaWmi();
+        var cpuDict = new Dictionary<string, object>(); // دیکشنری جدید برای CPU
+        
+        var diskWmiInfo = GetDiskWmiInfo(); 
 
-        // 1. فراخوانی متدهای جدید قبل از حلقه برای جلوگیری از اجرای تکراری
         Dictionary<string, object> advancedSmartData = null;
         Dictionary<string, object> diskPerfData = null;
 
@@ -194,27 +182,37 @@ public Dictionary<string, object> Collect()
             diskPerfData = GetDiskPerformanceMetrics();
         }
 
+        // واکشی اطلاعات پایه پردازنده از WMI
+        if (_enabledMetrics.Contains("CPUJson"))
+        {
+            var cpuWmiDetails = GetCpuWmiDetails();
+            foreach (var kvp in cpuWmiDetails)
+            {
+                cpuDict[kvp.Key] = kvp.Value;
+            }
+        }
+
         foreach (IHardware hardware in computer.Hardware)
         {
-            if (hardware.HardwareType == HardwareType.Cpu)
+            if (hardware.HardwareType == HardwareType.Cpu && _enabledMetrics.Contains("CPUJson"))
             {
+                cpuDict["CpuModel"] = hardware.Name;
+                
                 foreach (var sensor in hardware.Sensors)
                 {
-                    if (_enabledMetrics.Contains("CpuUsagePercent") && sensor.SensorType == SensorType.Load && sensor.Name.Contains("Total"))
-                        metrics["CpuUsagePercent"] = sensor.Value ?? 0;
-                    else if (_enabledMetrics.Contains("CpuTemperature") && sensor.SensorType == SensorType.Temperature)
+                    if (sensor.SensorType == SensorType.Load && sensor.Name.Contains("Total"))
+                        cpuDict["CpuUsagePercent"] = sensor.Value ?? 0;
+                    else if (sensor.SensorType == SensorType.Temperature)
                     {
                         if (sensor.Name.Contains("Core Average") || 
                             sensor.Name.Contains("CPU Package") || 
                             sensor.Name.Contains("Tctl") || 
                             sensor.Name.Contains("Tdie"))
                         {
-                            metrics["CpuTemperature"] = sensor.Value ?? 0;
+                            cpuDict["CpuTemperature"] = sensor.Value ?? 0;
                         }
                     }
                 }
-                if (_enabledMetrics.Contains("LogicalCores")) metrics["LogicalCores"] = Environment.ProcessorCount;
-                if (_enabledMetrics.Contains("PhysicalCores")) metrics["PhysicalCores"] = GetPhysicalCoresViaWmi();
             }
             else if (hardware.HardwareType == HardwareType.Memory)
             {
@@ -236,11 +234,19 @@ public Dictionary<string, object> Collect()
                 var driveDetails = new Dictionary<string, object>();
                 string diskName = hardware.Name;
 
-                driveDetails["SerialNumber"] = diskSerials.ContainsKey(diskName) ? diskSerials[diskName] : "Unknown";
+                if (diskWmiInfo.ContainsKey(diskName))
+                {
+                    driveDetails["SerialNumber"] = diskWmiInfo[diskName].Serial;
+                    driveDetails["CapacityGB"] = diskWmiInfo[diskName].CapacityGb;
+                }
+                else
+                {
+                    driveDetails["SerialNumber"] = "Unknown";
+                    driveDetails["CapacityGB"] = 0;
+                }
 
                 foreach (var sensor in hardware.Sensors) driveDetails[sensor.Name] = sensor.Value ?? 0;
                 
-                // 2. تلاش برای تطبیق و جاسازی دیتای S.M.A.R.T پیشرفته برای همین دیسک
                 if (advancedSmartData != null)
                 {
                     var smartMatch = advancedSmartData.FirstOrDefault(k => k.Key.IndexOf(diskName, StringComparison.OrdinalIgnoreCase) >= 0 || diskName.IndexOf(k.Key, StringComparison.OrdinalIgnoreCase) >= 0);
@@ -252,8 +258,6 @@ public Dictionary<string, object> Collect()
             else if (hardware.HardwareType == HardwareType.Network && _enabledMetrics.Contains("NetworkDetails"))
             {
                 string name = hardware.Name;
-                
-                // فیلتر کردن: فقط نام‌هایی که با Ethernet یا Wi-Fi شروع می‌شوند و شامل خط تیره یا پرانتز (فیلترهای مجازی) نیستند
                 bool isMainAdapter = (name.StartsWith("Ethernet") || name.StartsWith("Wi-Fi") || name.StartsWith("WiFi")) 
                                     && !name.Contains("-QoS", StringComparison.OrdinalIgnoreCase)
                                     && !name.Contains("-WFP", StringComparison.OrdinalIgnoreCase)
@@ -272,18 +276,44 @@ public Dictionary<string, object> Collect()
             }
         }
         
-        // 3. اضافه کردن دیتای Performance به صورت کلی در JSON
         if (_enabledMetrics.Contains("StorageDetails") && diskPerfData != null && diskPerfData.Count > 0)
-        {
             storageDict["System_DiskPerformance"] = diskPerfData;
-        }
 
+        // ذخیره‌سازی JSON ها
+        if (_enabledMetrics.Contains("CPUJson") && cpuDict.Count > 0) metrics["CPUJson"] = JsonSerializer.Serialize(cpuDict, _jsonOptions);
         if (_enabledMetrics.Contains("StorageDetails")) metrics["StorageDetailsJson"] = JsonSerializer.Serialize(storageDict, _jsonOptions);
         if (_enabledMetrics.Contains("NetworkDetails")) metrics["NetworkDetailsJson"] = JsonSerializer.Serialize(networkDict, _jsonOptions);
 
         computer.Close();
     }
+    
+    private Dictionary<string, object> GetCpuWmiDetails()
+    {
+        var cpuWmi = new Dictionary<string, object>();
+        try
+        {
+            using (var searcher = new ManagementObjectSearcher("SELECT LoadPercentage, CurrentClockSpeed, MaxClockSpeed, NumberOfCores, NumberOfLogicalProcessors FROM Win32_Processor"))
+            {
+                foreach (var item in searcher.Get())
+                {
+                    cpuWmi["CPUUtilization"] = item["LoadPercentage"] != null ? Convert.ToDouble(item["LoadPercentage"]) : 0;
+                    
+                    // تبدیل مگاهرتز به گیگاهرتز ($ / 1000.0 $)
+                    if (item["CurrentClockSpeed"] != null)
+                        cpuWmi["CPUSpeed_GHz"] = Math.Round(Convert.ToDouble(item["CurrentClockSpeed"]) / 1000.0, 2);
+                    
+                    if (item["MaxClockSpeed"] != null)
+                        cpuWmi["CPUBaseSpeed_GHz"] = Math.Round(Convert.ToDouble(item["MaxClockSpeed"]) / 1000.0, 2);
 
+                    cpuWmi["CPUCores"] = item["NumberOfCores"] != null ? Convert.ToInt32(item["NumberOfCores"]) : 0;
+                    cpuWmi["CPULogicalCores"] = item["NumberOfLogicalProcessors"] != null ? Convert.ToInt32(item["NumberOfLogicalProcessors"]) : 0;
+                    break;
+                }
+            }
+        }
+        catch { }
+        return cpuWmi;
+    }
 
     private Dictionary<string, object> GetDiskPerformanceMetrics()
     {
@@ -543,18 +573,7 @@ public Dictionary<string, object> Collect()
         return JsonSerializer.Serialize(hops, _jsonOptions);
     }
 
-    private int GetPhysicalCoresViaWmi()
-    {
-        try
-        {
-            using (var searcher = new ManagementObjectSearcher("Select NumberOfCores from Win32_Processor"))
-            {
-                foreach (var item in searcher.Get()) return Convert.ToInt32(item["NumberOfCores"]);
-            }
-        }
-        catch { }
-        return Environment.ProcessorCount / 2;
-    }
+
 
     private string GetSecurityStatus(string productType)
     {
@@ -628,6 +647,65 @@ public Dictionary<string, object> Collect()
         foreach (var p in Process.GetProcesses()) handles += p.HandleCount;
         return handles;
     }
+
+        // جایگزین متد GetDiskSerialsViaWmi جهت دریافت سریال و ظرفیت دیسک
+    private Dictionary<string, (string Serial, double CapacityGb)> GetDiskWmiInfo()
+    {
+        var dict = new Dictionary<string, (string, double)>();
+        try
+        {
+            using (var searcher = new ManagementObjectSearcher("SELECT Model, SerialNumber, Size FROM Win32_DiskDrive"))
+            {
+                foreach (var item in searcher.Get())
+                {
+                    string model = item["Model"]?.ToString() ?? "";
+                    string serial = item["SerialNumber"]?.ToString()?.Trim() ?? "";
+                    
+                    double capacityGb = 0;
+                    if (ulong.TryParse(item["Size"]?.ToString(), out ulong sizeBytes))
+                    {
+                        // تبدیل بایت به گیگابایت
+                        capacityGb = Math.Round(sizeBytes / 1073741824.0, 2); 
+                    }
+
+                    if (!string.IsNullOrEmpty(model)) dict[model] = (serial, capacityGb);
+                }
+            }
+        }
+        catch { }
+        return dict;
+    }
+
+    // متد جدید برای دریافت اطلاعات کارت گرافیک (GPU)
+    private string GetGpuDetails()
+    {
+        var gpus = new List<object>();
+        try
+        {
+            using (var searcher = new ManagementObjectSearcher("SELECT Name, AdapterRAM FROM Win32_VideoController"))
+            {
+                foreach (var item in searcher.Get())
+                {
+                    string name = item["Name"]?.ToString()?.Trim() ?? "Unknown GPU";
+                    
+                    double ramMb = 0;
+                    if (long.TryParse(item["AdapterRAM"]?.ToString(), out long ramBytes))
+                    {
+                        // تبدیل بایت به مگابایت
+                        ramMb = Math.Round(ramBytes / 1048576.0, 2); 
+                    }
+
+                    gpus.Add(new {
+                        GpuModel = name,
+                        GpuMemoryMb = ramMb
+                    });
+                }
+            }
+        }
+        catch { }
+        return JsonSerializer.Serialize(gpus, _jsonOptions);
+    }
+
 }
 
 // کلاس کمکی برای پیمایش قطعات سخت‌افزاری در LibreHardwareMonitor
