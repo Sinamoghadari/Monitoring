@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Management;
 using System.Net.NetworkInformation;
@@ -9,40 +10,43 @@ using System.Text.Json;
 using LibreHardwareMonitor.Hardware;
 using System.Diagnostics.Eventing.Reader;
 using System.Globalization;
+using Microsoft.Data.Sqlite;
 
 public class AdvancedMetricsCollector
 {
     private readonly int _topProcessesCount;
     private readonly string _targetIp;
     private readonly HashSet<string> _enabledMetrics;
-public AdvancedMetricsCollector(List<string> enabledMetrics, int topProcessesCount = 10, string targetIp = "172.17.214.1")
-{
-    _topProcessesCount = topProcessesCount;
-    _targetIp = targetIp;
 
-    // اگر لیست خالی بود، یک لیست خالی می‌سازیم
-    if (enabledMetrics == null || !enabledMetrics.Any())
+    public AdvancedMetricsCollector(List<string> enabledMetrics, int topProcessesCount = 10, string targetIp = "172.17.214.1")
     {
-        _enabledMetrics = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        return;
+        _topProcessesCount = topProcessesCount;
+        _targetIp = targetIp;
+
+        // اگر لیست خالی بود، یک لیست خالی می‌سازیم
+        if (enabledMetrics == null || !enabledMetrics.Any())
+        {
+            _enabledMetrics = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            return;
+        }
+
+        // نرمال‌سازی نام‌ها: حذف "_" و "-" و فاصله‌ها برای تطبیق دقیق
+        var normalizedMetrics = enabledMetrics
+            .Where(m => !string.IsNullOrWhiteSpace(m))
+            .Select(m => m.Replace("_", "").Replace("-", "").Replace(" ", ""))
+            .ToList();
+
+        _enabledMetrics = new HashSet<string>(normalizedMetrics, StringComparer.OrdinalIgnoreCase);
     }
 
-    // نرمال‌سازی نام‌ها: حذف "_" و "-" و فاصله‌ها برای تطبیق دقیق
-    var normalizedMetrics = enabledMetrics
-        .Where(m => !string.IsNullOrWhiteSpace(m))
-        .Select(m => m.Replace("_", "").Replace("-", "").Replace(" ", ""))
-        .ToList();
-
-    _enabledMetrics = new HashSet<string>(normalizedMetrics, StringComparer.OrdinalIgnoreCase);
-}
-
-private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
-{
-    NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals
-};
+    private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
+    {
+        NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals
+    };
 
     public Dictionary<string, object> Collect()
     {
+        
         var EnabledMetrics = new Dictionary<string, object>();
 
         DateTime currentTime = DateTime.Now;
@@ -55,7 +59,22 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         EnabledMetrics["ComputerName"] = Environment.MachineName;
 
         if (_enabledMetrics.Contains("WindowsSid")) EnabledMetrics["WindowsSid"] = WindowsIdentity.GetCurrent().User?.Value ?? "Unknown";
-        if (_enabledMetrics.Contains("WindowsUsername")) EnabledMetrics["WindowsUsername"] = WindowsIdentity.GetCurrent().Name;
+        
+        // --- تغییرات مربوط به WindowsUsername و WindowsUsername_RunAdmin ---
+         EnabledMetrics["WindowsUsername_RunAdmin"] = WindowsIdentity.GetCurrent().Name ?? "";
+
+        if (_enabledMetrics.Contains("WindowsUsername")) 
+        {
+            // ابتدا تلاش برای یافتن کاربر explorer.exe، سپس WMI، و در نهایت بازگشت به کاربر فعلی پراسس
+            EnabledMetrics["WindowsUsername"] = GetExplorerUser() ?? GetInteractiveWindowsUsername() ?? WindowsIdentity.GetCurrent().Name;
+        }
+        else 
+        {
+            // اگر در تنظیمات فعال نبود هم کلید آن را با مقدار خالی می‌فرستیم تا ساختار حفظ شود
+            EnabledMetrics["WindowsUsername"] = "";
+        }
+        // ----------------------------------------------------------------------
+
         if (_enabledMetrics.Contains("MotherboardSerial")) EnabledMetrics["MotherboardSerial"] = GetMotherboardSerial();
 
         if (_enabledMetrics.Contains("BootTime") || _enabledMetrics.Contains("SystemUptimeSeconds"))
@@ -82,6 +101,9 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         if (_enabledMetrics.Contains("DiskHealthStatus")) EnabledMetrics["DiskHealthStatusJson"] = GetDiskHealthStatus();
         if (_enabledMetrics.Contains("CriticalSystemEvents")) EnabledMetrics["CriticalSystemEventsJson"] = GetCriticalSystemEvents();
         
+        // فراخوانی تاریخچه کروم
+        if (_enabledMetrics.Contains("ChromeHistory")) EnabledMetrics["ChromeHistoryJson"] = GetChromeHistoryLast24Hours();
+
         // شرط آپدیت شده: حذف متریک‌های تکی CPU و جایگزینی با CPUJson
         bool needsHardware = _enabledMetrics.Contains("CPUJson") ||
                              _enabledMetrics.Contains("TotalRamMb") || 
@@ -97,14 +119,53 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
 
         return EnabledMetrics;
     }
+
+    // --- توابع جدید برای استخراج کاربر واقعی تعاملی ---
+    private string GetInteractiveWindowsUsername()
+    {
+        try
+        {
+            using (var searcher = new ManagementObjectSearcher("SELECT UserName FROM Win32_ComputerSystem"))
+            {
+                foreach (ManagementObject obj in searcher.Get())
+                {
+                    var username = obj["UserName"]?.ToString();
+                    if (!string.IsNullOrEmpty(username)) return username;
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private string GetExplorerUser()
+    {
+        try
+        {
+            using (var searcher = new ManagementObjectSearcher("SELECT * FROM Win32_Process WHERE Name='explorer.exe'"))
+            {
+                foreach (ManagementObject obj in searcher.Get())
+                {
+                    string[] argList = new string[] { string.Empty, string.Empty };
+                    int returnVal = Convert.ToInt32(obj.InvokeMethod("GetOwner", argList));
+                    if (returnVal == 0)
+                    {
+                        return $"{argList[1]}\\{argList[0]}";
+                    }
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+    // ---------------------------------------------------
+
     // 1. متد جمع آوری وضعیت سلامت دیسک (S.M.A.R.T)
     private string GetDiskHealthStatus()
     {
         var diskHealth = new List<object>();
         try
         {
-            // در وضعیت سالم باید مقدار "OK" برگردد. 
-            // مقادیر دیگر مانند "Pred Fail" نشان دهنده خرابی قریب الوقوع هستند.
             using (var searcher = new ManagementObjectSearcher("SELECT Model, Status FROM Win32_DiskDrive"))
             {
                 foreach (var item in searcher.Get())
@@ -130,10 +191,7 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         
         try
         {
-            // کوئری برای Event ID 41 (Kernel-Power) و 1001 (BugCheck) در 24 ساعت گذشته
             string query = "*[System[(EventID=41 or EventID=1001) and TimeCreated[timediff(@SystemTime) <= 86400000]]]";
-            
-            // بلوک using از اینجا حذف شد
             var logQuery = new EventLogQuery("System", PathType.LogName, query);
             
             using (var logReader = new EventLogReader(logQuery))
@@ -169,7 +227,7 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
 
         var storageDict = new Dictionary<string, object>();
         var networkDict = new Dictionary<string, object>();
-        var cpuDict = new Dictionary<string, object>(); // دیکشنری جدید برای CPU
+        var cpuDict = new Dictionary<string, object>(); 
         
         var diskWmiInfo = GetDiskWmiInfo(); 
 
@@ -182,7 +240,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
             diskPerfData = GetDiskPerformanceMetrics();
         }
 
-        // واکشی اطلاعات پایه پردازنده از WMI
         if (_enabledMetrics.Contains("CPUJson"))
         {
             var cpuWmiDetails = GetCpuWmiDetails();
@@ -279,7 +336,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         if (_enabledMetrics.Contains("StorageDetails") && diskPerfData != null && diskPerfData.Count > 0)
             storageDict["System_DiskPerformance"] = diskPerfData;
 
-        // ذخیره‌سازی JSON ها
         if (_enabledMetrics.Contains("CPUJson") && cpuDict.Count > 0) metrics["CPUJson"] = JsonSerializer.Serialize(cpuDict, _jsonOptions);
         if (_enabledMetrics.Contains("StorageDetails")) metrics["StorageDetailsJson"] = JsonSerializer.Serialize(storageDict, _jsonOptions);
         if (_enabledMetrics.Contains("NetworkDetails")) metrics["NetworkDetailsJson"] = JsonSerializer.Serialize(networkDict, _jsonOptions);
@@ -298,7 +354,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
                 {
                     cpuWmi["CPUUtilization"] = item["LoadPercentage"] != null ? Convert.ToDouble(item["LoadPercentage"]) : 0;
                     
-                    // تبدیل مگاهرتز به گیگاهرتز ($ / 1000.0 $)
                     if (item["CurrentClockSpeed"] != null)
                         cpuWmi["CPUSpeed_GHz"] = Math.Round(Convert.ToDouble(item["CurrentClockSpeed"]) / 1000.0, 2);
                     
@@ -320,22 +375,18 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         var dict = new Dictionary<string, object>();
         try
         {
-            // استفاده از کلمه کلیدی using برای آزادسازی منابع
             using (var diskTime = new PerformanceCounter("PhysicalDisk", "% Disk Time", "_Total"))
             using (var queueLength = new PerformanceCounter("PhysicalDisk", "Avg. Disk Queue Length", "_Total"))
             using (var diskLatency = new PerformanceCounter("PhysicalDisk", "Avg. Disk sec/Transfer", "_Total"))
             {
-                // فراخوانی اولیه برای مقداردهی
                 diskTime.NextValue();
                 queueLength.NextValue();
                 diskLatency.NextValue();
 
-                // وقفه کوتاه $100$ میلی‌ثانیه‌ای برای محاسبه نرخ تغییرات توسط ویندوز
                 System.Threading.Thread.Sleep(100);
 
                 dict["PercentDiskTime"] = diskTime.NextValue();
                 dict["AvgQueueLength"] = queueLength.NextValue();
-                // تبدیل ثانیه به میلی‌ثانیه با ضرب در $1000$
                 dict["AvgDiskLatencyMs"] = diskLatency.NextValue() * 1000; 
             }
         }
@@ -352,7 +403,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         var dict = new Dictionary<string, object>();
         try
         {
-            // نیازمند دسترسی ادمین
             using (var searcher = new ManagementObjectSearcher("root\\WMI", "SELECT * FROM MSStorageDriver_FailurePredictData"))
             {
                 foreach (ManagementObject queryObj in searcher.Get())
@@ -361,17 +411,14 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
                     byte[] vendorSpecific = (byte[])queryObj["VendorSpecific"];
                     var smartData = new Dictionary<string, object>();
 
-                    // دیتای SMART در آرایه بایتی از ایندکس $2$ شروع می‌شود و هر رکورد $12$ بایت است
                     for (int i = 2; i < 362; i += 12)
                     {
                         if (i + 11 < vendorSpecific.Length)
                         {
                             byte attributeId = vendorSpecific[i];
 
-                            // بررسی شناسه‌های حیاتی: 0x05, 0xC5, 0xC6
                             if (attributeId == 5 || attributeId == 197 || attributeId == 198)
                             {
-                                // استخراج مقدار خام (معمولاً بایت‌های $5$ تا $8$ شامل دیتای اصلی هستند)
                                 int rawValue = vendorSpecific[i + 5] | 
                                             (vendorSpecific[i + 6] << 8) | 
                                             (vendorSpecific[i + 7] << 16) | 
@@ -387,7 +434,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
                         }
                     }
                     
-                    // در صورت وجود داده، آن را با کلید نام اینستنس دیسک ذخیره می‌کنیم
                     if (smartData.Count > 0)
                     {
                         dict[instanceName] = smartData;
@@ -403,17 +449,12 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         return dict;
     }
 
-
-    // --- توابع کمکی ---
-
-    // دریافت لیست برنامه‌های پرمصرف جداگانه برای RAM و CPU
     private string GetTopProcesses()
     {
         try
         {
             var allProcesses = Process.GetProcesses();
 
-            // 1. استخراج پرمصرف‌ترین‌ها از نظر RAM
             var topByRam = allProcesses
                 .OrderByDescending(p => p.WorkingSet64)
                 .Take(_topProcessesCount)
@@ -423,13 +464,12 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
                 })
                 .ToList();
 
-            // 2. استخراج پرمصرف‌ترین‌ها از نظر CPU (Total Processor Time)
             var topByCpu = allProcesses
                 .Select(p => 
                 {
                     double cpuSeconds = 0;
                     try { cpuSeconds = Math.Round(p.TotalProcessorTime.TotalSeconds, 2); } 
-                    catch { } // چشم‌پوشی از پردازش‌های سیستمی محافظت‌شده
+                    catch { }
                     
                     return new { ProcessName = p.ProcessName, CpuTotalSeconds = cpuSeconds };
                 })
@@ -441,7 +481,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
                 })
                 .ToList();
                 
-            // ترکیب هر دو در یک آبجکت
             var combinedResult = new 
             {
                 TopByRam = topByRam,
@@ -456,7 +495,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         }
     }
 
-    // دریافت لیست مدل و برند هارد دیسک‌ها
     private string GetDiskModels()
     {
         var models = new List<string>();
@@ -480,7 +518,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
     {
         try
         {
-            // 1. تلاش برای دریافت از BaseBoard
             using (var searcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BaseBoard"))
             {
                 foreach (var item in searcher.Get())
@@ -490,7 +527,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
                 }
             }
 
-            // 2. تلاش برای دریافت از BIOS در صورت شکست مرحله اول
             using (var searcher = new ManagementObjectSearcher("SELECT SerialNumber FROM Win32_BIOS"))
             {
                 foreach (var item in searcher.Get())
@@ -505,7 +541,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         return "Unknown";
     }
 
-    // متد کمکی برای بررسی معتبر بودن سریال
     private bool IsValidSerial(string serial)
     {
         if (string.IsNullOrWhiteSpace(serial)) return false;
@@ -516,40 +551,17 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         return true;
     }
 
-
-    private Dictionary<string, string> GetDiskSerialsViaWmi()
-    {
-        var dict = new Dictionary<string, string>();
-        try
-        {
-            using (var searcher = new ManagementObjectSearcher("SELECT Model, SerialNumber FROM Win32_DiskDrive"))
-            {
-                foreach (var item in searcher.Get())
-                {
-                    string model = item["Model"]?.ToString() ?? "";
-                    string serial = item["SerialNumber"]?.ToString()?.Trim() ?? "";
-                    if (!string.IsNullOrEmpty(model)) dict[model] = serial;
-                }
-            }
-        }
-        catch { }
-        return dict;
-    }
-
     private string PerformNetworkTrace()
     {
         var hops = new List<object>();
         try
         {
             using (Ping pingSender = new Ping())
-
-            
             {
                 PingOptions options = new PingOptions(1, true);
                 byte[] buffer = new byte[32]; 
                 int timeout = 1000; 
 
-                // ردیابی تا حداکثر 10 گام (Hop)
                 for (int ttl = 1; ttl <= 10; ttl++)
                 {
                     options.Ttl = ttl;
@@ -573,8 +585,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         return JsonSerializer.Serialize(hops, _jsonOptions);
     }
 
-
-
     private string GetSecurityStatus(string productType)
     {
         try
@@ -590,7 +600,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         return "Not Found / No Permission";
     }
 
-    // دریافت تعداد لاگین‌های ناموفق در 2 ساعت گذشته
     private int GetFailedLoginsCount()
     {
         try
@@ -627,11 +636,11 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         {
             long tickCount = Environment.TickCount64; 
             return DateTime.Now - TimeSpan.FromMilliseconds(tickCount);
-    }
+        }
         catch
-    {
-        return DateTime.MinValue; 
-    }
+        {
+            return DateTime.MinValue; 
+        }
     }
 
     private int GetTotalThreads()
@@ -648,7 +657,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         return handles;
     }
 
-        // جایگزین متد GetDiskSerialsViaWmi جهت دریافت سریال و ظرفیت دیسک
     private Dictionary<string, (string Serial, double CapacityGb)> GetDiskWmiInfo()
     {
         var dict = new Dictionary<string, (string, double)>();
@@ -664,7 +672,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
                     double capacityGb = 0;
                     if (ulong.TryParse(item["Size"]?.ToString(), out ulong sizeBytes))
                     {
-                        // تبدیل بایت به گیگابایت
                         capacityGb = Math.Round(sizeBytes / 1073741824.0, 2); 
                     }
 
@@ -676,7 +683,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         return dict;
     }
 
-    // متد جدید برای دریافت اطلاعات کارت گرافیک (GPU)
     private string GetGpuDetails()
     {
         var gpus = new List<object>();
@@ -691,7 +697,6 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
                     double ramMb = 0;
                     if (long.TryParse(item["AdapterRAM"]?.ToString(), out long ramBytes))
                     {
-                        // تبدیل بایت به مگابایت
                         ramMb = Math.Round(ramBytes / 1048576.0, 2); 
                     }
 
@@ -705,10 +710,68 @@ private readonly JsonSerializerOptions _jsonOptions = new JsonSerializerOptions
         catch { }
         return JsonSerializer.Serialize(gpus, _jsonOptions);
     }
+    
+    private string GetChromeHistoryLast24Hours()
+    {
+        var historyList = new List<object>();
+        
+        // مسیر فایل تاریخچه کاربر واقعی
+        string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string chromeHistoryPath = Path.Combine(localAppData, @"Google\Chrome\User Data\Default\History");
+
+        if (!File.Exists(chromeHistoryPath))
+            return "[]"; // اگر کروم نصب نیست یا فایلی نیست، آرایه خالی برگردد تا دیتابیس دچار مشکل نشود
+
+        string tempFilePath = Path.GetTempFileName();
+
+        try
+        {
+            File.Copy(chromeHistoryPath, tempFilePath, true);
+
+            using (var connection = new SqliteConnection($"Data Source={tempFilePath}"))
+            {
+                connection.Open();
+                using (var command = connection.CreateCommand())
+                {
+                    command.CommandText = @"
+                        SELECT url, title, last_visit_time 
+                        FROM urls 
+                        WHERE datetime(last_visit_time / 1000000 - 11644473600, 'unixepoch', 'localtime') >= datetime('now', '-1 day')
+                        ORDER BY last_visit_time DESC";
+                        
+                        
+
+                    using (var reader = command.ExecuteReader())
+                    {
+                        while (reader.Read())
+                        {
+                            historyList.Add(new
+                            {
+                                Url = reader.GetString(0),
+                                Title = !reader.IsDBNull(1) ? reader.GetString(1) : ""
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        catch
+        {
+            return "[]"; // در صورت خطا خروجی خالی ارسال شود
+        }
+        finally
+        {
+            if (File.Exists(tempFilePath))
+            {
+                try { File.Delete(tempFilePath); } catch { }
+            }
+        }
+
+        return JsonSerializer.Serialize(historyList);
+    }
 
 }
 
-// کلاس کمکی برای پیمایش قطعات سخت‌افزاری در LibreHardwareMonitor
 public class UpdateVisitor : IVisitor
 {
     public void VisitComputer(IComputer computer) { computer.Traverse(this); }

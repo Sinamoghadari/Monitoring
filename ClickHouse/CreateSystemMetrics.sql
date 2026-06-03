@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS SystemMetrics
     `CollectedAt_Shamsi` String, 
     `WindowsSid` String,
     `WindowsUsername` String,
+    `WindowsUsername_RunAdmin` String,
     `ComputerName` String,
     `CPUJson` String,
     `MotherboardSerial` String,
@@ -14,7 +15,7 @@ CREATE TABLE IF NOT EXISTS SystemMetrics
     `ActiveProcesses` UInt32,
     `ActiveThreads` UInt32,
     `OpenHandles` UInt64,
-    `BootTime` String, -- اصلاح شد: در MV به نوع تاریخ تبدیل شده بود، پس اینجا هم باید تاریخ باشد
+    `BootTime` String, 
     `FailedLoginAttempts` Int32,
     `AntivirusStatus` LowCardinality(String),
     `FirewallStatus` LowCardinality(String),
@@ -25,7 +26,8 @@ CREATE TABLE IF NOT EXISTS SystemMetrics
     `DiskModelsJson` String,
     `TopProcessesJson` String,
     `DiskHealthStatusJson` String,
-    `CriticalSystemEventsJson` String
+    `CriticalSystemEventsJson` String ,
+    `ChromeHistoryJson` String
 )
 ENGINE = MergeTree()
 PARTITION BY toYYYYMM(CollectedAt)

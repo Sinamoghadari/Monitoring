@@ -14,8 +14,10 @@ using System.Diagnostics;
 using Microsoft.Data.Sqlite;
 using Ergonomy.Core; 
 using System.Globalization;
-using System.Net.Http; // اضافه شد برای API
-using System.Text.Json; // اضافه شد برای API
+using System.Net.Http; 
+using System.Text.Json; 
+
+
 
 namespace Ergonomy
 {

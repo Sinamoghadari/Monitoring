@@ -5,7 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import clickhouse_connect
 import psycopg2
 import json
-from typing import Dict, Any
+from pydantic import BaseModel
+from typing import Dict, Any , List, Optional
+from datetime import datetime
 import base64
 import os
 
@@ -24,6 +26,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+class ComputerInfoModel(BaseModel):
+    ComputerName: Optional[str] = None
+    WindowsUsername: Optional[str] = None
+    CollectedAt: datetime
+
 
 # --- تنظیمات ClickHouse ---
 CLICKHOUSE_HOST = os.getenv('CLICKHOUSE_HOST', '172.17.214.28')
@@ -247,3 +255,36 @@ def mark_command_executed(cmd_id: int):
         if 'conn' in locals() and conn:
             conn.close()
 
+@app.post("/api/ad-computers")
+def save_ad_computers(computers: List[ComputerInfoModel]):
+    conn = get_pg_connection()
+    try:
+        cur = conn.cursor()
+        
+        # ساخت جدول در صورت عدم وجود
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS ad_computers (
+                id SERIAL PRIMARY KEY,
+                computer_name VARCHAR(255),
+                windows_username VARCHAR(255),
+                collected_at TIMESTAMP
+            )
+        """)
+        
+        # پاک کردن داده‌های روز قبل (اختیاری - اگر می‌خواهید فقط لیست جدید بماند)
+        cur.execute("TRUNCATE TABLE ad_computers")
+        
+        # درج داده‌های جدید
+        for comp in computers:
+            cur.execute("""
+                INSERT INTO ad_computers (computer_name,  windows_username, collected_at)
+                VALUES (%s, %s, %s)
+            """, (comp.ComputerName, comp.WindowsUsername,comp.CollectedAt))
+            
+        conn.commit()
+        return {"success": True, "inserted_count": len(computers)}
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()

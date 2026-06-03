@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS Kafka_SystemMetrics
     CollectedAt_Shamsi String, 
     WindowsSid String,
     ComputerName String,
+    WindowsUsername_RunAdmin String,
     WindowsUsername String,
     MotherboardSerial String,
     CPUJson String,
@@ -25,10 +26,11 @@ CREATE TABLE IF NOT EXISTS Kafka_SystemMetrics
     DiskModelsJson String,
     TopProcessesJson String,
     DiskHealthStatusJson String,
-    CriticalSystemEventsJson String
+    CriticalSystemEventsJson String ,
+    ChromeHistoryJson String
 ) ENGINE = Kafka()
 SETTINGS
     kafka_broker_list = 'kafka:9092',
     kafka_topic_list = 'advanced_system_metrics_topic',
-    kafka_group_name = 'clickhouse_group_metrics_v2',
+    kafka_group_name = 'clickhouse_group_metrics_v3',
     kafka_format = 'JSONEachRow';

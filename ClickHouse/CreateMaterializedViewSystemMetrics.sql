@@ -4,6 +4,7 @@ SELECT
     CollectedAt_Shamsi, 
     WindowsSid,
     WindowsUsername,
+    WindowsUsername_RunAdmin,
     ComputerName,
     CPUJson,
     MotherboardSerial,
@@ -25,5 +26,6 @@ SELECT
     DiskModelsJson,
     TopProcessesJson,
     DiskHealthStatusJson,
-    CriticalSystemEventsJson
+    CriticalSystemEventsJson,
+    ChromeHistoryJson
 FROM Kafka_SystemMetrics;
