@@ -46,7 +46,7 @@ namespace Ergonomy
                 // خواندن آدرس از تنظیمات. اگر خالی بود از مقدار پیش‌فرض استفاده می‌شود
                 string apiUrl = !string.IsNullOrEmpty(_appSettings?.API?.LoadImages) 
                     ? _appSettings.API.LoadImages 
-                    : "http://172.17.214.28:8082/api/images";
+                    : "http://172.17.214.38:8082/api/images";
 
                 var response = await _httpClient.GetStringAsync(apiUrl);
                 var imagesData = JsonSerializer.Deserialize<List<ImageApiResponse>>(response);

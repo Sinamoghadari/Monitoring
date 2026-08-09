@@ -2,54 +2,64 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using System.Threading.Tasks;
-
 
 namespace Ergonomy.Database
 {
-    public class SyncEngine
+    public class SyncEngine : IDisposable
     {
         private readonly LocalDatabaseManager _localDb;
-        private readonly System.Timers.Timer _syncTimer; 
-        private bool _isSyncing = false;
         private readonly KafkaConnect _kafkaConnect;
+        private readonly System.Timers.Timer _syncTimer;
+        private readonly SemaphoreSlim _syncGate = new SemaphoreSlim(1, 1);
+        private bool _disposed = false;
 
-        // حذف remoteDb از سازنده
         public SyncEngine(KafkaConnect kafkaConnect, LocalDatabaseManager localDb, double syncIntervalMinutes = 1)
         {
-            _localDb = localDb;
-            _kafkaConnect = kafkaConnect;
-            
+            _localDb = localDb ?? throw new ArgumentNullException(nameof(localDb));
+            _kafkaConnect = kafkaConnect ?? throw new ArgumentNullException(nameof(kafkaConnect));
+
             double intervalMs = syncIntervalMinutes > 0 ? (syncIntervalMinutes * 60 * 1000) : 60000;
-            
-            _syncTimer = new System.Timers.Timer(intervalMs); 
+
+            _syncTimer = new System.Timers.Timer(intervalMs)
+            {
+                AutoReset = true,
+                Enabled = false
+            };
+
             _syncTimer.Elapsed += async (sender, e) => await ProcessQueueAsync();
         }
 
         public void Start()
         {
+            ThrowIfDisposed();
             _syncTimer.Start();
-            Task.Run(async () => await ProcessQueueAsync()); 
+            _ = ProcessQueueAsync();
         }
 
         public void Stop()
         {
+            if (_disposed) return;
             _syncTimer.Stop();
         }
 
-        public void ForceSync()
+        public async Task ForceSyncAsync()
         {
+            ThrowIfDisposed();
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ FORCE SYNC triggered before shutdown/restart.");
-            Task.Run(async () => await ProcessQueueAsync()).Wait();
+            await ProcessQueueAsync();
         }
 
         public void UpdateSyncInterval(double intervalMinutes)
         {
+            ThrowIfDisposed();
+
             if (intervalMinutes <= 0)
                 intervalMinutes = 1;
 
             _syncTimer.Stop();
-            _syncTimer.Interval = intervalMinutes * 60 * 1000; 
+            _syncTimer.Interval = intervalMinutes * 60 * 1000;
             _syncTimer.Start();
 
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🕒 SyncEngine interval updated to {intervalMinutes} minutes.");
@@ -57,13 +67,14 @@ namespace Ergonomy.Database
 
         private async Task ProcessQueueAsync()
         {
-            if (_isSyncing) return;
-            _isSyncing = true;
+            if (!await _syncGate.WaitAsync(0))
+                return;
 
             try
             {
                 var records = _localDb.GetPendingRecords(50);
-                if (records.Count == 0) return;
+                if (records == null || records.Count == 0)
+                    return;
 
                 var jsonOptions = new JsonSerializerOptions
                 {
@@ -74,34 +85,47 @@ namespace Ergonomy.Database
                 foreach (var record in records)
                 {
                     bool success = false;
+
                     try
                     {
-                        if (record.TargetTable == "advanced_system_metrics")
+                        switch (record.TargetTable)
                         {
-                            var metrics = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions); 
-                            if (metrics != null)
+                            case QueueTargets.AdvancedSystemMetrics:
                             {
-                                await _kafkaConnect.SendSystemMetricsAsync(metrics);
-                                success = true;
+                                var metrics = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions);
+                                if (metrics != null)
+                                {
+                                    await _kafkaConnect.SendSystemMetricsAsync(metrics);
+                                    success = true;
+                                }
+                                break;
                             }
-                        }
-                        else if (record.TargetTable == "user_activity")
-                        {
-                            var activity = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions);
-                            if (activity != null)
+
+                            case QueueTargets.UserActivity:
                             {
-                                await _kafkaConnect.SendUserActivityAsync(activity);
-                                success = true;
+                                var activity = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions);
+                                if (activity != null)
+                                {
+                                    await _kafkaConnect.SendUserActivityAsync(activity);
+                                    success = true;
+                                }
+                                break;
                             }
-                        }
-                        else if (record.TargetTable == "app_logs")
-                        {
-                            var logData = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions);
-                            if (logData != null)
+
+                            case QueueTargets.AppLogs:
                             {
-                                await _kafkaConnect.SendAppLogAsync(logData);
-                                success = true;
+                                var logData = JsonSerializer.Deserialize<Dictionary<string, object>>(record.Payload, jsonOptions);
+                                if (logData != null)
+                                {
+                                    await _kafkaConnect.SendAppLogAsync(logData);
+                                    success = true;
+                                }
+                                break;
                             }
+
+                            default:
+                                Console.WriteLine($"[SyncEngine] Unknown TargetTable: {record.TargetTable}");
+                                break;
                         }
                     }
                     catch (Exception ex)
@@ -112,7 +136,7 @@ namespace Ergonomy.Database
                     if (success)
                     {
                         _localDb.DeleteRecord(record.Id);
-                        Console.WriteLine($"[{DateTime.Now:yyyy/MM/dd HH:mm:ss}] ✅ Data was sent from SQLite to Kafka topic for: {record.TargetTable}");
+                        Console.WriteLine($"[{DateTime.Now:yyyy/MM/dd HH:mm:ss}] ✅ Data sent to Kafka for: {record.TargetTable}");
                     }
                 }
             }
@@ -122,8 +146,24 @@ namespace Ergonomy.Database
             }
             finally
             {
-                _isSyncing = false;
+                _syncGate.Release();
             }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(SyncEngine));
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+
+            _disposed = true;
+            _syncTimer.Stop();
+            _syncTimer.Dispose();
+            _syncGate.Dispose();
         }
     }
 }

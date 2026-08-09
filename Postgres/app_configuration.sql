@@ -34,7 +34,7 @@ VALUES (
   "ConnectionFailureSleepMinutes": 5,
   "HeartbeatIntervalMinutes": 1,
   "Kafka": {
-    "BootstrapServers": "172.17.214.28:9092",
+    "BootstrapServers": "172.17.214.38:9092",
     "UserActivityTopic": "user_activity",
     "SystemMetricsTopic": "system_metrics"
   },

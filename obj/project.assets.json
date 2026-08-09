@@ -7698,7 +7698,7 @@
     ]
   },
   "packageFolders": {
-    "C:\\Users\\m.mehdikhaniih\\.nuget\\packages\\": {},
+    "C:\\Users\\s.moghadarii\\.nuget\\packages\\": {},
     "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
   },
   "project": {
@@ -7707,7 +7707,7 @@
       "projectUniqueName": "E:\\Sisco_Projects\\HSE\\Ergonomy\\Demo\\Ergonomy_V2\\Ergonomy.csproj",
       "projectName": "Ergonomy",
       "projectPath": "E:\\Sisco_Projects\\HSE\\Ergonomy\\Demo\\Ergonomy_V2\\Ergonomy.csproj",
-      "packagesPath": "C:\\Users\\m.mehdikhaniih\\.nuget\\packages\\",
+      "packagesPath": "C:\\Users\\s.moghadarii\\.nuget\\packages\\",
       "outputPath": "E:\\Sisco_Projects\\HSE\\Ergonomy\\Demo\\Ergonomy_V2\\obj\\",
       "projectStyle": "PackageReference",
       "fallbackFolders": [
@@ -7715,7 +7715,7 @@
       ],
       "configFilePaths": [
         "E:\\Sisco_Projects\\HSE\\Ergonomy\\Demo\\Ergonomy_V2\\NuGet.Config",
-        "C:\\Users\\m.mehdikhaniih\\AppData\\Roaming\\NuGet\\NuGet.Config",
+        "C:\\Users\\s.moghadarii\\AppData\\Roaming\\NuGet\\NuGet.Config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
         "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
       ],

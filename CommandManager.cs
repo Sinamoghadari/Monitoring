@@ -7,6 +7,7 @@ using System.Net.Http;
 using System.Text;
 using SysTimer = System.Timers.Timer;
 using System.Globalization;
+using Ergonomy.Database; // 🌟 اضافه شده جهت شناسایی LocalDatabaseManager و QueueTargets
 
 namespace Ergonomy 
 {
@@ -24,25 +25,23 @@ namespace Ergonomy
         private string _windowsUsername;
         private static readonly HttpClient _httpClient = new HttpClient();
         
-        
         private dynamic _appSettings; 
 
-        // 🌟 اضافه شدن مدیر دیتابیس محلی
-        private LocalDatabaseManager _localDbManager;
+        // 🌟 فیلد تصحیح شده برای دیتابیس محلی
+        private readonly LocalDatabaseManager _localDbManager;
 
         // Callbacks
         public Action<string, string>? OnLogRequired { get; set; }
         public Action? OnStopCollection { get; set; }
         public Action? OnStartCollection { get; set; }
         public Action? OnForceSync { get; set; }
-        DateTime currentTime = DateTime.Now;
-        PersianCalendar pc = new PersianCalendar();
+        private readonly PersianCalendar pc = new PersianCalendar();
 
         public CommandManager(dynamic appSettings, string windowsUsername, LocalDatabaseManager localDbManager)
         {
             _appSettings = appSettings;
             _windowsUsername = windowsUsername;
-            _localDbManager = localDbManager;
+            _localDbManager = localDbManager ?? throw new ArgumentNullException(nameof(localDbManager));
 
             double intervalSec = _appSettings?.CommandCheckIntervalSeconds ?? 30;
             if (intervalSec <= 0) intervalSec = 30;
@@ -57,25 +56,25 @@ namespace Ergonomy
             // ۱. ارسال لاگ به کنسول یا UI (رفتار قبلی)
             OnLogRequired?.Invoke(level, message);
 
+            DateTime currentTime = DateTime.Now;
+
             // ۲. ساخت آبجکت لاگ برای ارسال به کافکا
             var logData = new
             {
-                CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss") ,
-                CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}" ,
+                CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
                 Level = level,
                 Message = message,
                 ComputerName = Environment.MachineName,
                 WindowsUsername = _windowsUsername
             };
 
-            // ۳. ذخیره در صف محلی SQLite (نام تاپیک کافکا را "client_logs" در نظر گرفتیم)
-            _localDbManager?.SaveToLocalQueue("client_logs", logData);
+            // ۳. ذخیره در صف محلی SQLite با استفاده از کلید ثابت و استاندارد لایه دیتابیس
+            _localDbManager.SaveToLocalQueue(QueueTargets.AppLogs, logData);
         }
 
         public void Start() => _scheduleTimer.Start();
         public void Stop() => _scheduleTimer.Stop();
-
-
 
         public void UpdateTimerInterval(double newIntervalSeconds)
         {
@@ -96,7 +95,7 @@ namespace Ergonomy
                 _lastExecutedSchedule != currentSystemTime)
             {
                 _lastExecutedSchedule = currentSystemTime;
-                OnLogRequired?.Invoke("WARNING", $"Executing SCHEDULED RESTART exactly at {currentSystemTime}");
+                LogMessage("WARNING", $"Executing SCHEDULED RESTART exactly at {currentSystemTime}");
                 System.Diagnostics.Process.Start("shutdown", "/r /t 5");
             }
 
@@ -105,7 +104,7 @@ namespace Ergonomy
                 _lastExecutedSchedule != currentSystemTime)
             {
                 _lastExecutedSchedule = currentSystemTime;
-                OnLogRequired?.Invoke("WARNING", $"Executing SCHEDULED SHUTDOWN exactly at {currentSystemTime}");
+                LogMessage("WARNING", $"Executing SCHEDULED SHUTDOWN exactly at {currentSystemTime}");
                 System.Diagnostics.Process.Start("shutdown", "/s /t 5");
             }
 
@@ -114,16 +113,15 @@ namespace Ergonomy
 
         private async Task CheckAndExecuteCommandsFromApi(string computerName, string windowsUsername) 
         {
-            
             string? baseUrl = _appSettings?.API?.Commands;
             
             if (string.IsNullOrWhiteSpace(baseUrl))
             {
-                OnLogRequired?.Invoke("ERROR", "CommandsApiUrl is not configured in AppSettings.");
-                baseUrl = "http://172.17.214.28:8082/api/commands"; 
+                LogMessage("ERROR", "CommandsApiUrl is not configured in AppSettings.");
+                baseUrl = "http://172.17.214.38:8082/api/commands"; 
             }
 
-            baseUrl = baseUrl.TrimEnd('/'); // جلوگیری از مشکلات مربوط به اسلش اضافی
+            baseUrl = baseUrl.TrimEnd('/'); 
             string apiUrl = $"{baseUrl}?computer={computerName}&user={windowsUsername}";
 
             try
@@ -139,7 +137,7 @@ namespace Ergonomy
 
                 foreach (var cmd in pendingCommands)
                 {
-                    OnLogRequired?.Invoke("INFO", $"Received remote command batch (ID: {cmd.Id}): '{cmd.Command}'. Preparing to execute.");
+                    LogMessage("INFO", $"Received remote command batch (ID: {cmd.Id}): '{cmd.Command}'. Preparing to execute.");
                     
                     string jsonCommandToExecute = cmd.Command;
 
@@ -182,37 +180,36 @@ namespace Ergonomy
                         {
                             try
                             {
-                                OnLogRequired?.Invoke("WARNING", $"Command ID {cmd.Id} is not valid JSON. Executing as a raw string.");
+                                LogMessage("WARNING", $"Command ID {cmd.Id} is not valid JSON. Executing as a raw string.");
                                 ProcessCommand(jsonCommandToExecute);
                                 success = true; 
                             }
                             catch (Exception ex)
                             {
-                                OnLogRequired?.Invoke("ERROR", $"Error processing command ID {cmd.Id} as raw string: {ex.Message}");
+                                LogMessage("ERROR", $"Error processing command ID {cmd.Id} as raw string: {ex.Message}");
                             }
                         }
                         catch (Exception ex)
                         {
-                            OnLogRequired?.Invoke("ERROR", $"Error processing command ID {cmd.Id}: {ex.Message}");
+                            LogMessage("ERROR", $"Error processing command ID {cmd.Id}: {ex.Message}");
                         }
 
                         if (success)
                         {
-                            // استفاده از همان Base URL برای ارسال درخواست POST
                             string markExecutedUrl = $"{baseUrl}/{cmd.Id}/execute";
                             var postResponse = await _httpClient.PostAsync(markExecutedUrl, new StringContent("{}", Encoding.UTF8, "application/json"));
                             
                             if (postResponse.IsSuccessStatusCode)
-                                OnLogRequired?.Invoke("INFO", $"Command ID {cmd.Id} successfully processed and marked as executed via API.");
+                                LogMessage("INFO", $"Command ID {cmd.Id} successfully processed and marked as executed via API.");
                             else
-                                OnLogRequired?.Invoke("WARNING", $"Command ID {cmd.Id} failed to be marked as executed in API.");
+                                LogMessage("WARNING", $"Command ID {cmd.Id} failed to be marked as executed in API.");
                         }
                     });
                 }
             }
             catch (Exception ex)
             {
-                OnLogRequired?.Invoke("ERROR", $"Error fetching commands from API: {ex.Message}");
+                LogMessage("ERROR", $"Error fetching commands from API: {ex.Message}");
             }
         }
 
@@ -225,7 +222,7 @@ namespace Ergonomy
             if (lowerCmd.StartsWith("msg:"))
             {
                 string message = command.Substring(4).Trim(); 
-                OnLogRequired?.Invoke("INFO", $"Displaying custom message: {message}");
+                LogMessage("INFO", $"Displaying custom message: {message}");
 
                 System.Threading.Thread thread = new System.Threading.Thread(() =>
                 {
@@ -241,19 +238,19 @@ namespace Ergonomy
             {
                 case "stop":
                     OnStopCollection?.Invoke();
-                    OnLogRequired?.Invoke("INFO", "Application tracking PAUSED via remote command.");
+                    LogMessage("INFO", "Application tracking PAUSED via remote command.");
                     break;
                 case "start":
                     OnStartCollection?.Invoke();
-                    OnLogRequired?.Invoke("INFO", "Application tracking RESUMED via remote command.");
+                    LogMessage("INFO", "Application tracking RESUMED via remote command.");
                     break;
                 case "os_restart": 
-                    OnLogRequired?.Invoke("WARNING", "Windows is RESTARTING via remote command.");
+                    LogMessage("WARNING", "Windows is RESTARTING via remote command.");
                     OnForceSync?.Invoke(); 
                     System.Diagnostics.Process.Start("shutdown", "/r /t 5"); 
                     break;
                 case "os_shutdown": 
-                    OnLogRequired?.Invoke("WARNING", "Windows is SHUTTING DOWN via remote command.");
+                    LogMessage("WARNING", "Windows is SHUTTING DOWN via remote command.");
                     OnForceSync?.Invoke();
                     System.Diagnostics.Process.Start("shutdown", "/s /t 5"); 
                     break;

@@ -1,151 +1,335 @@
 using Ergonomy.Configuration;
-using Ergonomy.Hooks;
-using Ergonomy.Logging;
+using Ergonomy.Core;
 using Ergonomy.Database;
+using Ergonomy.Hooks;
+using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Configuration;
 using System;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Security.Principal;
-using System.Windows.Forms;
+using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Timers;
-using System.Net.NetworkInformation;
-using System.Diagnostics;
-using Microsoft.Data.Sqlite;
-using Ergonomy.Core; 
-using System.Globalization;
-using System.Net.Http; 
-using System.Text.Json; 
-
-
+using System.Windows.Forms;
 
 namespace Ergonomy
 {
     public class MainApplicationContext : ApplicationContext
     {
-        // ==========================================
-        // متغیرها و ماژول‌ها
-        // ==========================================
-        private readonly IConfiguration _configuration = new ConfigurationBuilder()
-            .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-            .Build();
+        private readonly IConfigurationRoot _bootstrapConfiguration;
+        private readonly string _bootstrapSettingsPath;
+        private readonly string _runtimeSettingsPath;
+        private readonly HttpClient _httpClient;
+        private readonly SemaphoreSlim _settingsRefreshLock = new(1, 1);
 
-        // اضافه شد: کلاینت Http برای ارتباط با API
-        private static readonly HttpClient _httpClient = new HttpClient();
+        private CommandManager? _commandManager;
+        private AppSettings _appSettings = new();
+        private LocalDatabaseManager _localDb;
+        private SyncEngine? _syncEngine;
+        private NotifyIcon? _notifyIcon;
+        private KafkaConnect? _kafkaConnect;
+        private ErgonomyManager? _ergonomyManager;
 
-        private CommandManager _commandManager;
-        private System.Timers.Timer _healthCheckTimer;
-        private AppSettings? _appSettings;
+        private System.Timers.Timer? _healthCheckTimer;
         private System.Timers.Timer? _wakeUpTimer;
-        
-        // تغییر نام: از Postgres به API
-        private System.Timers.Timer? _apiPermissionTimer;
-        private System.Windows.Forms.Timer _settingsUpdateTimer;
-        
-        // تایمرهای اصلی جمع‌آوری داده
-        private System.Windows.Forms.Timer? _advancedMetricsTimer;
-        
-        // 🌟 تایمرهای بررسی سطح دسترسی برنامه‌ (دروازه‌های کنترلی)
+        private System.Timers.Timer? _settingsUpdateTimer;
+        private System.Timers.Timer? _advancedMetricsTimer;
         private System.Timers.Timer? _sqlitePermissionTimer;
         private System.Timers.Timer? _kafkaPermissionTimer;
 
-        // تایمر زمان‌بندی (اجرای دستورات خاموش/روشن و ریموت)
-        private System.Timers.Timer? _scheduleTimer;
-        private string _lastExecutedSchedule = "";
+        private bool _isLocalCollectionRunning;
+        private bool _isSyncEngineRunning;
+        private int _advancedMetricsExecutionGate;
+        private bool _isDisposed;
 
-        // فلگ‌های وضعیت سرویس‌ها (جلوگیری از اجرای تکراری)
-        private bool _isLocalCollectionRunning = false;
-        private bool _isSyncEngineRunning = false;
-
-        // سرویس‌ها
-        // private DatabaseManager? _dbManager;   // ❌ حذف شد
-        private LocalDatabaseManager _localDb;    // اتصال به SQLite (بافر محلی)
-        private SyncEngine? _syncEngine;          // موتور ارسال داده از SQLite به کافکا
-        private NotifyIcon? _notifyIcon;
-        private KafkaConnect? _kafkaConnect;      // کلاینت کافکا
-        private ErgonomyManager? _ergonomyManager;
-
-        
-        // اطلاعات نشست
-        private string _windowsSid;
-        private string _windowsUsername;
-        private string _sessionGuid; 
+        private readonly string _windowsSid;
+        private readonly string _windowsUsername;
+        private readonly string _sessionGuid;
 
         public MainApplicationContext()
         {
-            Application.ThreadException += (s, e) => HandleCriticalFailure(e.Exception.Message);
-            AppDomain.CurrentDomain.UnhandledException += (s, e) => 
+            _bootstrapSettingsPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            _runtimeSettingsPath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "Ergonomy",
+                "runtime-settings.json");
+
+            _bootstrapConfiguration = new ConfigurationBuilder()
+                .SetBasePath(AppContext.BaseDirectory)
+                .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+                .Build();
+
+            _httpClient = new HttpClient
             {
-                if (e.ExceptionObject is Exception ex) HandleCriticalFailure(ex.Message);
+                Timeout = TimeSpan.FromSeconds(15)
             };
 
-            // ۱. بارگذاری تنظیمات پایه از فایل JSON
+            Application.ThreadException += (s, e) => HandleCriticalFailure(e.Exception.Message);
+            AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+            {
+                if (e.ExceptionObject is Exception ex)
+                    HandleCriticalFailure(ex.Message);
+            };
+
             LoadAppSettings();
 
-            // دریافت اطلاعات کاربر سیستم
             _windowsSid = GetWindowsSID();
             try { _windowsUsername = WindowsIdentity.GetCurrent().Name; }
             catch { _windowsUsername = Environment.UserName; }
-            _sessionGuid = Guid.NewGuid().ToString(); 
 
-            // ۲. راه‌اندازی بافر محلی (SQLite)
+            _sessionGuid = Guid.NewGuid().ToString();
+
             _localDb = new LocalDatabaseManager();
+            _kafkaConnect = new KafkaConnect(_bootstrapConfiguration);
 
-            // ۳. تست اتصال به کافکا در لحظه شروع
             TestKafkaConnectionAtStartup();
 
-            StartHealthMonitoring(); 
-            
-            // ۴. مقداردهی اولیه سرویس‌ها (بدون dbManager)
-            // ⚠️ نکته مهم: باید در کلاس‌های زیر، DatabaseManager را از Constructor حذف کنید.
-            _syncEngine = new SyncEngine(_kafkaConnect!, _localDb, _appSettings?.SyncEngineIntervalMinutes ?? 1);
+            _syncEngine = new SyncEngine(_kafkaConnect, _localDb, _appSettings.SyncEngineIntervalMinutes);
             _ergonomyManager = new ErgonomyManager(_appSettings, _localDb, _sessionGuid, _windowsSid, _windowsUsername);
 
-            // ۵. تلاش برای دریافت آخرین تنظیمات آنلاین از API به جای Postgres
-            Task.Run(() => UpdateSettingsFromApiAsync());
-
-            int intervalSeconds = _appSettings?.SettingsCheckIntervalSeconds > 0 ? _appSettings.SettingsCheckIntervalSeconds : 60;
-            _settingsUpdateTimer = new System.Windows.Forms.Timer();
-            _settingsUpdateTimer.Interval = intervalSeconds * 1000;
-            _settingsUpdateTimer.Tick += async (s, e) => await UpdateSettingsFromApiAsync();
-            _settingsUpdateTimer.Start();
-
-            
-            _commandManager = new CommandManager(_appSettings, _windowsUsername , _localDb)
+            _commandManager = new CommandManager(_appSettings, _windowsUsername, _localDb)
             {
                 OnLogRequired = SaveLogToDatabase,
-                OnForceSync = () => _syncEngine?.ForceSync(),
-                OnStopCollection = () => 
+                OnForceSync = () => _syncEngine?.ForceSyncAsync(),
+                OnStopCollection = () =>
                 {
                     StopAllDataCollection();
                     _isLocalCollectionRunning = false;
                 },
-                OnStartCollection = () => 
+                OnStartCollection = () =>
                 {
                     StartLocalDataCollection();
                     _isLocalCollectionRunning = true;
                 }
             };
             _commandManager.Start();
-        
-            _notifyIcon = new NotifyIcon { Icon = System.Drawing.SystemIcons.Application, Visible = true, Text = "Ergonomy" };
 
-            // ۶. بررسی دسترسی‌ها و راه‌اندازی چرخه‌ها
+            _notifyIcon = new NotifyIcon
+            {
+                Icon = System.Drawing.SystemIcons.Application,
+                Visible = true,
+                Text = "Ergonomy"
+            };
+
+            StartHealthMonitoring();
+
+            try
+            {
+                UpdateSettingsFromApiAsync(logFailures: true).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Initial settings refresh failed. Using local/cache settings. Msg: {ex.Message}");
+            }
+
             EvaluateSqlitePermission();
             EvaluateKafkaPermission();
             EvaluateErgonomyPermission();
-            
+
+            StartSettingsUpdateTimer();
             StartSqlitePermissionTimer();
             StartKafkaPermissionTimer();
-            StartApiPermissionTimer(); // تغییر یافت
+        }
+
+        private void LoadAppSettings()
+        {
+            var bootstrapSettings = _bootstrapConfiguration.GetSection("AppSettings").Get<AppSettings>() ?? new AppSettings();
+            ApplyDefaultValues(bootstrapSettings);
+
+            var runtimeSettings = TryLoadRuntimeSettingsFromCache();
+            if (runtimeSettings != null)
+            {
+                ApplyDefaultValues(runtimeSettings);
+                _appSettings = MergeSettingsPreservingBootstrapApi(bootstrapSettings, runtimeSettings);
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 📦 Runtime settings cache loaded from `{_runtimeSettingsPath}`.");
+            }
+            else
+            {
+                _appSettings = bootstrapSettings;
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 📘 Bootstrap settings loaded from `{_bootstrapSettingsPath}`.");
+            }
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Enabled metrics count: {_appSettings.EnabledMetrics?.Count ?? 0}");
+        }
+
+        private AppSettings? TryLoadRuntimeSettingsFromCache()
+        {
+            try
+            {
+                if (!File.Exists(_runtimeSettingsPath))
+                    return null;
+
+                string json = File.ReadAllText(_runtimeSettingsPath);
+                if (string.IsNullOrWhiteSpace(json))
+                    return null;
+
+                using JsonDocument document = JsonDocument.Parse(json);
+                JsonElement root = document.RootElement;
+
+                var options = new JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true
+                };
+
+                if (root.ValueKind == JsonValueKind.Object &&
+                    root.TryGetProperty("AppSettings", out JsonElement wrappedSettings))
+                {
+                    return wrappedSettings.Deserialize<AppSettings>(options);
+                }
+
+                return root.Deserialize<AppSettings>(options);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Failed to load runtime settings cache. Msg: {ex.Message}");
+                return null;
+            }
+        }
+
+        private void SaveRuntimeSettingsCache(AppSettings settings)
+        {
+            try
+            {
+                string? directory = Path.GetDirectoryName(_runtimeSettingsPath);
+                if (!string.IsNullOrWhiteSpace(directory))
+                    Directory.CreateDirectory(directory);
+
+                var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions
+                {
+                    WriteIndented = true
+                });
+
+                File.WriteAllText(_runtimeSettingsPath, json);
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 💾 Runtime settings cache updated successfully.");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ Failed to update runtime settings cache: {ex.Message}");
+            }
+        }
+
+        private void ApplyDefaultValues(AppSettings settings)
+        {
+            if (settings.SyncEngineIntervalMinutes <= 0)
+                settings.SyncEngineIntervalMinutes = 1;
+
+            if (settings.AdvancedMetricsIntervalMinutes <= 0)
+                settings.AdvancedMetricsIntervalMinutes = 120;
+
+            if (settings.SettingsCheckIntervalSeconds <= 0)
+                settings.SettingsCheckIntervalSeconds = 60;
+
+            if (settings.PermissionSqliteRetryIntervalHours <= 0)
+                settings.PermissionSqliteRetryIntervalHours = 1;
+
+            if (settings.PermissionKafkaRetryIntervalHours <= 0)
+                settings.PermissionKafkaRetryIntervalHours = 1;
+
+            if (settings.ConnectionFailureSleepMinutes <= 0)
+                settings.ConnectionFailureSleepMinutes = 5;
+        }
+
+        private AppSettings MergeSettingsPreservingBootstrapApi(AppSettings bootstrapSettings, AppSettings runtimeSettings)
+        {
+            runtimeSettings.API = bootstrapSettings.API;
+            return runtimeSettings;
+        }
+
+        private string? GetBootstrapApiSettingsUrl()
+        {
+            return _bootstrapConfiguration["AppSettings:API:Settings"];
+        }
+
+        private string NormalizeSettings(AppSettings settings)
+        {
+            return JsonSerializer.Serialize(settings, new JsonSerializerOptions
+            {
+                WriteIndented = false
+            });
+        }
+
+        private async Task UpdateSettingsFromApiAsync(bool logFailures = false)
+        {
+            await _settingsRefreshLock.WaitAsync();
+            try
+            {
+                string? apiUrl = GetBootstrapApiSettingsUrl();
+                if (string.IsNullOrWhiteSpace(apiUrl))
+                {
+                    if (logFailures)
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Settings API URL is empty in bootstrap config.");
+                    return;
+                }
+
+                using HttpResponseMessage response = await _httpClient.GetAsync(apiUrl);
+                if (!response.IsSuccessStatusCode)
+                {
+                    if (logFailures)
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Settings API returned status code: {response.StatusCode}");
+                    return;
+                }
+
+                string jsonString = await response.Content.ReadAsStringAsync();
+                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+                AppSettings? remoteSettings = JsonSerializer.Deserialize<AppSettings>(jsonString, options);
+
+                if (remoteSettings == null)
+                {
+                    if (logFailures)
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Settings API response could not be deserialized.");
+                    return;
+                }
+
+                ApplyDefaultValues(remoteSettings);
+
+                var bootstrapSettings = _bootstrapConfiguration.GetSection("AppSettings").Get<AppSettings>() ?? new AppSettings();
+                ApplyDefaultValues(bootstrapSettings);
+
+                AppSettings mergedSettings = MergeSettingsPreservingBootstrapApi(bootstrapSettings, remoteSettings);
+
+                string currentJson = NormalizeSettings(_appSettings);
+                string newJson = NormalizeSettings(mergedSettings);
+
+                if (currentJson == newJson)
+                    return;
+
+                _appSettings = mergedSettings;
+
+                SaveRuntimeSettingsCache(_appSettings);
+                ReconfigureRuntimeBasedOnSettings();
+
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ✅ Settings updated from API successfully.");
+            }
+            catch (Exception ex)
+            {
+                if (logFailures)
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Offline Mode or API Error! Using bootstrap/cache settings. Msg: {ex.Message}");
+            }
+            finally
+            {
+                _settingsRefreshLock.Release();
+            }
+        }
+
+        private void ReconfigureRuntimeBasedOnSettings()
+        {
+            _syncEngine?.UpdateSyncInterval(_appSettings.SyncEngineIntervalMinutes);
+
+            RestartSettingsUpdateTimer();
+            RestartPermissionTimers();
+
+            EvaluateSqlitePermission();
+            EvaluateKafkaPermission();
+            EvaluateErgonomyPermission();
         }
 
         private void RestartPermissionTimers()
         {
             StartSqlitePermissionTimer();
             StartKafkaPermissionTimer();
-            StartApiPermissionTimer();
         }
 
         private void HandleCriticalFailure(string errorMessage)
@@ -157,70 +341,92 @@ namespace Ergonomy
         private void GoToSleepAndRetry()
         {
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 💤 Entering Sleep Mode due to critical failures...");
-            
+
             StopAllDataCollection();
             _isLocalCollectionRunning = false;
-            
+
             _syncEngine?.Stop();
             _isSyncEngineRunning = false;
 
-            _sqlitePermissionTimer?.Stop();
-            _kafkaPermissionTimer?.Stop();
-            _scheduleTimer?.Stop();
+            StopTimer(ref _sqlitePermissionTimer);
+            StopTimer(ref _kafkaPermissionTimer);
+            StopTimer(ref _settingsUpdateTimer);
+            StopTimer(ref _healthCheckTimer);
 
-            double sleepMinutes = _appSettings?.ConnectionFailureSleepMinutes ?? 5;
-            
-            _wakeUpTimer?.Stop();
-            _wakeUpTimer?.Dispose();
-            // فرمول محاسبه: $sleepMinutes \times 60 \times 1000$
-            _wakeUpTimer = new System.Timers.Timer(sleepMinutes * 60 * 1000);
-            _wakeUpTimer.Elapsed += (s, e) => WakeUp();
-            _wakeUpTimer.AutoReset = false;
+            double sleepMinutes = _appSettings.ConnectionFailureSleepMinutes;
+
+            StopTimer(ref _wakeUpTimer);
+            _wakeUpTimer = new System.Timers.Timer(sleepMinutes * 60 * 1000)
+            {
+                AutoReset = false
+            };
+            _wakeUpTimer.Elapsed += async (s, e) => await WakeUpAsync();
             _wakeUpTimer.Start();
         }
 
-        private void WakeUp()
+        private async Task WakeUpAsync()
         {
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ☀️ Waking up and re-evaluating connections...");
-            
-            Task.Run(() => UpdateSettingsFromApiAsync());
+
+            StartHealthMonitoring();
+
+            await UpdateSettingsFromApiAsync(logFailures: true);
+
             EvaluateSqlitePermission();
             EvaluateKafkaPermission();
-            
+            EvaluateErgonomyPermission();
+
+            StartSettingsUpdateTimer();
             StartSqlitePermissionTimer();
             StartKafkaPermissionTimer();
-            _commandManager?.Start(); 
+
+            _commandManager?.Start();
         }
 
         private void StartHealthMonitoring()
         {
-            double intervalMinutes = _configuration.GetValue<double>("AppSettings:HealthCheckIntervalMinutes", 15);
-            
-            _healthCheckTimer = new System.Timers.Timer(intervalMinutes * 60 * 1000);
-            _healthCheckTimer.Elapsed += async (sender, e) => await PerformAllHealthChecksAsync();
-            _healthCheckTimer.AutoReset = true;
-            _healthCheckTimer.Start();
+            StopTimer(ref _healthCheckTimer);
 
-            Task.Run(async () => await PerformAllHealthChecksAsync());
+            double intervalMinutes = _bootstrapConfiguration.GetValue<double>("AppSettings:HealthCheckIntervalMinutes", 15);
+
+            _healthCheckTimer = new System.Timers.Timer(intervalMinutes * 60 * 1000)
+            {
+                AutoReset = false
+            };
+
+            _healthCheckTimer.Elapsed += async (sender, e) =>
+            {
+                try
+                {
+                    await PerformAllHealthChecksAsync();
+                }
+                finally
+                {
+                    if (!_isDisposed)
+                        _healthCheckTimer?.Start();
+                }
+            };
+
+            _healthCheckTimer.Start();
+            _ = Task.Run(PerformAllHealthChecksAsync);
         }
 
         private async Task PerformAllHealthChecksAsync()
         {
-            // جایگزین شد: بررسی سلامت API
             await CheckApiHealthAsync();
             await CheckSqliteHealthAsync();
             await CheckSelfPerformanceAsync();
         }
 
-        // بررسی سلامت API
         private async Task CheckApiHealthAsync()
         {
-            string? apiUrl = _configuration["AppSettings:API:Settings"];
-            if (string.IsNullOrEmpty(apiUrl)) return;
+            string? apiUrl = GetBootstrapApiSettingsUrl();
+            if (string.IsNullOrWhiteSpace(apiUrl))
+                return;
 
             try
             {
-                var response = await _httpClient.GetAsync(apiUrl);
+                using var response = await _httpClient.GetAsync(apiUrl);
                 if (response.IsSuccessStatusCode)
                 {
                     await SendHealthLogAsync("INFO", "Settings API is healthy and accessible.", "ApiHealth");
@@ -240,7 +446,7 @@ namespace Ergonomy
         {
             string statusMessage;
             string logLevel;
-            string sqliteDbPath = _configuration["AppSettings:SQLite:ConnectionString"] ?? "Data Source=localbuffer.db";
+            string sqliteDbPath = _bootstrapConfiguration["AppSettings:SQLite:ConnectionString"] ?? "Data Source=localbuffer.db";
 
             try
             {
@@ -249,7 +455,7 @@ namespace Ergonomy
                 using var cmd = conn.CreateCommand();
                 cmd.CommandText = "SELECT 1;";
                 await cmd.ExecuteScalarAsync();
-                
+
                 statusMessage = "SQLite database is healthy and accessible.";
                 logLevel = "INFO";
             }
@@ -267,10 +473,9 @@ namespace Ergonomy
         {
             try
             {
-                var process = Process.GetCurrentProcess();
-                // فرمول محاسبه مگابایت: $MB = \frac{Bytes}{1024 \times 1024}$
+                using Process process = Process.GetCurrentProcess();
                 long memoryUsedMB = process.WorkingSet64 / (1024 * 1024);
-                
+
                 string statusMessage = $"Agent Performance: Memory Usage is {memoryUsedMB} MB. Thread Count: {process.Threads.Count}";
                 string logLevel = memoryUsedMB > 500 ? "WARN" : "INFO";
 
@@ -284,15 +489,16 @@ namespace Ergonomy
 
         private async Task SendHealthLogAsync(string logLevel, string message, string category)
         {
+            if (_kafkaConnect == null)
+                return;
 
             DateTime currentTime = DateTime.Now;
             PersianCalendar pc = new PersianCalendar();
-            if (_kafkaConnect == null) return;
 
             var logObj = new
             {
                 CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}" ,
+                CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
                 LogLevel = logLevel,
                 Message = message,
                 WindowsUsername = _windowsUsername,
@@ -311,70 +517,10 @@ namespace Ergonomy
             }
         }
 
-        // متد جدید: آپدیت تنظیمات از طریق API
-        private async Task UpdateSettingsFromApiAsync()
-        {
-            try
-            {
-                string? apiUrl = _configuration["AppSettings:API:Settings"];
-                if (string.IsNullOrEmpty(apiUrl)) return;
-
-                HttpResponseMessage response = await _httpClient.GetAsync(apiUrl);
-                if (response.IsSuccessStatusCode)
-                {
-                    string jsonString = await response.Content.ReadAsStringAsync();
-                    
-                    var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                    var apiSettingsOverride = JsonSerializer.Deserialize<AppSettings>(jsonString, options);
-
-                    if (apiSettingsOverride != null)
-                    {
-                        var oldSettingsJson = JsonSerializer.Serialize(_appSettings);
-                        var newSettingsJson = JsonSerializer.Serialize(apiSettingsOverride);
-
-                        if (oldSettingsJson != newSettingsJson)
-                        {
-                            _appSettings = apiSettingsOverride;
-                            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ✅ Settings updated securely from API.");
-
-                            SaveSettingsToAppSettingsJson(_appSettings);
-                            RestartPermissionTimers();
-
-                            if (_syncEngine != null)
-                            {
-                                _syncEngine.UpdateSyncInterval(_appSettings.SyncEngineIntervalMinutes);
-                            }
-
-                            if (_appSettings.SettingsCheckIntervalSeconds > 0 && _settingsUpdateTimer != null)
-                            {
-                                int intervalSeconds = _appSettings.SettingsCheckIntervalSeconds;
-                                _settingsUpdateTimer.Interval = intervalSeconds * 1000;
-                            }
-
-                            if (_appSettings.AllowErgonomyCollection)
-                            {
-                                _ergonomyManager?.Start();
-                                Console.WriteLine("Ergonomy Started.");
-                            }
-                            else
-                            {
-                                _ergonomyManager?.Stop();
-                                Console.WriteLine("Ergonomy Stopped.");
-                            }
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Offline Mode or API Error! Using appsettings.json. Msg: {ex.Message}");
-            }
-        }
-
         private void EvaluateSqlitePermission()
         {
-            bool allowSqlite = _appSettings?.AllowSqliteWrite ?? true;
-            double intervalHours = _appSettings?.PermissionSqliteRetryIntervalHours ?? 1;
+            bool allowSqlite = _appSettings.AllowSqliteWrite;
+            double intervalHours = _appSettings.PermissionSqliteRetryIntervalHours;
 
             string msg = $"[SQLite Status] Permission: {allowSqlite} | Checking continuously every {intervalHours} hour(s).";
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🔍 {msg}");
@@ -394,22 +540,23 @@ namespace Ergonomy
                 {
                     StopAllDataCollection();
                     _isLocalCollectionRunning = false;
-                    
-                    if (_isSyncEngineRunning)
-                    {
-                        _syncEngine?.Stop();
-                        _isSyncEngineRunning = false;
-                    }
                 }
+
+                if (_isSyncEngineRunning)
+                {
+                    _syncEngine?.Stop();
+                    _isSyncEngineRunning = false;
+                }
+
                 SaveLogToDatabase("WARNING", "Local Collection (SQLite): Access DENIED. Process is CANCELED/SLEEPING.");
             }
         }
 
         private void EvaluateKafkaPermission()
         {
-            bool allowSqlite = _appSettings?.AllowSqliteWrite ?? true;
-            bool allowKafka = _appSettings?.AllowKafkaWrite ?? true; 
-            double intervalHours = _appSettings?.PermissionKafkaRetryIntervalHours ?? 1;
+            bool allowSqlite = _appSettings.AllowSqliteWrite;
+            bool allowKafka = _appSettings.AllowKafkaWrite;
+            double intervalHours = _appSettings.PermissionKafkaRetryIntervalHours;
 
             string msg = $"[Kafka Sync Status] Permission: {allowKafka} | Checking continuously every {intervalHours} hour(s).";
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🔍 {msg}");
@@ -424,20 +571,21 @@ namespace Ergonomy
                     SaveLogToDatabase("INFO", "Sync Engine Started (Kafka Allowed).");
                 }
             }
-            else 
+            else
             {
                 if (_isSyncEngineRunning)
                 {
                     _syncEngine?.Stop();
                     _isSyncEngineRunning = false;
                 }
+
                 SaveLogToDatabase("WARNING", "Data Sync (Kafka): Access DENIED. Sync Process is CANCELED.");
             }
         }
 
         private void EvaluateErgonomyPermission()
         {
-            bool allowErgonomy = _appSettings?.AllowErgonomyCollection ?? true;
+            bool allowErgonomy = _appSettings.AllowErgonomyCollection;
 
             string msg = $"[Ergonomy Status] Permission: {allowErgonomy}";
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🔍 {msg}");
@@ -454,49 +602,101 @@ namespace Ergonomy
             }
         }
 
+        private void StartSettingsUpdateTimer()
+        {
+            StopTimer(ref _settingsUpdateTimer);
+
+            _settingsUpdateTimer = new System.Timers.Timer(_appSettings.SettingsCheckIntervalSeconds * 1000)
+            {
+                AutoReset = false
+            };
+
+            _settingsUpdateTimer.Elapsed += async (s, e) =>
+            {
+                try
+                {
+                    await UpdateSettingsFromApiAsync(logFailures: false);
+                }
+                finally
+                {
+                    if (!_isDisposed)
+                        _settingsUpdateTimer?.Start();
+                }
+            };
+
+            _settingsUpdateTimer.Start();
+        }
+
+        private void RestartSettingsUpdateTimer()
+        {
+            StartSettingsUpdateTimer();
+        }
+
         private void StartSqlitePermissionTimer()
         {
-            _sqlitePermissionTimer?.Stop();
-            _sqlitePermissionTimer?.Dispose();
+            StopTimer(ref _sqlitePermissionTimer);
 
-            double retryHours = _appSettings?.PermissionSqliteRetryIntervalHours ?? 1;
-            _sqlitePermissionTimer = new System.Timers.Timer(retryHours * 60 * 60 * 1000); 
-            _sqlitePermissionTimer.Elapsed += async (s, e) => 
+            _sqlitePermissionTimer = new System.Timers.Timer(_appSettings.PermissionSqliteRetryIntervalHours * 60 * 60 * 1000)
             {
-                await UpdateSettingsFromApiAsync(); 
-                EvaluateSqlitePermission(); 
-                EvaluateErgonomyPermission();
-                StartSqlitePermissionTimer(); 
+                AutoReset = false
             };
-            _sqlitePermissionTimer.AutoReset = false; 
+
+            _sqlitePermissionTimer.Elapsed += (s, e) =>
+            {
+                try
+                {
+                    EvaluateSqlitePermission();
+                    EvaluateErgonomyPermission();
+                }
+                finally
+                {
+                    if (!_isDisposed)
+                        _sqlitePermissionTimer?.Start();
+                }
+            };
+
             _sqlitePermissionTimer.Start();
         }
 
         private void StartKafkaPermissionTimer()
         {
-            _kafkaPermissionTimer?.Stop();
-            _kafkaPermissionTimer?.Dispose();
+            StopTimer(ref _kafkaPermissionTimer);
 
-            double retryHours = _appSettings?.PermissionKafkaRetryIntervalHours ?? 1;
-            _kafkaPermissionTimer = new System.Timers.Timer(retryHours * 60 * 60 * 1000); 
-            _kafkaPermissionTimer.Elapsed += async (s, e) => 
+            _kafkaPermissionTimer = new System.Timers.Timer(_appSettings.PermissionKafkaRetryIntervalHours * 60 * 60 * 1000)
             {
-                await UpdateSettingsFromApiAsync(); 
-                EvaluateKafkaPermission(); 
-                StartKafkaPermissionTimer(); 
+                AutoReset = false
             };
-            _kafkaPermissionTimer.AutoReset = false; 
+
+            _kafkaPermissionTimer.Elapsed += (s, e) =>
+            {
+                try
+                {
+                    EvaluateKafkaPermission();
+                }
+                finally
+                {
+                    if (!_isDisposed)
+                        _kafkaPermissionTimer?.Start();
+                }
+            };
+
             _kafkaPermissionTimer.Start();
         }
 
         private void StartLocalDataCollection()
         {
             StopAllDataCollection();
-            
-            _advancedMetricsTimer = new System.Windows.Forms.Timer();
-            double advancedIntervalMinutes = (_appSettings?.AdvancedMetricsIntervalMinutes ?? 120) > 0 ? (_appSettings?.AdvancedMetricsIntervalMinutes ?? 120) : 120;
-            _advancedMetricsTimer.Interval = (int)(advancedIntervalMinutes * 60 * 1000); 
-            _advancedMetricsTimer.Tick += OnAdvancedMetricsTimerTick;
+
+            double advancedIntervalMinutes = _appSettings.AdvancedMetricsIntervalMinutes > 0
+                ? _appSettings.AdvancedMetricsIntervalMinutes
+                : 120;
+
+            _advancedMetricsTimer = new System.Timers.Timer(advancedIntervalMinutes * 60 * 1000)
+            {
+                AutoReset = true
+            };
+
+            _advancedMetricsTimer.Elapsed += OnAdvancedMetricsTimerElapsed;
             _advancedMetricsTimer.Start();
 
             SaveLogToDatabase("INFO", "Local System Metrics Collection Started.");
@@ -504,71 +704,41 @@ namespace Ergonomy
 
         private void StopAllDataCollection()
         {
-            _advancedMetricsTimer?.Stop();
+            StopTimer(ref _advancedMetricsTimer);
             _ergonomyManager?.Stop();
         }
 
-        private void LoadAppSettings()
+        private async void OnAdvancedMetricsTimerElapsed(object? sender, ElapsedEventArgs e)
         {
-            var builder = new ConfigurationBuilder()
-                .SetBasePath(Directory.GetCurrentDirectory())
-                .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true);
-            IConfigurationRoot configuration = builder.Build();
-            
-            _appSettings = new AppSettings();
-
-            if (_appSettings == null)
-            {
-                _appSettings = new AppSettings();
-                Console.WriteLine("ERROR: AppSettings section not found in appsettings.json or could not be bound.");
-            }
-            if (_appSettings.SyncEngineIntervalMinutes <= 0)
-            {
-                _appSettings.SyncEngineIntervalMinutes = 1; 
-            }
-            Console.WriteLine($"Total enabled metrics count after loading: {_appSettings?.EnabledMetrics?.Count ?? 0}");
-            
-            configuration.GetSection("AppSettings").Bind(_appSettings); 
-            
-            _kafkaConnect = new KafkaConnect(configuration);
-        }
-
-        // تغییر نام و منطق از Postgres به API
-        private void StartApiPermissionTimer()
-        {
-            _apiPermissionTimer?.Stop();
-            _apiPermissionTimer?.Dispose();
-
-            // استفاده از تایمر جایگزین (یا یک ویژگی جدید در صورت نیاز تعریف کنید)
-            double retryHours = 1; 
-            
-            _apiPermissionTimer = new System.Timers.Timer(retryHours * 60 * 60 * 1000); 
-            _apiPermissionTimer.Elapsed += async (s, e) =>
-            {
-                await UpdateSettingsFromApiAsync();
-                StartApiPermissionTimer(); 
-            };
-            _apiPermissionTimer.AutoReset = false;
-            _apiPermissionTimer.Start();
-
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🎯 API permission check timer started. Interval = {retryHours} hour(s).");
-        }
-
-        private void SaveSettingsToAppSettingsJson(AppSettings? settings)
-        {
-            if (settings == null) return;
+            if (Interlocked.Exchange(ref _advancedMetricsExecutionGate, 1) == 1)
+                return;
 
             try
             {
-                string filePath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "appsettings.json");
-                var root = new { AppSettings = settings };
-                var json = JsonSerializer.Serialize(root, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(filePath, json);
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 💾 appsettings.json updated successfully.");
+                if (_appSettings == null || _appSettings.EnabledMetrics == null)
+                {
+                    SaveLogToDatabase("WARNING", "Advanced metrics collection skipped because settings are not ready.");
+                    return;
+                }
+
+                await Task.Run(() =>
+                {
+                    var collector = new AdvancedMetricsCollector(
+                        _appSettings.EnabledMetrics,
+                        _appSettings.TopProcessesCount,
+                        _appSettings.NetworkTraceTargetIP);
+
+                    var metrics = collector.Collect();
+                    _localDb.SaveToLocalQueue(QueueTargets.AdvancedSystemMetrics, metrics);
+                });
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ Failed to update appsettings.json: {ex.Message}");
+                SaveLogToDatabase("ERROR", $"Error queuing metrics: {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _advancedMetricsExecutionGate, 0);
             }
         }
 
@@ -576,42 +746,30 @@ namespace Ergonomy
         {
             DateTime currentTime = DateTime.Now;
             PersianCalendar pc = new PersianCalendar();
-            Task.Run(async () => 
+
+            _ = Task.Run(async () =>
             {
                 try
                 {
+                    if (_kafkaConnect == null)
+                        return;
+
                     var startupLog = new
                     {
                         CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                        CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}" ,
+                        CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
                         LogLevel = "INFO",
                         Message = "Application Started and Successfully Connected to Kafka.",
                         WindowsUsername = _windowsUsername,
                         MachineName = Environment.MachineName
                     };
-                    await _kafkaConnect!.SendAppLogAsync(startupLog);
+
+                    await _kafkaConnect.SendAppLogAsync(startupLog);
                     Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🚀 [KAFKA OK] Startup log sent.");
                 }
                 catch (Exception ex)
                 {
                     Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ [KAFKA ERROR] {ex.Message}");
-                }
-            });
-        }
-
-        private async void OnAdvancedMetricsTimerTick(object? sender, EventArgs e)
-        {
-            await Task.Run(() =>
-            {
-                try
-                {
-                    var collector = new AdvancedMetricsCollector(_appSettings.EnabledMetrics, _appSettings.TopProcessesCount, _appSettings.NetworkTraceTargetIP);
-                    var metrics = collector.Collect();
-                    _localDb.SaveToLocalQueue("advanced_system_metrics", metrics);
-                }
-                catch (Exception ex)
-                {
-                    SaveLogToDatabase("ERROR", $"Error queuing metrics: {ex.Message}");
                 }
             });
         }
@@ -626,9 +784,11 @@ namespace Ergonomy
         {
             DateTime currentTime = DateTime.Now;
             PersianCalendar pc = new PersianCalendar();
+
             try
             {
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{level}] {message}");
+
                 var logEntry = new
                 {
                     CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
@@ -639,31 +799,59 @@ namespace Ergonomy
                     WindowsSid = _windowsSid,
                     MachineName = Environment.MachineName
                 };
+
                 _localDb?.SaveToLocalQueue("app_logs", logEntry);
             }
-            catch { }
+            catch
+            {
+            }
+        }
+
+        private void StopTimer(ref System.Timers.Timer? timer)
+        {
+            if (timer == null)
+                return;
+
+            try
+            {
+                timer.Stop();
+                timer.Dispose();
+            }
+            catch
+            {
+            }
+            finally
+            {
+                timer = null;
+            }
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            if (disposing && !_isDisposed)
             {
+                _isDisposed = true;
+
                 SaveLogToDatabase("INFO", "Application shutting down.");
-                
-                _scheduleTimer?.Stop(); _scheduleTimer?.Dispose();
-                _sqlitePermissionTimer?.Stop(); _sqlitePermissionTimer?.Dispose();
-                _kafkaPermissionTimer?.Stop(); _kafkaPermissionTimer?.Dispose();
-                _apiPermissionTimer?.Stop(); _apiPermissionTimer?.Dispose();
-                
-                StopAllDataCollection();
-                _syncEngine?.Stop(); 
+
+                StopTimer(ref _healthCheckTimer);
+                StopTimer(ref _wakeUpTimer);
+                StopTimer(ref _settingsUpdateTimer);
+                StopTimer(ref _advancedMetricsTimer);
+                StopTimer(ref _sqlitePermissionTimer);
+                StopTimer(ref _kafkaPermissionTimer);
+
+                _syncEngine?.Stop();
+                _ergonomyManager?.Stop();
+
                 _ergonomyManager?.Dispose();
                 _notifyIcon?.Dispose();
-                
-                _kafkaConnect?.Dispose(); 
+                _kafkaConnect?.Dispose();
                 _commandManager?.Dispose();
-                _httpClient?.Dispose();
+                _httpClient.Dispose();
+                _settingsRefreshLock.Dispose();
             }
+
             base.Dispose(disposing);
         }
     }
