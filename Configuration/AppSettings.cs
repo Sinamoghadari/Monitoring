@@ -49,9 +49,13 @@ namespace Ergonomy.Configuration
     // کلاس تنظیمات کافکا
     public class KafkaSettings
     {
-        public string BootstrapServers { get; set; } = "";
-        public string UserActivityTopic { get; set; } = "";
-        public string SystemMetricsTopic { get; set; } = "";
+        public string BootstrapServers { get; set; } = "localhost:9092";
+
+        public string UserActivityTopic { get; set; } = "user_activity";
+
+        public string SystemMetricsTopic { get; set; } = "system_metrics";
+
+        public string AppLogsTopic { get; set; } = "app_logs";
     }
 
     // کلاس تنظیمات دیتابیس (Postgres)

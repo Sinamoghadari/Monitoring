@@ -3,11 +3,9 @@ using Ergonomy.Core;
 using Ergonomy.Database;
 using Ergonomy.Hooks;
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Configuration;
 using System;
 using System.Diagnostics;
 using System.Globalization;
-using System.IO;
 using System.Security.Principal;
 using System.Text.Json;
 using System.Threading;
@@ -19,9 +17,6 @@ namespace Ergonomy
 {
     public class MainApplicationContext : ApplicationContext
     {
-        private readonly IConfigurationRoot _bootstrapConfiguration;
-        private readonly string _bootstrapSettingsPath;
-        private readonly string _runtimeSettingsPath;
         private readonly HttpClient _httpClient;
         private readonly SemaphoreSlim _settingsRefreshLock = new(1, 1);
 
@@ -51,17 +46,6 @@ namespace Ergonomy
 
         public MainApplicationContext()
         {
-            _bootstrapSettingsPath = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-            _runtimeSettingsPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "Ergonomy",
-                "runtime-settings.json");
-
-            _bootstrapConfiguration = new ConfigurationBuilder()
-                .SetBasePath(AppContext.BaseDirectory)
-                .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
-                .Build();
-
             _httpClient = new HttpClient
             {
                 Timeout = TimeSpan.FromSeconds(15)
@@ -83,14 +67,23 @@ namespace Ergonomy
             _sessionGuid = Guid.NewGuid().ToString();
 
             _localDb = new LocalDatabaseManager();
-            _kafkaConnect = new KafkaConnect(_bootstrapConfiguration);
+            _kafkaConnect = new KafkaConnect(
+            _appSettings.Kafka.BootstrapServers,
+            _appSettings.Kafka.UserActivityTopic,
+            _appSettings.Kafka.SystemMetricsTopic,
+            _appSettings.Kafka.AppLogsTopic);
+
+
 
             TestKafkaConnectionAtStartup();
 
             _syncEngine = new SyncEngine(_kafkaConnect, _localDb, _appSettings.SyncEngineIntervalMinutes);
             _ergonomyManager = new ErgonomyManager(_appSettings, _localDb, _sessionGuid, _windowsSid, _windowsUsername);
 
-            _commandManager = new CommandManager(_appSettings, _windowsUsername, _localDb)
+            _commandManager = new CommandManager(
+                _appSettings,
+                _windowsUsername,
+                _localDb)
             {
                 OnLogRequired = SaveLogToDatabase,
                 OnForceSync = () => _syncEngine?.ForceSyncAsync(),
@@ -105,6 +98,7 @@ namespace Ergonomy
                     _isLocalCollectionRunning = true;
                 }
             };
+
             _commandManager.Start();
 
             _notifyIcon = new NotifyIcon
@@ -122,7 +116,7 @@ namespace Ergonomy
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Initial settings refresh failed. Using local/cache settings. Msg: {ex.Message}");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Initial settings refresh failed. Using Environment settings. Msg: {ex.Message}");
             }
 
             EvaluateSqlitePermission();
@@ -136,79 +130,11 @@ namespace Ergonomy
 
         private void LoadAppSettings()
         {
-            var bootstrapSettings = _bootstrapConfiguration.GetSection("AppSettings").Get<AppSettings>() ?? new AppSettings();
-            ApplyDefaultValues(bootstrapSettings);
+            _appSettings = EnvironmentSettingsProvider.Load();
+            ApplyDefaultValues(_appSettings);
 
-            var runtimeSettings = TryLoadRuntimeSettingsFromCache();
-            if (runtimeSettings != null)
-            {
-                ApplyDefaultValues(runtimeSettings);
-                _appSettings = MergeSettingsPreservingBootstrapApi(bootstrapSettings, runtimeSettings);
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 📦 Runtime settings cache loaded from `{_runtimeSettingsPath}`.");
-            }
-            else
-            {
-                _appSettings = bootstrapSettings;
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 📘 Bootstrap settings loaded from `{_bootstrapSettingsPath}`.");
-            }
-
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🌍 Bootstrap settings loaded from Machine Environment Variables.");
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Enabled metrics count: {_appSettings.EnabledMetrics?.Count ?? 0}");
-        }
-
-        private AppSettings? TryLoadRuntimeSettingsFromCache()
-        {
-            try
-            {
-                if (!File.Exists(_runtimeSettingsPath))
-                    return null;
-
-                string json = File.ReadAllText(_runtimeSettingsPath);
-                if (string.IsNullOrWhiteSpace(json))
-                    return null;
-
-                using JsonDocument document = JsonDocument.Parse(json);
-                JsonElement root = document.RootElement;
-
-                var options = new JsonSerializerOptions
-                {
-                    PropertyNameCaseInsensitive = true
-                };
-
-                if (root.ValueKind == JsonValueKind.Object &&
-                    root.TryGetProperty("AppSettings", out JsonElement wrappedSettings))
-                {
-                    return wrappedSettings.Deserialize<AppSettings>(options);
-                }
-
-                return root.Deserialize<AppSettings>(options);
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Failed to load runtime settings cache. Msg: {ex.Message}");
-                return null;
-            }
-        }
-
-        private void SaveRuntimeSettingsCache(AppSettings settings)
-        {
-            try
-            {
-                string? directory = Path.GetDirectoryName(_runtimeSettingsPath);
-                if (!string.IsNullOrWhiteSpace(directory))
-                    Directory.CreateDirectory(directory);
-
-                var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions
-                {
-                    WriteIndented = true
-                });
-
-                File.WriteAllText(_runtimeSettingsPath, json);
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 💾 Runtime settings cache updated successfully.");
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ Failed to update runtime settings cache: {ex.Message}");
-            }
         }
 
         private void ApplyDefaultValues(AppSettings settings)
@@ -232,15 +158,17 @@ namespace Ergonomy
                 settings.ConnectionFailureSleepMinutes = 5;
         }
 
-        private AppSettings MergeSettingsPreservingBootstrapApi(AppSettings bootstrapSettings, AppSettings runtimeSettings)
+        private AppSettings PreserveEnvironmentInfrastructureSettings(AppSettings remoteSettings)
         {
-            runtimeSettings.API = bootstrapSettings.API;
-            return runtimeSettings;
+            remoteSettings.API = _appSettings.API;
+            remoteSettings.Kafka = _appSettings.Kafka;
+            return remoteSettings;
         }
+
 
         private string? GetBootstrapApiSettingsUrl()
         {
-            return _bootstrapConfiguration["AppSettings:API:Settings"];
+            return _appSettings.API.Settings;
         }
 
         private string NormalizeSettings(AppSettings settings)
@@ -260,7 +188,7 @@ namespace Ergonomy
                 if (string.IsNullOrWhiteSpace(apiUrl))
                 {
                     if (logFailures)
-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Settings API URL is empty in bootstrap config.");
+                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Settings API URL is empty in Environment settings.");
                     return;
                 }
 
@@ -285,20 +213,17 @@ namespace Ergonomy
 
                 ApplyDefaultValues(remoteSettings);
 
-                var bootstrapSettings = _bootstrapConfiguration.GetSection("AppSettings").Get<AppSettings>() ?? new AppSettings();
-                ApplyDefaultValues(bootstrapSettings);
-
-                AppSettings mergedSettings = MergeSettingsPreservingBootstrapApi(bootstrapSettings, remoteSettings);
+                // حفظ URLهای API از Environment، چون اینها bootstrap هستند
+                remoteSettings = PreserveEnvironmentInfrastructureSettings(remoteSettings);
 
                 string currentJson = NormalizeSettings(_appSettings);
-                string newJson = NormalizeSettings(mergedSettings);
+                string newJson = NormalizeSettings(remoteSettings);
 
                 if (currentJson == newJson)
                     return;
 
-                _appSettings = mergedSettings;
+                _appSettings = remoteSettings;
 
-                SaveRuntimeSettingsCache(_appSettings);
                 ReconfigureRuntimeBasedOnSettings();
 
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ✅ Settings updated from API successfully.");
@@ -306,7 +231,7 @@ namespace Ergonomy
             catch (Exception ex)
             {
                 if (logFailures)
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Offline Mode or API Error! Using bootstrap/cache settings. Msg: {ex.Message}");
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Offline Mode or API Error! Using Environment settings. Msg: {ex.Message}");
             }
             finally
             {
@@ -314,9 +239,12 @@ namespace Ergonomy
             }
         }
 
+
         private void ReconfigureRuntimeBasedOnSettings()
         {
             _syncEngine?.UpdateSyncInterval(_appSettings.SyncEngineIntervalMinutes);
+
+            _commandManager?.UpdateSettings(_appSettings);
 
             RestartSettingsUpdateTimer();
             RestartPermissionTimers();
@@ -325,6 +253,7 @@ namespace Ergonomy
             EvaluateKafkaPermission();
             EvaluateErgonomyPermission();
         }
+
 
         private void RestartPermissionTimers()
         {
@@ -387,7 +316,7 @@ namespace Ergonomy
         {
             StopTimer(ref _healthCheckTimer);
 
-            double intervalMinutes = _bootstrapConfiguration.GetValue<double>("AppSettings:HealthCheckIntervalMinutes", 15);
+            const double intervalMinutes = 15;
 
             _healthCheckTimer = new System.Timers.Timer(intervalMinutes * 60 * 1000)
             {
@@ -410,6 +339,8 @@ namespace Ergonomy
             _healthCheckTimer.Start();
             _ = Task.Run(PerformAllHealthChecksAsync);
         }
+
+
 
         private async Task PerformAllHealthChecksAsync()
         {
@@ -446,7 +377,8 @@ namespace Ergonomy
         {
             string statusMessage;
             string logLevel;
-            string sqliteDbPath = _bootstrapConfiguration["AppSettings:SQLite:ConnectionString"] ?? "Data Source=localbuffer.db";
+            string sqliteDbPath = Environment.GetEnvironmentVariable("ERGONOMY_SQLITE_CONNECTION_STRING", EnvironmentVariableTarget.Machine)
+                ?? "Data Source=localbuffer.db";
 
             try
             {
@@ -468,6 +400,7 @@ namespace Ergonomy
 
             await SendHealthLogAsync(logLevel, statusMessage, "SqliteHealth");
         }
+
 
         private async Task CheckSelfPerformanceAsync()
         {

@@ -8,6 +8,7 @@ using System.Text;
 using SysTimer = System.Timers.Timer;
 using System.Globalization;
 using Ergonomy.Database; // 🌟 اضافه شده جهت شناسایی LocalDatabaseManager و QueueTargets
+using Ergonomy.Configuration;
 
 namespace Ergonomy 
 {
@@ -117,9 +118,14 @@ namespace Ergonomy
             
             if (string.IsNullOrWhiteSpace(baseUrl))
             {
-                LogMessage("ERROR", "CommandsApiUrl is not configured in AppSettings.");
-                baseUrl = "http://172.17.214.38:8082/api/commands"; 
+                LogMessage(
+                    "ERROR",
+                    "Commands API URL is not configured. " +
+                    "Set ERGONOMY_API_COMMANDS as a Machine Environment Variable.");
+
+                return;
             }
+
 
             baseUrl = baseUrl.TrimEnd('/'); 
             string apiUrl = $"{baseUrl}?computer={computerName}&user={windowsUsername}";
@@ -221,13 +227,13 @@ namespace Ergonomy
 
             if (lowerCmd.StartsWith("msg:"))
             {
-                string message = command.Substring(4).Trim(); 
+                string message = command.Substring(4).Trim();
                 LogMessage("INFO", $"Displaying custom message: {message}");
 
                 System.Threading.Thread thread = new System.Threading.Thread(() =>
                 {
                     var msgForm = new Ergonomy.UI.MessageAlarmForm(message);
-                    Application.Run(msgForm); 
+                    Application.Run(msgForm);
                 });
                 thread.SetApartmentState(System.Threading.ApartmentState.STA);
                 thread.Start();
@@ -244,18 +250,33 @@ namespace Ergonomy
                     OnStartCollection?.Invoke();
                     LogMessage("INFO", "Application tracking RESUMED via remote command.");
                     break;
-                case "os_restart": 
+                case "os_restart":
                     LogMessage("WARNING", "Windows is RESTARTING via remote command.");
-                    OnForceSync?.Invoke(); 
-                    System.Diagnostics.Process.Start("shutdown", "/r /t 5"); 
+                    OnForceSync?.Invoke();
+                    System.Diagnostics.Process.Start("shutdown", "/r /t 5");
                     break;
-                case "os_shutdown": 
+                case "os_shutdown":
                     LogMessage("WARNING", "Windows is SHUTTING DOWN via remote command.");
                     OnForceSync?.Invoke();
-                    System.Diagnostics.Process.Start("shutdown", "/s /t 5"); 
+                    System.Diagnostics.Process.Start("shutdown", "/s /t 5");
                     break;
             }
         }
+        public void UpdateSettings(AppSettings appSettings)
+        {
+            if (appSettings == null)
+                throw new ArgumentNullException(nameof(appSettings));
+
+            _appSettings = appSettings;
+
+            double intervalSeconds = _appSettings.CommandCheckIntervalSeconds;
+
+            if (intervalSeconds <= 0)
+                intervalSeconds = 30;
+
+            UpdateTimerInterval(intervalSeconds);
+        }
+
 
         public void Dispose()
         {

@@ -1,93 +1,225 @@
 using System;
 using System.Collections.Generic;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Confluent.Kafka;
-using Microsoft.Extensions.Configuration;
 
 namespace Ergonomy.Database
 {
-    public class KafkaConnect : IDisposable
+    /// <summary>
+    /// Kafka producer for Ergonomy telemetry.
+    ///
+    /// All infrastructure configuration is injected through the constructor.
+    /// This class has no dependency on IConfiguration, appsettings.json,
+    /// Registry, or Environment Variables directly.
+    /// </summary>
+    public sealed class KafkaConnect : IDisposable
     {
         private readonly IProducer<Null, string> _producer;
+
         private readonly string _userActivityTopic;
         private readonly string _systemMetricsTopic;
+        private readonly string _appLogsTopic;
 
-        public KafkaConnect(IConfiguration configuration)
+        private bool _disposed;
+
+        public KafkaConnect(
+            string bootstrapServers,
+            string? userActivityTopic = null,
+            string? systemMetricsTopic = null,
+            string? appLogsTopic = null)
         {
-            // خواندن دقیق پارامترها از فایل تنظیمات ثابت (Bootstrap)
-            var bootstrapServers = configuration["AppSettings:Kafka:BootstrapServers"];
-            
-            _userActivityTopic = configuration["AppSettings:Kafka:UserActivityTopic"] ?? "user_activity_topic";
-            
-            // اصلاح فالبک به تاپیک هدف ClickHouse شما یعنی advanced_system_metrics_topic
-            _systemMetricsTopic = configuration["AppSettings:Kafka:SystemMetricsTopic"] ?? "advanced_system_metrics_topic";
-
-            if (string.IsNullOrEmpty(bootstrapServers))
+            if (string.IsNullOrWhiteSpace(bootstrapServers))
             {
-                throw new ArgumentNullException(nameof(bootstrapServers), 
-                    "Kafka BootstrapServers is not configured properly in appsettings.json.");
+                throw new ArgumentException(
+                    "Kafka BootstrapServers is not configured. " +
+                    "Set ERGONOMY_KAFKA_BOOTSTRAP_SERVERS at Machine level.",
+                    nameof(bootstrapServers));
             }
+
+            _userActivityTopic = RequireTopicName(
+                userActivityTopic,
+                "ERGONOMY_KAFKA_USER_ACTIVITY_TOPIC");
+
+            _systemMetricsTopic = RequireTopicName(
+                systemMetricsTopic,
+                "ERGONOMY_KAFKA_SYSTEM_METRICS_TOPIC");
+
+            _appLogsTopic = RequireTopicName(
+                appLogsTopic,
+                "ERGONOMY_KAFKA_APP_LOGS_TOPIC");
 
             var config = new ProducerConfig
             {
-                BootstrapServers = bootstrapServers,
+                BootstrapServers = bootstrapServers.Trim(),
+
+                // Broker acknowledgement from all in-sync replicas.
                 Acks = Acks.All,
-                MessageSendMaxRetries = 3,
-                // بهینه‌سازی توان عملیاتی برای سناریوی مانیتورینگ
-                LingerMs = 50, 
-                CompressionType = CompressionType.Gzip
+
+                // Prevents producer-level duplicates during retry/reconnection.
+                EnableIdempotence = true,
+
+                // Delivery timeout for one message.
+                MessageTimeoutMs = 30_000,
+
+                // Small batching window; suitable for telemetry workloads.
+                LingerMs = 50,
+
+                // Reduces network bandwidth for JSON payloads.
+                CompressionType = CompressionType.Gzip,
+
+                // Allows Kafka client diagnostics through Console/Error events if needed.
+                LogConnectionClose = false
             };
 
-            _producer = new ProducerBuilder<Null, string>(config).Build();
-            
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🔌 Kafka Producer initialized. " +
-                              $"Target Topic: {_systemMetricsTopic}");
+            _producer = new ProducerBuilder<Null, string>(config)
+                .SetErrorHandler((_, error) =>
+                {
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka client error: " +
+                        $"{error.Code} | {error.Reason}");
+                })
+                .Build();
+
+            Console.WriteLine(
+                $"[{DateTime.Now:HH:mm:ss}] 🔌 Kafka Producer initialized. " +
+                $"BootstrapServers: {bootstrapServers.Trim()} | " +
+                $"UserActivityTopic: {_userActivityTopic} | " +
+                $"SystemMetricsTopic: {_systemMetricsTopic} | " +
+                $"AppLogsTopic: {_appLogsTopic}");
         }
 
-        public async Task SendUserActivityAsync(object activityData)
+        public Task SendUserActivityAsync(
+            object activityData,
+            CancellationToken cancellationToken = default)
         {
-            string jsonMessage = JsonSerializer.Serialize(activityData);
-            await SendMessageAsync(_userActivityTopic, jsonMessage);
+            ArgumentNullException.ThrowIfNull(activityData);
+
+            return SendMessageAsync(
+                _userActivityTopic,
+                JsonSerializer.Serialize(activityData),
+                cancellationToken);
         }
 
-        public async Task SendSystemMetricsAsync(Dictionary<string, object> metricsData)
+        public Task SendSystemMetricsAsync(
+            Dictionary<string, object> metricsData,
+            CancellationToken cancellationToken = default)
         {
-            string jsonMessage = JsonSerializer.Serialize(metricsData);
-            await SendMessageAsync(_systemMetricsTopic, jsonMessage);
+            ArgumentNullException.ThrowIfNull(metricsData);
+
+            return SendMessageAsync(
+                _systemMetricsTopic,
+                JsonSerializer.Serialize(metricsData),
+                cancellationToken);
         }
 
-        public async Task SendAppLogAsync(object logData)
+        public Task SendAppLogAsync(
+            object logData,
+            CancellationToken cancellationToken = default)
         {
-            string jsonMessage = JsonSerializer.Serialize(logData);
-            await SendMessageAsync("app_logs_topic", jsonMessage);
+            ArgumentNullException.ThrowIfNull(logData);
+
+            return SendMessageAsync(
+                _appLogsTopic,
+                JsonSerializer.Serialize(logData),
+                cancellationToken);
         }
 
-        private async Task SendMessageAsync(string topic, string message)
+        /// <summary>
+        /// On failure, this method logs and rethrows the exception.
+        /// The caller, especially SyncEngine, must not mark an SQLite outbox
+        /// item as delivered unless this method completes successfully.
+        /// </summary>
+        private async Task SendMessageAsync(
+            string topic,
+            string message,
+            CancellationToken cancellationToken)
         {
+            ThrowIfDisposed();
+
             try
             {
-                var deliveryResult = await _producer.ProduceAsync(topic, new Message<Null, string> { Value = message });
-                // لاگ در سطح Debug یا Console برای تایید ارسال صحیح
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🚀 Sent to: {deliveryResult.TopicPartitionOffset}");
+                DeliveryResult<Null, string> result = await _producer.ProduceAsync(
+                    topic,
+                    new Message<Null, string>
+                    {
+                        Value = message
+                    },
+                    cancellationToken);
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] 🚀 Kafka message sent: " +
+                    $"{result.TopicPartitionOffset}");
             }
-            catch (ProduceException<Null, string> e)
+            catch (ProduceException<Null, string> ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ Kafka delivery failed: {e.Error.Reason}");
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka delivery failed. " +
+                    $"Topic: {topic} | Code: {ex.Error.Code} | " +
+                    $"Reason: {ex.Error.Reason}");
+
+                throw;
             }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka send was cancelled. " +
+                    $"Topic: {topic}");
+
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ❌ Unexpected Kafka send error. " +
+                    $"Topic: {topic} | Message: {ex.Message}");
+
+                throw;
+            }
+        }
+
+        private static string RequireTopicName(
+            string? topicName,
+            string environmentVariableName)
+        {
+            if (string.IsNullOrWhiteSpace(topicName))
+            {
+                throw new ArgumentException(
+                    $"Kafka topic is not configured. " +
+                    $"Set {environmentVariableName} at Machine level.",
+                    nameof(topicName));
+            }
+
+            return topicName.Trim();
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(KafkaConnect));
         }
 
         public void Dispose()
         {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+
             try
             {
-                // تضمین ارسال کل بافر موجود در حافظه کلاینت به کارگزار کافکا قبل از خروج
-                _producer?.Flush(TimeSpan.FromSeconds(10));
-                _producer?.Dispose();
+                _producer.Flush(TimeSpan.FromSeconds(10));
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Error disposing Kafka producer: {ex.Message}");
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka producer flush failed: " +
+                    $"{ex.Message}");
+            }
+            finally
+            {
+                _producer.Dispose();
             }
         }
     }

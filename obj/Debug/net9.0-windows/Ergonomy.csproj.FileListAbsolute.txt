@@ -145,4 +145,3 @@ E:\Sisco_Projects\HSE\Ergonomy\Demo\Ergonomy_V2\obj\Debug\net9.0-windows\refint\
 E:\Sisco_Projects\HSE\Ergonomy\Demo\Ergonomy_V2\obj\Debug\net9.0-windows\Ergonomy.pdb
 E:\Sisco_Projects\HSE\Ergonomy\Demo\Ergonomy_V2\obj\Debug\net9.0-windows\Ergonomy.genruntimeconfig.cache
 E:\Sisco_Projects\HSE\Ergonomy\Demo\Ergonomy_V2\obj\Debug\net9.0-windows\ref\Ergonomy.dll
-E:\Sisco_Projects\HSE\Ergonomy\Demo\Ergonomy_V2\bin\Debug\net9.0-windows\appsettings.json

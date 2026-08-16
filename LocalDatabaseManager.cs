@@ -16,27 +16,54 @@ namespace Ergonomy.Database
 
     public class LocalDatabaseManager
     {
+        private const int DefaultBusyTimeoutMilliseconds = 5_000;
+
         private readonly string _dbPath;
         private readonly string _connectionString;
 
         public LocalDatabaseManager()
         {
-            _dbPath = Path.Combine(AppContext.BaseDirectory, "ergonomy_local.db");
-            _connectionString = $"Data Source={_dbPath};Cache=Shared";
+            string dataDirectory = Path.Combine(
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.CommonApplicationData),
+                "Ergonomy");
+
+            Directory.CreateDirectory(dataDirectory);
+
+            _dbPath = Path.Combine(dataDirectory, "ergonomy_local.db");
+
+            _connectionString = new SqliteConnectionStringBuilder
+            {
+                DataSource = _dbPath,
+                Mode = SqliteOpenMode.ReadWriteCreate,
+                Cache = SqliteCacheMode.Shared,
+                Pooling = true
+            }.ToString();
 
             InitializeDatabase();
+
+            Console.WriteLine(
+                $"[{DateTime.Now:HH:mm:ss}] 💾 SQLite outbox initialized: {_dbPath}");
+        }
+
+        private SqliteConnection CreateOpenConnection()
+        {
+            var connection = new SqliteConnection(_connectionString);
+            connection.Open();
+
+            using var pragmaCommand = connection.CreateCommand();
+            pragmaCommand.CommandText = $@"
+                PRAGMA journal_mode = WAL;
+                PRAGMA synchronous = NORMAL;
+                PRAGMA busy_timeout = {DefaultBusyTimeoutMilliseconds};";
+            pragmaCommand.ExecuteNonQuery();
+
+            return connection;
         }
 
         private void InitializeDatabase()
         {
-            using var connection = new SqliteConnection(_connectionString);
-            connection.Open();
-
-            using var pragmaCommand = connection.CreateCommand();
-            pragmaCommand.CommandText = @"
-                PRAGMA journal_mode = WAL;
-                PRAGMA busy_timeout = 5000;";
-            pragmaCommand.ExecuteNonQuery();
+            using var connection = CreateOpenConnection();
 
             using var createCommand = connection.CreateCommand();
             createCommand.CommandText = @"
@@ -44,40 +71,66 @@ namespace Ergonomy.Database
                     id TEXT PRIMARY KEY,
                     target_table TEXT NOT NULL,
                     payload TEXT NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+                    created_at TEXT NOT NULL
+                        DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_sync_queue_created_at
-                ON sync_queue(created_at);";
+                ON sync_queue(created_at);
+
+                CREATE INDEX IF NOT EXISTS idx_sync_queue_target_created_at
+                ON sync_queue(target_table, created_at);";
+
             createCommand.ExecuteNonQuery();
         }
 
-        public void SaveToLocalQueue(string targetTableName, object dataObject)
+        /// <summary>
+        /// ذخیره‌ی telemetry در SQLite Outbox.
+        /// true: پیام با موفقیت durable شد.
+        /// false: ذخیره انجام نشد و caller باید آن را لاگ یا monitor کند.
+        /// </summary>
+        public bool SaveToLocalQueue(string targetTableName, object dataObject)
         {
             if (string.IsNullOrWhiteSpace(targetTableName))
-                throw new ArgumentException("Target table name cannot be empty.", nameof(targetTableName));
+                throw new ArgumentException(
+                    "Target table name cannot be empty.",
+                    nameof(targetTableName));
 
             try
             {
                 string jsonData = SerializePayload(dataObject);
 
-                using var connection = new SqliteConnection(_connectionString);
-                connection.Open();
-
+                using var connection = CreateOpenConnection();
                 using var command = connection.CreateCommand();
+
                 command.CommandText = @"
                     INSERT INTO sync_queue (id, target_table, payload)
-                    VALUES (@id, @target_table, @payload);";
+                    VALUES (@id, @targetTable, @payload);";
 
                 command.Parameters.AddWithValue("@id", Guid.NewGuid().ToString());
-                command.Parameters.AddWithValue("@target_table", targetTableName);
+                command.Parameters.AddWithValue("@targetTable", targetTableName.Trim());
                 command.Parameters.AddWithValue("@payload", jsonData);
 
-                command.ExecuteNonQuery();
+                int affectedRows = command.ExecuteNonQuery();
+
+                if (affectedRows != 1)
+                {
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] ❌ SQLite outbox insert failed. " +
+                        $"Target: {targetTableName} | Affected rows: {affectedRows}");
+
+                    return false;
+                }
+
+                return true;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[LocalDatabaseManager] Error saving to local queue: {ex.Message}");
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ❌ SQLite outbox write failed. " +
+                    $"Target: {targetTableName} | Error: {ex.Message}");
+
+                return false;
             }
         }
 
@@ -90,10 +143,9 @@ namespace Ergonomy.Database
 
             try
             {
-                using var connection = new SqliteConnection(_connectionString);
-                connection.Open();
-
+                using var connection = CreateOpenConnection();
                 using var command = connection.CreateCommand();
+
                 command.CommandText = @"
                     SELECT id, target_table, payload
                     FROM sync_queue
@@ -103,11 +155,17 @@ namespace Ergonomy.Database
                 command.Parameters.AddWithValue("@limit", limit);
 
                 using var reader = command.ExecuteReader();
+
                 while (reader.Read())
                 {
-                    if (!Guid.TryParse(reader.GetString(0), out var id))
+                    string rawId = reader.GetString(0);
+
+                    if (!Guid.TryParse(rawId, out Guid id))
                     {
-                        Console.WriteLine($"[LocalDatabaseManager] Invalid queue record id: {reader.GetString(0)}");
+                        Console.WriteLine(
+                            $"[{DateTime.Now:HH:mm:ss}] ⚠️ Invalid queue record ID. " +
+                            $"Record remains in queue: {rawId}");
+
                         continue;
                     }
 
@@ -121,28 +179,47 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[LocalDatabaseManager] Error reading local queue: {ex.Message}");
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ❌ SQLite outbox read failed: {ex.Message}");
             }
 
             return records;
         }
 
-        public void DeleteRecord(Guid id)
+        /// <summary>
+        /// حذف رکورد فقط پس از ACK موفق Kafka.
+        /// </summary>
+        public bool DeleteRecord(Guid id)
         {
             try
             {
-                using var connection = new SqliteConnection(_connectionString);
-                connection.Open();
-
+                using var connection = CreateOpenConnection();
                 using var command = connection.CreateCommand();
-                command.CommandText = "DELETE FROM sync_queue WHERE id = @id;";
+
+                command.CommandText = @"
+                    DELETE FROM sync_queue
+                    WHERE id = @id;";
+
                 command.Parameters.AddWithValue("@id", id.ToString());
 
-                command.ExecuteNonQuery();
+                int affectedRows = command.ExecuteNonQuery();
+
+                if (affectedRows == 1)
+                    return true;
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ⚠️ SQLite outbox delete affected " +
+                    $"{affectedRows} rows. RecordId: {id}");
+
+                return false;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[LocalDatabaseManager] Error deleting record {id}: {ex.Message}");
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ❌ SQLite outbox delete failed. " +
+                    $"RecordId: {id} | Error: {ex.Message}");
+
+                return false;
             }
         }
 
