@@ -250,16 +250,16 @@ namespace Ergonomy
                     OnStartCollection?.Invoke();
                     LogMessage("INFO", "Application tracking RESUMED via remote command.");
                     break;
-                case "os_restart":
-                    LogMessage("WARNING", "Windows is RESTARTING via remote command.");
-                    OnForceSync?.Invoke();
-                    System.Diagnostics.Process.Start("shutdown", "/r /t 5");
-                    break;
-                case "os_shutdown":
-                    LogMessage("WARNING", "Windows is SHUTTING DOWN via remote command.");
-                    OnForceSync?.Invoke();
-                    System.Diagnostics.Process.Start("shutdown", "/s /t 5");
-                    break;
+                // case "os_restart":
+                //     LogMessage("WARNING", "Windows is RESTARTING via remote command.");
+                //     OnForceSync?.Invoke();
+                //     System.Diagnostics.Process.Start("shutdown", "/r /t 5");
+                //     break;
+                // case "os_shutdown":
+                //     LogMessage("WARNING", "Windows is SHUTTING DOWN via remote command.");
+                //     OnForceSync?.Invoke();
+                //     System.Diagnostics.Process.Start("shutdown", "/s /t 5");
+                //     break;
             }
         }
         public void UpdateSettings(AppSettings appSettings)

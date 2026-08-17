@@ -1,22 +1,27 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Globalization;
-
 
 namespace Ergonomy.Database
 {
     public sealed class SyncEngine : IDisposable
     {
         private const int DefaultBatchSize = 50;
+        private static readonly TimeSpan MaxBackoff = TimeSpan.FromMinutes(30);
 
         private readonly LocalDatabaseManager _localDb;
         private readonly KafkaConnect _kafkaConnect;
         private readonly System.Timers.Timer _syncTimer;
         private readonly SemaphoreSlim _syncGate = new(1, 1);
+        private readonly double _baseIntervalMs;
+
+        // backoff نمایی هنگام قطع Kafka
+        private int _consecutiveKafkaFailures;
+        private DateTime _backoffUntilUtc = DateTime.MinValue;
 
         private bool _disposed;
 
@@ -25,15 +30,14 @@ namespace Ergonomy.Database
             LocalDatabaseManager localDb,
             double syncIntervalMinutes = 1)
         {
-            _localDb = localDb
-                ?? throw new ArgumentNullException(nameof(localDb));
-
-            _kafkaConnect = kafkaConnect
-                ?? throw new ArgumentNullException(nameof(kafkaConnect));
+            _localDb = localDb ?? throw new ArgumentNullException(nameof(localDb));
+            _kafkaConnect = kafkaConnect ?? throw new ArgumentNullException(nameof(kafkaConnect));
 
             double intervalMs = syncIntervalMinutes > 0
                 ? syncIntervalMinutes * 60 * 1000
                 : 60_000;
+
+            _baseIntervalMs = intervalMs;
 
             _syncTimer = new System.Timers.Timer(intervalMs)
             {
@@ -53,7 +57,6 @@ namespace Ergonomy.Database
 
             _syncTimer.Start();
 
-            // تلاش اولیه برای تخلیه‌ی queue بدون انتظار برای اولین interval.
             _ = ProcessQueueAsync();
         }
 
@@ -72,6 +75,7 @@ namespace Ergonomy.Database
             Console.WriteLine(
                 $"[{DateTime.Now:HH:mm:ss}] ⚠️ FORCE SYNC triggered.");
 
+            // ForceSync عمداً backoff را دور می‌زند.
             await ProcessQueueAsync();
         }
 
@@ -101,11 +105,19 @@ namespace Ergonomy.Database
         {
             try
             {
+                // backoff فعال است؟ این tick را رد کن.
+                if (DateTime.UtcNow < _backoffUntilUtc)
+                {
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] ⏸️ Sync skipped: backoff active until " +
+                        $"{_backoffUntilUtc:HH:mm:ss}.");
+                    return;
+                }
+
                 await ProcessQueueAsync();
             }
             catch (Exception ex)
             {
-                // محافظ نهایی برای event handler.
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ❌ Sync timer error: {ex.Message}");
             }
@@ -116,21 +128,32 @@ namespace Ergonomy.Database
             if (_disposed)
                 return;
 
-            // جلوگیری از اجرای هم‌زمان Timer، Start و ForceSync.
             if (!await _syncGate.WaitAsync(0))
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ℹ️ Sync skipped: a previous sync is still running.");
-
                 return;
             }
 
             try
             {
+                // اگر صف بحرانی است، اول retention اجرا شود تا فشار کم شود.
+                if (_localDb.GetCapacityStatus() == CapacityStatus.Critical)
+                {
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] 🧹 Capacity critical; running retention before sync.");
+                    _localDb.RunRetention();
+                }
+
                 var records = _localDb.GetPendingRecords(DefaultBatchSize);
 
                 if (records == null || records.Count == 0)
+                {
+                    // بدون رکورد یعنی صف خالی است؛ backoff را ریست کن.
+                    _consecutiveKafkaFailures = 0;
+                    _backoffUntilUtc = DateTime.MinValue;
                     return;
+                }
 
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] 📤 Syncing {records.Count} outbox record(s).");
@@ -141,6 +164,8 @@ namespace Ergonomy.Database
                     PropertyNameCaseInsensitive = true
                 };
 
+                bool anyTransientFailure = false;
+
                 foreach (var record in records)
                 {
                     if (_disposed)
@@ -150,7 +175,6 @@ namespace Ergonomy.Database
                     {
                         await SendRecordToKafkaAsync(record, jsonOptions);
 
-                        // فقط بعد از Kafka ACK موفق، رکورد از Outbox حذف می‌شود.
                         _localDb.DeleteRecord(record.Id);
 
                         Console.WriteLine(
@@ -160,28 +184,25 @@ namespace Ergonomy.Database
                     }
                     catch (JsonException ex)
                     {
-                        HandlePoisonRecord(
-                            record.Id,
-                            record.TargetTable,
-                            $"Invalid JSON payload: {ex.Message}");
+                        HandlePoisonRecord(record.Id, record.TargetTable, $"Invalid JSON payload: {ex.Message}");
                     }
                     catch (NotSupportedException ex)
                     {
-                        HandlePoisonRecord(
-                            record.Id,
-                            record.TargetTable,
-                            ex.Message);
+                        HandlePoisonRecord(record.Id, record.TargetTable, ex.Message);
                     }
                     catch (Exception ex)
                     {
-                        // Kafka و خطاهای موقتی اینجا می‌آیند.
-                        // رکورد حذف نمی‌شود تا در Sync بعدی retry شود.
+                        // خطای موقتی Kafka — رکورد می‌ماند و backoff فعال می‌شود.
+                        anyTransientFailure = true;
+
                         Console.WriteLine(
                             $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka delivery failed; " +
                             $"record remains pending. RecordId: {record.Id} | " +
                             $"Target: {record.TargetTable} | Error: {ex.Message}");
                     }
                 }
+
+                ApplyBackoff(anyTransientFailure);
             }
             catch (Exception ex)
             {
@@ -194,6 +215,28 @@ namespace Ergonomy.Database
             }
         }
 
+        private void ApplyBackoff(bool anyTransientFailure)
+        {
+            if (anyTransientFailure)
+            {
+                _consecutiveKafkaFailures++;
+
+                double backoffMs = _baseIntervalMs * Math.Pow(2, _consecutiveKafkaFailures);
+                backoffMs = Math.Min(backoffMs, MaxBackoff.TotalMilliseconds);
+
+                _backoffUntilUtc = DateTime.UtcNow.AddMilliseconds(backoffMs);
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ⏳ Kafka backoff: next attempt in " +
+                    $"{backoffMs / 1000:0}s (failure #{_consecutiveKafkaFailures}).");
+            }
+            else
+            {
+                _consecutiveKafkaFailures = 0;
+                _backoffUntilUtc = DateTime.MinValue;
+            }
+        }
+
         private async Task SendRecordToKafkaAsync(
             SyncRecord record,
             JsonSerializerOptions jsonOptions)
@@ -203,76 +246,56 @@ namespace Ergonomy.Database
                 case QueueTargets.AdvancedSystemMetrics:
                 {
                     var metrics = JsonSerializer.Deserialize<Dictionary<string, object>>(
-                        record.Payload,
-                        jsonOptions);
+                        record.Payload, jsonOptions);
 
                     if (metrics == null)
-                    {
-                        throw new JsonException(
-                            "Advanced system metrics payload was null after deserialization.");
-                    }
+                        throw new JsonException("Advanced system metrics payload was null.");
 
-                    await _kafkaConnect.SendSystemMetricsAsync(metrics);
+                    await _kafkaConnect.SendSystemMetricsAsync(record.MessageId, metrics);
                     break;
                 }
 
                 case QueueTargets.UserActivity:
                 {
                     var activity = JsonSerializer.Deserialize<Dictionary<string, object>>(
-                        record.Payload,
-                        jsonOptions);
+                        record.Payload, jsonOptions);
 
                     if (activity == null)
-                    {
-                        throw new JsonException(
-                            "User activity payload was null after deserialization.");
-                    }
+                        throw new JsonException("User activity payload was null.");
 
-                    await _kafkaConnect.SendUserActivityAsync(activity);
+                    await _kafkaConnect.SendUserActivityAsync(record.MessageId, activity);
                     break;
                 }
 
                 case QueueTargets.AppLogs:
                 {
                     var logData = JsonSerializer.Deserialize<Dictionary<string, object>>(
-                        record.Payload,
-                        jsonOptions);
+                        record.Payload, jsonOptions);
 
                     if (logData == null)
-                    {
-                        throw new JsonException(
-                            "App log payload was null after deserialization.");
-                    }
+                        throw new JsonException("App log payload was null.");
 
-                    await _kafkaConnect.SendAppLogAsync(logData);
+                    await _kafkaConnect.SendAppLogAsync(record.MessageId, logData);
                     break;
                 }
 
                 default:
-                    throw new NotSupportedException(
-                        $"Unknown TargetTable '{record.TargetTable}'.");
+                    throw new NotSupportedException($"Unknown TargetTable '{record.TargetTable}'.");
             }
         }
 
-
-        private void HandlePoisonRecord(
-            Guid recordId,
-            string targetTable,
-            string reason)
+        private void HandlePoisonRecord(Guid recordId, string targetTable, string reason)
         {
             Console.WriteLine(
                 $"[{DateTime.Now:HH:mm:ss}] ❌ Poison outbox record detected. " +
                 $"RecordId: {recordId} | Target: {targetTable} | Reason: {reason}");
 
-            // فعلاً برای جلوگیری از retry بی‌نهایت حذف می‌شود.
-            // نسخه‌ی production بهتر: انتقال به Dead Letter Queue.
             _localDb.DeleteRecord(recordId);
 
             Console.WriteLine(
                 $"[{DateTime.Now:HH:mm:ss}] 🗑️ Poison outbox record removed. " +
                 $"RecordId: {recordId}");
         }
-
 
         private void ThrowIfDisposed()
         {

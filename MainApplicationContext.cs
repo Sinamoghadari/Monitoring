@@ -13,6 +13,7 @@ using System.Threading.Tasks;
 using System.Timers;
 using System.Windows.Forms;
 
+
 namespace Ergonomy
 {
     public class MainApplicationContext : ApplicationContext
@@ -21,7 +22,7 @@ namespace Ergonomy
         private readonly SemaphoreSlim _settingsRefreshLock = new(1, 1);
 
         private CommandManager? _commandManager;
-        private AppSettings _appSettings = new();
+        private AppSettings _appSettings = null!;
         private LocalDatabaseManager _localDb;
         private SyncEngine? _syncEngine;
         private NotifyIcon? _notifyIcon;
@@ -59,14 +60,14 @@ namespace Ergonomy
             };
 
             LoadAppSettings();
-
+            
             _windowsSid = GetWindowsSID();
             try { _windowsUsername = WindowsIdentity.GetCurrent().Name; }
             catch { _windowsUsername = Environment.UserName; }
 
             _sessionGuid = Guid.NewGuid().ToString();
 
-            _localDb = new LocalDatabaseManager();
+            _localDb = new LocalDatabaseManager(_appSettings.Outbox);
             _kafkaConnect = new KafkaConnect(
             _appSettings.Kafka.BootstrapServers,
             _appSettings.Kafka.UserActivityTopic,
@@ -420,10 +421,13 @@ namespace Ergonomy
             }
         }
 
-        private async Task SendHealthLogAsync(string logLevel, string message, string category)
+        private Task SendHealthLogAsync(
+            string logLevel,
+            string message,
+            string category)
         {
-            if (_kafkaConnect == null)
-                return;
+            if (_localDb == null)
+                return Task.CompletedTask;
 
             DateTime currentTime = DateTime.Now;
             PersianCalendar pc = new PersianCalendar();
@@ -431,23 +435,56 @@ namespace Ergonomy
             var logObj = new
             {
                 CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
+                CollectedAt_Shamsi =
+                    $"{pc.GetYear(currentTime):0000}/" +
+                    $"{pc.GetMonth(currentTime):00}/" +
+                    $"{pc.GetDayOfMonth(currentTime):00} " +
+                    $"{currentTime:HH:mm:ss}",
+
                 LogLevel = logLevel,
                 Message = message,
                 WindowsUsername = _windowsUsername,
+                WindowsSid = _windowsSid,
                 MachineName = Environment.MachineName,
                 Category = category
             };
 
             try
             {
-                await _kafkaConnect.SendAppLogAsync(logObj);
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{logLevel}] [{category}] {message}");
+                var result = _localDb.SaveToLocalQueue(
+                    QueueTargets.AppLogs,
+                    logObj);
+
+                switch (result)
+                {
+                    case OutboxSaveResult.Saved:
+                        Console.WriteLine(
+                            $"[{DateTime.Now:HH:mm:ss}] " +
+                            $"[{logLevel}] [{category}] {message}");
+                        break;
+
+                    case OutboxSaveResult.DroppedLowPriority:
+                        Console.WriteLine(
+                            $"[{DateTime.Now:HH:mm:ss}] ⚠️ [OUTBOX] " +
+                            $"Health log dropped due to critical capacity: {category}");
+                        break;
+
+                    case OutboxSaveResult.Failed:
+                    default:
+                        Console.WriteLine(
+                            $"[{DateTime.Now:HH:mm:ss}] ❌ [OUTBOX ERROR] " +
+                            $"Failed to enqueue {category} health log.");
+                        break;
+                }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ [KAFKA SEND ERROR] Failed to send {category} log: {ex.Message}");
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ❌ [OUTBOX ERROR] " +
+                    $"Failed to queue {category} log: {ex.Message}");
             }
+
+            return Task.CompletedTask;
         }
 
         private void EvaluateSqlitePermission()
@@ -690,22 +727,38 @@ namespace Ergonomy
                     var startupLog = new
                     {
                         CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                        CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
+                        CollectedAt_Shamsi =
+                            $"{pc.GetYear(currentTime):0000}/" +
+                            $"{pc.GetMonth(currentTime):00}/" +
+                            $"{pc.GetDayOfMonth(currentTime):00} " +
+                            $"{currentTime:HH:mm:ss}",
+
                         LogLevel = "INFO",
-                        Message = "Application Started and Successfully Connected to Kafka.",
+                        Message = "Application Started and Kafka delivery probe succeeded.",
                         WindowsUsername = _windowsUsername,
-                        MachineName = Environment.MachineName
+                        WindowsSid = _windowsSid,
+                        MachineName = Environment.MachineName,
+                        Category = "KafkaStartupProbe"
                     };
 
-                    await _kafkaConnect.SendAppLogAsync(startupLog);
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🚀 [KAFKA OK] Startup log sent.");
+                    await _kafkaConnect.SendAppLogAsync(
+                        Guid.NewGuid().ToString("N"),
+                        startupLog);
+
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] " +
+                        $"🚀 [KAFKA OK] Startup delivery probe succeeded.");
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ [KAFKA ERROR] {ex.Message}");
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] " +
+                        $"❌ [KAFKA ERROR] Startup delivery probe failed: " +
+                        $"{ex.Message}");
                 }
             });
         }
+
 
         private string GetWindowsSID()
         {

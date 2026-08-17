@@ -1,7 +1,8 @@
 CREATE MATERIALIZED VIEW IF NOT EXISTS MV_SystemMetrics_To_Target TO SystemMetrics AS
 SELECT
-    toDateTime(CollectedAt) AS CollectedAt, 
-    CollectedAt_Shamsi, 
+    _key AS MessageId,          -- ← فقط همین خط اضافه/تغییر می‌کند
+    toDateTime(CollectedAt) AS CollectedAt,
+    CollectedAt_Shamsi,
     WindowsSid,
     WindowsUsername,
     WindowsUsername_RunAdmin,
@@ -15,7 +16,7 @@ SELECT
     ActiveProcesses,
     ActiveThreads,
     OpenHandles,
-    parseDateTime64BestEffortOrZero(BootTime, 7) AS BootTime, 
+    parseDateTime64BestEffortOrZero(BootTime, 7) AS BootTime,
     FailedLoginAttempts,
     AntivirusStatus,
     FirewallStatus,

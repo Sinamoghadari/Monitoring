@@ -1,7 +1,9 @@
+using System;
+using System.Collections.Generic;
+
 namespace Ergonomy.Configuration
 {
-
-        public class ApiSettings
+    public class ApiSettings
     {
         public string Settings { get; set; } = "";
         public string LoadImages { get; set; } = "";
@@ -11,6 +13,7 @@ namespace Ergonomy.Configuration
     public class AppSettings
     {
         public bool AllowErgonomyCollection { get; set; } = true;
+
         // --- تنظیمات آلارم و لاگیک برنامه ---
         public int NotificationIntervalSeconds { get; set; }
         public int ActivityThresholdSeconds { get; set; }
@@ -21,44 +24,42 @@ namespace Ergonomy.Configuration
         public int LoggingIntervalHours { get; set; } = 1;
         public double AdvancedMetricsIntervalMinutes { get; set; }
         public int TopProcessesCount { get; set; }
-        public int SettingsCheckIntervalSeconds {get; set;}
-        public double CommandCheckIntervalSeconds {get; set;}
+        public int SettingsCheckIntervalSeconds { get; set; }
+        public double CommandCheckIntervalSeconds { get; set; }
         public double SyncEngineIntervalMinutes { get; set; }
         public double PermissionPostgresRetryIntervalHours { get; set; } = 1;
-        // public double HeartbeatIntervalMinutes { get; set; }
         public string NetworkTraceTargetIP { get; set; } = "";
         public List<string> EnabledMetrics { get; set; } = new List<string>();
         public ApiSettings API { get; set; }
-        // --- متغیرهای جدید برای کنترل دسترسی (به‌روز شده برای کافکا) ---
+
+        // --- متغیرهای کنترل دسترسی ---
         public bool AllowSqliteWrite { get; set; } = true;
-        public bool AllowKafkaWrite { get; set; } = true; // جایگزین Postgres
+        public bool AllowKafkaWrite { get; set; } = true;
         public double PermissionSqliteRetryIntervalHours { get; set; } = 1;
-        public double ConnectionFailureSleepMinutes { get; set; } = 5 ;
-        public double PermissionKafkaRetryIntervalHours { get; set; } = 1; // جایگزین Postgres
+        public double ConnectionFailureSleepMinutes { get; set; } = 5;
+        public double PermissionKafkaRetryIntervalHours { get; set; } = 1;
 
         // --- زمان‌بندی دستورات ---
-        public string? ScheduledRestartTime { get; set; } 
+        public string? ScheduledRestartTime { get; set; }
         public string? ScheduledShutdownTime { get; set; }
 
         // --- تنظیمات زیرساخت‌ها ---
-        public KafkaSettings? Kafka { get; set; } // اضافه شدن تنظیمات کافکا
+        public KafkaSettings? Kafka { get; set; }
         public DatabaseSettings? Database { get; set; }
         public ImageSettings? Images { get; set; }
+
+        // --- تنظیمات Outbox (SQLite) ---
+        public OutboxSettings Outbox { get; set; } = new();
     }
 
-    // کلاس تنظیمات کافکا
     public class KafkaSettings
     {
         public string BootstrapServers { get; set; } = "localhost:9092";
-
         public string UserActivityTopic { get; set; } = "user_activity";
-
         public string SystemMetricsTopic { get; set; } = "system_metrics";
-
         public string AppLogsTopic { get; set; } = "app_logs";
     }
 
-    // کلاس تنظیمات دیتابیس (Postgres)
     public class DatabaseSettings
     {
         public string Host { get; set; } = "localhost";
@@ -68,7 +69,6 @@ namespace Ergonomy.Configuration
         public string Password { get; set; } = "";
     }
 
-    // کلاس تنظیمات مسیر تصاویر
     public class ImageSettings
     {
         public string PrimaryAlarmImagePath { get; set; } = "";

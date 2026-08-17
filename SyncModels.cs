@@ -3,13 +3,34 @@ using System;
 namespace Ergonomy.Database
 {
     // کلاس برای خواندن رکوردها از SQLite
-    public class SyncRecord
+    public sealed class SyncRecord
     {
-        public Guid Id { get; set; }
-        public string TargetTable { get; set; }
-        public string Payload { get; set; }
-        public DateTime CreatedAt { get; set; }
+        /// <summary>
+        /// کلید داخلی SQLite. برای DeleteRecord بعد از ACK استفاده می‌شود.
+        /// </summary>
+        public Guid Id { get; init; }
+
+        /// <summary>
+        /// شناسه‌ی پایدار پیام؛ همان Kafka message key.
+        /// </summary>
+        public string MessageId { get; init; } = string.Empty;
+
+        /// <summary>
+        /// نام جدول مقصد (advanced_system_metrics / user_activity / app_logs).
+        /// </summary>
+        public string TargetTable { get; init; } = string.Empty;
+
+        /// <summary>
+        /// بدنه‌ی JSON خام که به Kafka ارسال می‌شود.
+        /// </summary>
+        public string Payload { get; init; } = string.Empty;
+
+        /// <summary>
+        /// زمان ایجاد رکورد در SQLite (فرمت ISO-8601).
+        /// </summary>
+        public string CreatedAt { get; init; } = string.Empty;
     }
+
 
     // کلاس مدل برای داده‌های فعالیت کاربر - نام‌ها باید با MainApplicationContext هماهنگ باشند
     public class UserActivityPayload

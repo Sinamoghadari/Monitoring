@@ -184,6 +184,34 @@ namespace Ergonomy.Configuration
                         "app_logs")
                 },
 
+                Outbox = new OutboxSettings
+                {
+                    MaxRecords = GetInt(
+                        "ERGONOMY_OUTBOX_MAX_RECORDS",
+                        100_000),
+
+                    MaxDbMb = GetDouble(
+                        "ERGONOMY_OUTBOX_MAX_DB_MB",
+                        500),
+
+                    MaxRecordAgeDays = GetInt(
+                        "ERGONOMY_OUTBOX_MAX_RECORD_AGE_DAYS",
+                        14),
+
+                    WarningThreshold = GetDouble(
+                        "ERGONOMY_OUTBOX_WARNING_THRESHOLD",
+                        0.7),
+
+                    CriticalThreshold = GetDouble(
+                        "ERGONOMY_OUTBOX_CRITICAL_THRESHOLD",
+                        0.9),
+
+                    RetentionCheckIntervalSeconds = GetInt(
+                        "ERGONOMY_OUTBOX_RETENTION_CHECK_INTERVAL_SECONDS",
+                        300)
+                },
+
+
                 EnabledMetrics = ParseEnabledMetrics(
                     GetString("ERGONOMY_ENABLED_METRICS"))
             };

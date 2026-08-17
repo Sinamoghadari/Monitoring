@@ -7,16 +7,9 @@ using Confluent.Kafka;
 
 namespace Ergonomy.Database
 {
-    /// <summary>
-    /// Kafka producer for Ergonomy telemetry.
-    ///
-    /// All infrastructure configuration is injected through the constructor.
-    /// This class has no dependency on IConfiguration, appsettings.json,
-    /// Registry, or Environment Variables directly.
-    /// </summary>
     public sealed class KafkaConnect : IDisposable
     {
-        private readonly IProducer<Null, string> _producer;
+        private readonly IProducer<string, string> _producer;
 
         private readonly string _userActivityTopic;
         private readonly string _systemMetricsTopic;
@@ -39,41 +32,26 @@ namespace Ergonomy.Database
             }
 
             _userActivityTopic = RequireTopicName(
-                userActivityTopic,
-                "ERGONOMY_KAFKA_USER_ACTIVITY_TOPIC");
+                userActivityTopic, "ERGONOMY_KAFKA_USER_ACTIVITY_TOPIC");
 
             _systemMetricsTopic = RequireTopicName(
-                systemMetricsTopic,
-                "ERGONOMY_KAFKA_SYSTEM_METRICS_TOPIC");
+                systemMetricsTopic, "ERGONOMY_KAFKA_SYSTEM_METRICS_TOPIC");
 
             _appLogsTopic = RequireTopicName(
-                appLogsTopic,
-                "ERGONOMY_KAFKA_APP_LOGS_TOPIC");
+                appLogsTopic, "ERGONOMY_KAFKA_APP_LOGS_TOPIC");
 
             var config = new ProducerConfig
             {
                 BootstrapServers = bootstrapServers.Trim(),
-
-                // Broker acknowledgement from all in-sync replicas.
                 Acks = Acks.All,
-
-                // Prevents producer-level duplicates during retry/reconnection.
                 EnableIdempotence = true,
-
-                // Delivery timeout for one message.
                 MessageTimeoutMs = 30_000,
-
-                // Small batching window; suitable for telemetry workloads.
                 LingerMs = 50,
-
-                // Reduces network bandwidth for JSON payloads.
                 CompressionType = CompressionType.Gzip,
-
-                // Allows Kafka client diagnostics through Console/Error events if needed.
                 LogConnectionClose = false
             };
 
-            _producer = new ProducerBuilder<Null, string>(config)
+            _producer = new ProducerBuilder<string, string>(config)
                 .SetErrorHandler((_, error) =>
                 {
                     Console.WriteLine(
@@ -91,6 +69,7 @@ namespace Ergonomy.Database
         }
 
         public Task SendUserActivityAsync(
+            string messageId,
             object activityData,
             CancellationToken cancellationToken = default)
         {
@@ -98,11 +77,13 @@ namespace Ergonomy.Database
 
             return SendMessageAsync(
                 _userActivityTopic,
+                messageId,
                 JsonSerializer.Serialize(activityData),
                 cancellationToken);
         }
 
         public Task SendSystemMetricsAsync(
+            string messageId,
             Dictionary<string, object> metricsData,
             CancellationToken cancellationToken = default)
         {
@@ -110,11 +91,13 @@ namespace Ergonomy.Database
 
             return SendMessageAsync(
                 _systemMetricsTopic,
+                messageId,
                 JsonSerializer.Serialize(metricsData),
                 cancellationToken);
         }
 
         public Task SendAppLogAsync(
+            string messageId,
             object logData,
             CancellationToken cancellationToken = default)
         {
@@ -122,28 +105,33 @@ namespace Ergonomy.Database
 
             return SendMessageAsync(
                 _appLogsTopic,
+                messageId,
                 JsonSerializer.Serialize(logData),
                 cancellationToken);
         }
 
-        /// <summary>
-        /// On failure, this method logs and rethrows the exception.
-        /// The caller, especially SyncEngine, must not mark an SQLite outbox
-        /// item as delivered unless this method completes successfully.
-        /// </summary>
         private async Task SendMessageAsync(
             string topic,
+            string messageId,
             string message,
             CancellationToken cancellationToken)
         {
             ThrowIfDisposed();
 
+            if (string.IsNullOrWhiteSpace(messageId))
+            {
+                throw new ArgumentException(
+                    "MessageId is required as the Kafka message key.",
+                    nameof(messageId));
+            }
+
             try
             {
-                DeliveryResult<Null, string> result = await _producer.ProduceAsync(
+                DeliveryResult<string, string> result = await _producer.ProduceAsync(
                     topic,
-                    new Message<Null, string>
+                    new Message<string, string>
                     {
+                        Key = messageId,
                         Value = message
                     },
                     cancellationToken);
@@ -152,7 +140,7 @@ namespace Ergonomy.Database
                     $"[{DateTime.Now:HH:mm:ss}] 🚀 Kafka message sent: " +
                     $"{result.TopicPartitionOffset}");
             }
-            catch (ProduceException<Null, string> ex)
+            catch (ProduceException<string, string> ex)
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka delivery failed. " +
