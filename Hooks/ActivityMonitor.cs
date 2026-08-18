@@ -86,35 +86,57 @@ namespace Ergonomy.Hooks
             _globalInputHook.ResetCounters();
         }
 
+        private int _samplingInProgress;
+
         private void OnSampleTimerElapsed(object? sender, ElapsedEventArgs e)
         {
-            var snapshot = _globalInputHook.ConsumeSnapshot();
+            if (Interlocked.Exchange(ref _samplingInProgress, 1) != 0)
+                return;
 
-            lock (_stateLock)
+            try
             {
-                if (snapshot.HasKeyboardActivity)
+                lock (_stateLock)
                 {
-                    _totalKeyboardActiveTime = _totalKeyboardActiveTime.Add(_sampleWindow);
-                    _totalKeyboardEvents += snapshot.KeyboardEvents;
+                    if (!_isRunning)
+                        return;
                 }
 
-                if (snapshot.HasMouseActivity)
+                var snapshot = _globalInputHook.ConsumeSnapshot();
+
+                lock (_stateLock)
                 {
-                    _totalMouseActiveTime = _totalMouseActiveTime.Add(_sampleWindow);
+                    if (snapshot.HasKeyboardActivity)
+                    {
+                        _totalKeyboardActiveTime = _totalKeyboardActiveTime.Add(_sampleWindow);
+                        _totalKeyboardEvents += snapshot.KeyboardEvents;
+                    }
+
+                    if (snapshot.HasMouseActivity)
+                    {
+                        _totalMouseActiveTime = _totalMouseActiveTime.Add(_sampleWindow);
+                    }
+
+                    _totalMouseMoveEvents += snapshot.MouseMoveEvents;
+                    _totalMouseClickEvents += snapshot.MouseClickEvents;
+                    _totalMouseWheelEvents += snapshot.MouseWheelEvents;
+                    _totalMouseMovementPixels += snapshot.MouseMovementPixels;
+
+                    // این فرمول ساده است ولی مفید:
+                    // حرکت موس = وزن پایه
+                    // کلیک = وزن بیشتر
+                    // اسکرول = وزن متوسط
+                    _totalMouseActivityScore += snapshot.MouseMovementPixels
+                                               + (snapshot.MouseClickEvents * 50)
+                                               + (snapshot.MouseWheelEvents * 25);
                 }
-
-                _totalMouseMoveEvents += snapshot.MouseMoveEvents;
-                _totalMouseClickEvents += snapshot.MouseClickEvents;
-                _totalMouseWheelEvents += snapshot.MouseWheelEvents;
-                _totalMouseMovementPixels += snapshot.MouseMovementPixels;
-
-                // این فرمول ساده است ولی مفید:
-                // حرکت موس = وزن پایه
-                // کلیک = وزن بیشتر
-                // اسکرول = وزن متوسط
-                _totalMouseActivityScore += snapshot.MouseMovementPixels
-                                           + (snapshot.MouseClickEvents * 50)
-                                           + (snapshot.MouseWheelEvents * 25);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ ActivityMonitor sample error: {ex.Message}");
+            }
+            finally
+            {
+                Volatile.Write(ref _samplingInProgress, 0);
             }
         }
 

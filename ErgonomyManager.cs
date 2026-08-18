@@ -44,44 +44,54 @@ namespace Ergonomy.Core
             _dataLogger = new DataLogger(_activityMonitor, () => _alarmManager.SessionCloseCounter, _appSettings);
         }
 
+        private readonly object _lifecycleLock = new object();
+
         public void Start()
         {
-            if (IsRunning) return;
-
-            try
+            lock (_lifecycleLock)
             {
-                _ = Task.Run(async () => await _alarmManager?.LoadImagesFromApiAsync()!);
-            }
-            catch
-            {
-            }
+                if (IsRunning) return;
 
-            _activityMonitor?.Start();
-            _dataLogger?.Start();
-            LogSessionState("Start");
+                try
+                {
+                    _ = Task.Run(async () => await _alarmManager?.LoadImagesFromApiAsync()!);
+                }
+                catch
+                {
+                }
 
-            if (_notificationTimer == null)
-            {
-                _notificationTimer = new System.Windows.Forms.Timer();
-                _notificationTimer.Interval = (_appSettings.NotificationIntervalSeconds > 0 ? _appSettings.NotificationIntervalSeconds : 5) * 1000;
-                _notificationTimer.Tick += OnNotificationTimerTick;
+                _activityMonitor?.Start();
+                _dataLogger?.Start();
+                LogSessionState("Start");
+
+                if (_notificationTimer == null)
+                {
+                    _notificationTimer = new System.Windows.Forms.Timer();
+                    _notificationTimer.Interval = (_appSettings.NotificationIntervalSeconds > 0 ? _appSettings.NotificationIntervalSeconds : 5) * 1000;
+                    _notificationTimer.Tick += OnNotificationTimerTick;
+                }
+
+                _notificationTimer.Start();
+                IsRunning = true;
             }
-
-            _notificationTimer.Start();
-            IsRunning = true;
         }
 
         public void Stop()
         {
-            if (!IsRunning) return;
+            lock (_lifecycleLock)
+            {
+                if (!IsRunning) return;
 
-            _notificationTimer?.Stop();
-            _dataLogger?.Stop();
-            _activityMonitor?.Stop();
-            _alarmManager?.StopAlarms();
+                _notificationTimer?.Stop();
+                _alarmManager?.StopAlarms();
 
-            LogSessionState("End");
-            IsRunning = false;
+                LogSessionState("End");
+
+                _dataLogger?.Stop();
+                _activityMonitor?.Stop();
+
+                IsRunning = false;
+            }
         }
 
         private void OnNotificationTimerTick(object? sender, EventArgs e)
