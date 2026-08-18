@@ -128,7 +128,7 @@ namespace Ergonomy.Database
                 Category = "PostgresHealth"
             };
 
-            var result = _localDb.SaveToLocalQueue(
+            var result = _localDb.SaveUserActivity(
                 QueueTargets.AppLogs,
                 pgLog);
 

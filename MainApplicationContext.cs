@@ -451,7 +451,7 @@ namespace Ergonomy
 
             try
             {
-                var result = _localDb.SaveToLocalQueue(
+                var result = _localDb.SaveUserActivity(
                     QueueTargets.AppLogs,
                     logObj);
 
@@ -699,7 +699,7 @@ namespace Ergonomy
                         _appSettings.NetworkTraceTargetIP);
 
                     var metrics = collector.Collect();
-                    _localDb.SaveToLocalQueue(QueueTargets.AdvancedSystemMetrics, metrics);
+                    _localDb.SaveUserActivity(QueueTargets.AdvancedSystemMetrics, metrics);
                 });
             }
             catch (Exception ex)
@@ -786,7 +786,7 @@ namespace Ergonomy
                     MachineName = Environment.MachineName
                 };
 
-                _localDb?.SaveToLocalQueue("app_logs", logEntry);
+                _localDb?.SaveUserActivity("app_logs", logEntry);
             }
             catch
             {

@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using Ergonomy.Database;
 
 namespace Ergonomy.Database
 {
@@ -257,7 +258,7 @@ namespace Ergonomy.Database
 
                 case QueueTargets.UserActivity:
                 {
-                    var activity = JsonSerializer.Deserialize<Dictionary<string, object>>(
+                    var activity = JsonSerializer.Deserialize<UserActivityPayload>(
                         record.Payload, jsonOptions);
 
                     if (activity == null)
@@ -283,6 +284,7 @@ namespace Ergonomy.Database
                     throw new NotSupportedException($"Unknown TargetTable '{record.TargetTable}'.");
             }
         }
+
 
         private void HandlePoisonRecord(Guid recordId, string targetTable, string reason)
         {

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Confluent.Kafka;
+using Ergonomy.Database;
 
 namespace Ergonomy.Database
 {
@@ -68,19 +69,22 @@ namespace Ergonomy.Database
                 $"AppLogsTopic: {_appLogsTopic}");
         }
 
-        public Task SendUserActivityAsync(
+        // در KafkaConnect.cs
+        public async Task SendUserActivityAsync(
             string messageId,
-            object activityData,
+            UserActivityPayload activityData, 
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(activityData);
 
-            return SendMessageAsync(
+            // اکنون Serialize دقیقاً بر اساس کلاس UserActivityPayload انجام می‌شود
+            await SendMessageAsync(
                 _userActivityTopic,
                 messageId,
                 JsonSerializer.Serialize(activityData),
                 cancellationToken);
         }
+
 
         public Task SendSystemMetricsAsync(
             string messageId,

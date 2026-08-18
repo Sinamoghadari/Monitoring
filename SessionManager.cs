@@ -64,7 +64,7 @@ namespace Ergonomy.Database
             };
 
             // ذخیره در صف محلی برای جدول user_activity
-            _localDb.SaveToLocalQueue("user_activity", data);
+            _localDb.SaveUserActivity("user_activity", data);
         }
     }
 }

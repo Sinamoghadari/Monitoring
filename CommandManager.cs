@@ -71,7 +71,7 @@ namespace Ergonomy
             };
 
             // ۳. ذخیره در صف محلی SQLite با استفاده از کلید ثابت و استاندارد لایه دیتابیس
-            _localDbManager.SaveToLocalQueue(QueueTargets.AppLogs, logData);
+            _localDbManager.SaveUserActivity(QueueTargets.AppLogs, logData);
         }
 
         public void Start() => _scheduleTimer.Start();

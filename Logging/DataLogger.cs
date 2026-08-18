@@ -74,7 +74,7 @@ namespace Ergonomy.Logging
                     package.Save();
                 }
 
-                _activityMonitor.ResetTotalTimers();
+                _activityMonitor.ResetTotals();
             }
             catch (Exception ex)
             {

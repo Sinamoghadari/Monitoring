@@ -7,6 +7,7 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using Microsoft.Data.Sqlite;
 using Ergonomy.Configuration;
+using Ergonomy.Database;
 
 namespace Ergonomy.Database
 {
@@ -320,7 +321,7 @@ namespace Ergonomy.Database
         // ─────────────────────────────────────────────
         //  ذخیره با gating اولویت
         // ─────────────────────────────────────────────
-        public OutboxSaveResult SaveToLocalQueue(
+        public OutboxSaveResult SaveUserActivity(
             string targetTableName,
             object dataObject)
         {
@@ -649,11 +650,14 @@ namespace Ergonomy.Database
 
             var jsonOptions = new JsonSerializerOptions
             {
-                NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals
+                NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+                PropertyNamingPolicy = null,
+                WriteIndented = false
             };
 
             return JsonSerializer.Serialize(dataObject, jsonOptions);
         }
+
 
         public void Dispose()
         {

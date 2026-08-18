@@ -1,10 +1,10 @@
 using System;
+using System.Globalization;
+using System.Windows.Forms;
 using Ergonomy.Configuration;
 using Ergonomy.Database;
 using Ergonomy.Hooks;
 using Ergonomy.Logging;
-using System.Windows.Forms;
-using System.Globalization;
 
 namespace Ergonomy.Core
 {
@@ -12,7 +12,7 @@ namespace Ergonomy.Core
     {
         private readonly AppSettings _appSettings;
         private readonly LocalDatabaseManager _localDb;
-        
+
         private GlobalInputHook? _globalInputHook;
         private ActivityMonitor? _activityMonitor;
         private DataLogger? _dataLogger;
@@ -25,8 +25,12 @@ namespace Ergonomy.Core
 
         public bool IsRunning { get; private set; } = false;
 
-        // حذف dbManager از سازنده
-        public ErgonomyManager(AppSettings appSettings, LocalDatabaseManager localDb, string sessionGuid, string windowsSid, string windowsUsername)
+        public ErgonomyManager(
+            AppSettings appSettings,
+            LocalDatabaseManager localDb,
+            string sessionGuid,
+            string windowsSid,
+            string windowsUsername)
         {
             _appSettings = appSettings;
             _localDb = localDb;
@@ -36,10 +40,7 @@ namespace Ergonomy.Core
 
             _globalInputHook = new GlobalInputHook();
             _activityMonitor = new ActivityMonitor(_globalInputHook);
-            
-            // ⚠️ نکته: باید dbManager را از کلاس AlarmManager هم حذف کنید.
-            _alarmManager = new AlarmManager(_appSettings); 
-            
+            _alarmManager = new AlarmManager(_appSettings);
             _dataLogger = new DataLogger(_activityMonitor, () => _alarmManager.SessionCloseCounter, _appSettings);
         }
 
@@ -49,10 +50,11 @@ namespace Ergonomy.Core
 
             try
             {
-                // ⚠️ LoadImagesFromDatabase باید در صورت نیاز به API تبدیل شود یا از فایل‌های محلی خوانده شود.
-                Task.Run(async () => await _alarmManager?.LoadImagesFromApiAsync()); 
+                _ = Task.Run(async () => await _alarmManager?.LoadImagesFromApiAsync()!);
             }
-            catch { /* error handling */ }
+            catch
+            {
+            }
 
             LogSessionState("Start");
             _activityMonitor?.Start();
@@ -64,9 +66,8 @@ namespace Ergonomy.Core
                 _notificationTimer.Interval = (_appSettings.NotificationIntervalSeconds > 0 ? _appSettings.NotificationIntervalSeconds : 5) * 1000;
                 _notificationTimer.Tick += OnNotificationTimerTick;
             }
-            
-            _notificationTimer.Start();
 
+            _notificationTimer.Start();
             IsRunning = true;
         }
 
@@ -78,9 +79,8 @@ namespace Ergonomy.Core
             _dataLogger?.Stop();
             _activityMonitor?.Stop();
             _alarmManager?.StopAlarms();
-            
-            LogSessionState("End");
 
+            LogSessionState("End");
             IsRunning = false;
         }
 
@@ -94,39 +94,49 @@ namespace Ergonomy.Core
             {
                 _alarmManager.ShowPrimaryAlarm();
                 LogSessionState("Update");
-                _activityMonitor.ResetTotalTimers();
+                _activityMonitor.ResetTotals();
             }
         }
 
         private void LogSessionState(string stateType)
         {
-            try
-            {
-                double keyboardSeconds = _activityMonitor?.TotalKeyboardActiveTime.TotalSeconds ?? 0;
-                double mouseSeconds = _activityMonitor?.TotalMouseActiveTime.TotalSeconds ?? 0;
-                DateTime currentTime = DateTime.Now;
-                
-                PersianCalendar pc = new PersianCalendar();
-                
-                var sessionData = new 
-                {
-                    SessionId = _sessionGuid,
-                    WindowsSid = _windowsSid,
-                    WindowsUsername = _windowsUsername,
-                    StateType = stateType,
-                    KeyboardActiveSeconds = keyboardSeconds,
-                    MouseActiveSeconds = mouseSeconds,
-                    TotalActiveSeconds = keyboardSeconds + mouseSeconds,
-                    SessionCloseCounter = _alarmManager?.SessionCloseCounter ?? 0,
-                    PrimaryAlarmCount = _alarmManager?.PrimaryAlarmCount ?? 0,
-                    SecondaryAlarmCount = _alarmManager?.SecondaryAlarmCount ?? 0,
-                    CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),                  
-                    CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}"
-                };
+            double keyboardSeconds = _activityMonitor?.TotalKeyboardActiveTime.TotalSeconds ?? 0;
+            double mouseSeconds = _activityMonitor?.TotalMouseActiveTime.TotalSeconds ?? 0;
 
-                _localDb.SaveToLocalQueue("user_activity", sessionData);
-            }
-            catch { }
+            var sessionData = new UserActivityPayload
+            {
+                SessionId = _sessionGuid.ToString(),
+                WindowsSid = _windowsSid,
+                WindowsUsername = _windowsUsername,
+                StateType = stateType,
+                KeyboardActiveSeconds = keyboardSeconds,
+                MouseActiveSeconds = mouseSeconds,
+                TotalActiveSeconds = keyboardSeconds + mouseSeconds,
+                SessionCloseCounter = _alarmManager?.SessionCloseCounter ?? 0,
+                PrimaryAlarmCount = _alarmManager?.PrimaryAlarmCount ?? 0,
+                SecondaryAlarmCount = _alarmManager?.SecondaryAlarmCount ?? 0,
+                Timestamp = DateTime.UtcNow,
+                CollectedAt = DateTime.UtcNow.ToString("O"),
+                CollectedAt_Shamsi = DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss")
+            };
+
+            _localDb.SaveUserActivity(QueueTargets.UserActivity, sessionData);
+        }
+
+
+        private static string ToShamsiDateTimeString(DateTime dateTime)
+        {
+            var pc = new PersianCalendar();
+
+            return string.Format(
+                CultureInfo.InvariantCulture,
+                "{0:0000}/{1:00}/{2:00} {3:00}:{4:00}:{5:00}",
+                pc.GetYear(dateTime),
+                pc.GetMonth(dateTime),
+                pc.GetDayOfMonth(dateTime),
+                pc.GetHour(dateTime),
+                pc.GetMinute(dateTime),
+                pc.GetSecond(dateTime));
         }
 
         public void Dispose()
