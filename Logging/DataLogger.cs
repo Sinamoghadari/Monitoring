@@ -21,7 +21,8 @@ namespace Ergonomy.Logging
             _activityMonitor = activityMonitor;
             _getTotalCloseCounter = getTotalCloseCounter;
 
-            _logTimer = new System.Timers.Timer(settings.LoggingIntervalHours * 60 * 60 * 1000);
+            double intervalHours = settings.LoggingIntervalHours > 0 ? settings.LoggingIntervalHours : 1;
+            _logTimer = new System.Timers.Timer(intervalHours * 60 * 60 * 1000);
             _logTimer.Elapsed += OnLogTimerElapsed;
         }
 
@@ -29,24 +30,42 @@ namespace Ergonomy.Logging
         {
             if (_isRunning) return;
             _logTimer.Start();
+            _isRunning = true;
         }
 
         public void Stop()
         {
             if (!_isRunning) return;
             _logTimer.Stop();
+            _isRunning = false;
         }
 
-        private void OnLogTimerElapsed(object sender, ElapsedEventArgs e)
+        private void OnLogTimerElapsed(object? sender, ElapsedEventArgs e)
         {
-            LogData();
+            Task.Run(() => LogData());
         }
 
         private void LogData()
         {
             try
             {
-                var tehranTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Iran Standard Time");
+                TimeZoneInfo tehranTimeZone;
+                try
+                {
+                    tehranTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Iran Standard Time");
+                }
+                catch
+                {
+                    try
+                    {
+                        tehranTimeZone = TimeZoneInfo.FindSystemTimeZoneById("Asia/Tehran");
+                    }
+                    catch
+                    {
+                        tehranTimeZone = TimeZoneInfo.CreateCustomTimeZone("Iran Standard Time", TimeSpan.FromHours(3.5), "Iran Standard Time", "Iran Standard Time");
+                    }
+                }
+
                 var tehranTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, tehranTimeZone);
                 var persianCalendar = new PersianCalendar();
 
@@ -73,8 +92,6 @@ namespace Ergonomy.Logging
 
                     package.Save();
                 }
-
-                _activityMonitor.ResetTotals();
             }
             catch (Exception ex)
             {

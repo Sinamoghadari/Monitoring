@@ -56,9 +56,9 @@ namespace Ergonomy.Core
             {
             }
 
-            LogSessionState("Start");
             _activityMonitor?.Start();
             _dataLogger?.Start();
+            LogSessionState("Start");
 
             if (_notificationTimer == null)
             {
@@ -117,7 +117,7 @@ namespace Ergonomy.Core
                 SecondaryAlarmCount = _alarmManager?.SecondaryAlarmCount ?? 0,
                 Timestamp = DateTime.UtcNow,
                 CollectedAt = DateTime.UtcNow.ToString("O"),
-                CollectedAt_Shamsi = DateTime.Now.ToString("yyyy/MM/dd HH:mm:ss")
+                CollectedAt_Shamsi = ToShamsiDateTimeString(DateTime.Now)
             };
 
             _localDb.SaveUserActivity(QueueTargets.UserActivity, sessionData);

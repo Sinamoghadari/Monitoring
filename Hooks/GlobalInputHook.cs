@@ -122,24 +122,27 @@ namespace Ergonomy.Hooks
                 {
                     case WM_MOUSEMOVE:
                     {
-                        var info = Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam);
-
-                        long currentPacked = PackPoint(info.pt.x, info.pt.y);
-                        long previousPacked = Interlocked.Exchange(ref _lastMousePointPacked, currentPacked);
-
-                        // اولین نقطه فقط baseline است
-                        if (Interlocked.Exchange(ref _hasLastMousePoint, 1) == 1)
+                        unsafe
                         {
-                            int prevX = UnpackX(previousPacked);
-                            int prevY = UnpackY(previousPacked);
+                            MSLLHOOKSTRUCT* pInfo = (MSLLHOOKSTRUCT*)lParam;
+                            int ptX = pInfo->pt.x;
+                            int ptY = pInfo->pt.y;
 
-                            // distance = |dx| + |dy|
-                            // از sqrt استفاده نمی‌کنیم تا سبک‌تر باشد
-                            int distance = Math.Abs(info.pt.x - prevX) + Math.Abs(info.pt.y - prevY);
+                            long currentPacked = PackPoint(ptX, ptY);
+                            long previousPacked = Interlocked.Exchange(ref _lastMousePointPacked, currentPacked);
 
-                            if (distance > 0)
+                            // اولین نقطه فقط baseline است
+                            if (Interlocked.Exchange(ref _hasLastMousePoint, 1) == 1)
                             {
-                                Interlocked.Add(ref _mouseMovementPixels, distance);
+                                int prevX = UnpackX(previousPacked);
+                                int prevY = UnpackY(previousPacked);
+
+                                int distance = Math.Abs(ptX - prevX) + Math.Abs(ptY - prevY);
+
+                                if (distance > 0)
+                                {
+                                    Interlocked.Add(ref _mouseMovementPixels, distance);
+                                }
                             }
                         }
 
