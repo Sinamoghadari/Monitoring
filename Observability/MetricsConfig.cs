@@ -24,18 +24,18 @@ namespace Ergonomy.Observability
         public static MetricsConfig FromEnvironment()
         {
             int port = 9100;
-            string? portEnv = Environment.GetEnvironmentVariable(
+            string? portEnv = System.Environment.GetEnvironmentVariable(
                 "ERGONOMY_METRICS_PORT", EnvironmentVariableTarget.Machine);
             if (int.TryParse(portEnv, out int parsed) && parsed > 0 && parsed < 65536)
                 port = parsed;
 
-            string environment = Environment.GetEnvironmentVariable(
+            string environment = System.Environment.GetEnvironmentVariable(
                 "ERGONOMY_ENVIRONMENT", EnvironmentVariableTarget.Machine)
                 ?? "production";
 
-            string agentId = Environment.GetEnvironmentVariable(
+            string agentId = System.Environment.GetEnvironmentVariable(
                 "ERGONOMY_AGENT_ID", EnvironmentVariableTarget.Machine)
-                ?? Environment.MachineName;
+                ?? System.Environment.MachineName;
 
             return new MetricsConfig(port, environment, agentId);
         }

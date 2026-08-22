@@ -44,6 +44,7 @@ namespace Ergonomy.Logging
         public static readonly EventId SettingsValidationFailedId = new(SettingsValidationFailed, "SettingsValidationFailed");
         public static readonly EventId PermissionEvaluatedId = new(PermissionEvaluated, "PermissionEvaluated");
         public static readonly EventId HealthCheckedId = new(HealthChecked, "HealthChecked");
+        public static readonly EventId HealthFailedId = new(HealthFailed, "HealthFailed");
         public static readonly EventId SyncBatchStartId = new(SyncBatchStart, "SyncBatchStart");
         public static readonly EventId SyncBatchCompleteId = new(SyncBatchComplete, "SyncBatchComplete");
         public static readonly EventId SyncRetryBackoffId = new(SyncRetryBackoff, "SyncRetryBackoff");

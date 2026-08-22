@@ -275,3 +275,18 @@ verification result:
 - Source namespace resolution is corrected; local compilation remains unavailable because dotnet is not installed.
 caveats:
 - A Windows/.NET build is still required to verify the complete project.
+
+
+1405/05/31 - 3:40 pm
+problem:
+Windows compilation exposed a missing HealthFailedId EventId and MetricsConfig.Environment shadowing
+System.Environment inside the static factory.
+solution:
+- Added LogEvents.HealthFailedId.
+- Qualified environment access in MetricsConfig.FromEnvironment as System.Environment.
+files:
+Logging/LogEvents.cs; Observability/MetricsConfig.cs.
+verification result:
+- Source references now resolve unambiguously; complete local build remains unavailable without dotnet.
+caveats:
+- The Windows/.NET build must be rerun to discover any additional compiler errors.
