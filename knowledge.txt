@@ -261,3 +261,17 @@ Build and runtime tests remain blocked because dotnet is unavailable in this env
 caveats:
 No destructive command, Kafka publish, or live API/database/metrics test was performed. Remaining legacy
 Console.WriteLine calls should be migrated to ILogger in a separately build-verified change.
+
+
+1405/05/31 - 3:35 pm
+problem:
+Windows build reported CS0246 in Services/HealthCheckService.cs because SqliteOutboxConnectionProvider
+is declared in Ergonomy.Database and the service did not import that namespace.
+solution:
+- Added using Ergonomy.Database to Services/HealthCheckService.cs.
+files:
+Services/HealthCheckService.cs.
+verification result:
+- Source namespace resolution is corrected; local compilation remains unavailable because dotnet is not installed.
+caveats:
+- A Windows/.NET build is still required to verify the complete project.
