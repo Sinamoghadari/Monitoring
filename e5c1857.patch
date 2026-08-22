@@ -1,0 +1,3912 @@
+From e5c185760dbfea88ec55d8f34ab479669a4bbebe Mon Sep 17 00:00:00 2001
+From: Sinamoghadari <129609264+Sinamoghadari@users.noreply.github.com>
+Date: Sat, 22 Aug 2026 11:13:27 +0000
+Subject: [PATCH] refactor: split MainApplicationContext, add
+ DI/SettingsService/workers/sync worker/structured logging/Prometheus endpoint
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ CommandManager.cs                   |   6 +-
+ Configuration/AppDefaults.cs        |  74 +++
+ Configuration/SettingsService.cs    | 209 +++++++
+ DatabaseManager.cs                  |  18 +-
+ Ergonomy.csproj                     |   3 +
+ ErgonomyManager.cs                  |  35 +-
+ Hooks/ActivityMonitor.cs            |   6 +
+ Logging/ConsoleStructuredLogger.cs  |  75 +++
+ Logging/LogEvents.cs                |  46 ++
+ MainApplicationContext.cs           | 919 +++++-----------------------
+ Observability/AgentMetrics.cs       | 164 +++++
+ Observability/MetricsConfig.cs      |  43 ++
+ Observability/MetricsEndpoint.cs    | 199 ++++++
+ Program.cs                          |  36 +-
+ REPORT.md                           |  38 ++
+ Services/AdvancedMetricsWorker.cs   |  80 +++
+ Services/HealthCheckService.cs      | 124 ++++
+ Services/HealthMonitorWorker.cs     |  36 ++
+ Services/MachineIdentity.cs         |  25 +
+ Services/MessageLogService.cs       | 114 ++++
+ Services/PermissionMonitorWorker.cs |  51 ++
+ Services/PermissionsEvaluator.cs    | 202 ++++++
+ Services/ServiceRegistrar.cs        | 136 ++++
+ Services/SettingsRefreshWorker.cs   |  40 ++
+ Services/WakeUpScheduler.cs         |  59 ++
+ Services/WorkerBase.cs              | 154 +++++
+ SyncEngine.cs                       | 270 +++++---
+ knowledge.txt                       | 114 ++++
+ 28 files changed, 2369 insertions(+), 907 deletions(-)
+ create mode 100644 Configuration/AppDefaults.cs
+ create mode 100644 Configuration/SettingsService.cs
+ create mode 100644 Logging/ConsoleStructuredLogger.cs
+ create mode 100644 Logging/LogEvents.cs
+ create mode 100644 Observability/AgentMetrics.cs
+ create mode 100644 Observability/MetricsConfig.cs
+ create mode 100644 Observability/MetricsEndpoint.cs
+ create mode 100644 Services/AdvancedMetricsWorker.cs
+ create mode 100644 Services/HealthCheckService.cs
+ create mode 100644 Services/HealthMonitorWorker.cs
+ create mode 100644 Services/MachineIdentity.cs
+ create mode 100644 Services/MessageLogService.cs
+ create mode 100644 Services/PermissionMonitorWorker.cs
+ create mode 100644 Services/PermissionsEvaluator.cs
+ create mode 100644 Services/ServiceRegistrar.cs
+ create mode 100644 Services/SettingsRefreshWorker.cs
+ create mode 100644 Services/WakeUpScheduler.cs
+ create mode 100644 Services/WorkerBase.cs
+
+diff --git a/CommandManager.cs b/CommandManager.cs
+index 3aa33f5..ed36cb0 100644
+--- a/CommandManager.cs
++++ b/CommandManager.cs
+@@ -26,7 +26,7 @@ namespace Ergonomy
+         private string _windowsUsername;
+         private static readonly HttpClient _httpClient = new HttpClient();
+         
+-        private dynamic _appSettings; 
++        private AppSettings _appSettings; 
+ 
+         // 🌟 فیلد تصحیح شده برای دیتابیس محلی
+         private readonly LocalDatabaseManager _localDbManager;
+@@ -38,9 +38,9 @@ namespace Ergonomy
+         public Action? OnForceSync { get; set; }
+         private readonly PersianCalendar pc = new PersianCalendar();
+ 
+-        public CommandManager(dynamic appSettings, string windowsUsername, LocalDatabaseManager localDbManager)
++        public CommandManager(AppSettings appSettings, string windowsUsername, LocalDatabaseManager localDbManager)
+         {
+-            _appSettings = appSettings;
++            _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
+             _windowsUsername = windowsUsername;
+             _localDbManager = localDbManager ?? throw new ArgumentNullException(nameof(localDbManager));
+ 
+diff --git a/Configuration/AppDefaults.cs b/Configuration/AppDefaults.cs
+new file mode 100644
+index 0000000..943d7d5
+--- /dev/null
++++ b/Configuration/AppDefaults.cs
+@@ -0,0 +1,74 @@
++namespace Ergonomy.Configuration
++{
++    /// <summary>
++    /// Centralized default-value normalization and validation for <see cref="AppSettings"/>.
++    /// This removes the ad-hoc defaulting that previously lived in MainApplicationContext so
++    /// every loader (bootstrap env, Settings API) applies the same rules.
++    /// </summary>
++    public static class AppDefaults
++    {
++        public static int Normalize(
++            int value, int fallback, int minimum) =>
++            value <= minimum ? fallback : value;
++
++        public static double Normalize(
++            double value, double fallback, double minimum) =>
++            value <= minimum ? fallback : value;
++
++        public static void Apply(AppSettings settings)
++        {
++            if (settings == null)
++                return;
++
++            settings.SyncEngineIntervalMinutes = Normalize(
++                settings.SyncEngineIntervalMinutes, 1, 0);
++
++            settings.AdvancedMetricsIntervalMinutes = Normalize(
++                settings.AdvancedMetricsIntervalMinutes, 120, 0);
++
++            settings.SettingsCheckIntervalSeconds = Normalize(
++                settings.SettingsCheckIntervalSeconds, 60, 0);
++
++            settings.PermissionSqliteRetryIntervalHours = Normalize(
++                settings.PermissionSqliteRetryIntervalHours, 1, 0);
++
++            settings.PermissionKafkaRetryIntervalHours = Normalize(
++                settings.PermissionKafkaRetryIntervalHours, 1, 0);
++
++            settings.ConnectionFailureSleepMinutes = Normalize(
++                settings.ConnectionFailureSleepMinutes, 5, 0);
++        }
++
++        /// <summary>
++        /// Validates required infrastructure settings. Infrastructure endpoints/topics are
++        /// authoritative only from the machine environment (bootstrap) and are preserved by
++        /// <see cref="SettingsService"/>, so a missing API endpoint is the main actionable gap.
++        /// </summary>
++        public static void ValidateRequired(AppSettings settings)
++        {
++            if (settings == null)
++                throw new SettingsValidationException("AppSettings is null.");
++
++            if (settings.API == null)
++                throw new SettingsValidationException(
++                    "API settings (Settings/LoadImages/Commands) are missing.");
++
++            if (string.IsNullOrWhiteSpace(settings.API.Settings))
++                throw new SettingsValidationException(
++                    "ERGONOMY_API_SETTINGS is required (Settings API URL is empty).");
++
++            if (settings.Kafka == null)
++                throw new SettingsValidationException(
++                    "Kafka settings (BootstrapServers/topics) are missing.");
++
++            if (string.IsNullOrWhiteSpace(settings.Kafka.BootstrapServers))
++                throw new SettingsValidationException(
++                    "ERGONOMY_KAFKA_BOOTSTRAP_SERVERS is required.");
++        }
++    }
++
++    public sealed class SettingsValidationException : Exception
++    {
++        public SettingsValidationException(string message) : base(message) { }
++    }
++}
+diff --git a/Configuration/SettingsService.cs b/Configuration/SettingsService.cs
+new file mode 100644
+index 0000000..dca26d8
+--- /dev/null
++++ b/Configuration/SettingsService.cs
+@@ -0,0 +1,209 @@
++using System;
++using System.Net.Http;
++using System.Text.Json;
++using System.Threading;
++using System.Threading.Tasks;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Logging;
++
++namespace Ergonomy.Configuration
++{
++    public interface ISettingsService
++    {
++        /// <summary>The current effective settings (bootstrap or API-refreshed).</summary>
++        AppSettings Current { get; }
++
++        /// <summary>The immutable bootstrap settings loaded from machine environment variables.</summary>
++        AppSettings Bootstrap { get; }
++
++        /// <summary>True once the current settings were refreshed from the Settings API.</summary>
++        bool SettingsSourceIsApi { get; }
++
++        /// <summary>Raised (on a background thread) whenever the effective settings are replaced.</summary>
++        event Action<AppSettings>? SettingsChanged;
++
++        /// <summary>Loads the machine environment bootstrap settings; idempotent.</summary>
++        void LoadBootstrap();
++
++        /// <summary>
++        /// Fetches settings from the Settings API (backed by PostgreSQL) and, if they differ,
++        /// replaces <see cref="Current"/> and raises <see cref="SettingsChanged"/>.
++        /// Infrastructure (API endpoints + Kafka topics) is always preserved from bootstrap.
++        /// </summary>
++        Task<bool> RefreshFromApiAsync(bool logFailures = false);
++    }
++
++    public sealed class SettingsService : ISettingsService, IDisposable
++    {
++        private readonly HttpClient _httpClient;
++        private readonly ILogger<SettingsService> _logger;
++        private readonly SemaphoreSlim _refreshLock = new(1, 1);
++        private readonly object _sync = new();
++
++        private AppSettings _current = null!;
++        private AppSettings _bootstrap = null!;
++        private bool _sourceIsApi;
++        private bool _disposed;
++
++        public event Action<AppSettings>? SettingsChanged;
++
++        public SettingsService(HttpClient httpClient, ILogger<SettingsService> logger)
++        {
++            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
++            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
++        }
++
++        public AppSettings Current
++        {
++            get { lock (_sync) return _current; }
++        }
++
++        public AppSettings Bootstrap
++        {
++            get { lock (_sync) return _bootstrap; }
++        }
++
++        public bool SettingsSourceIsApi
++        {
++            get { lock (_sync) return _sourceIsApi; }
++        }
++
++        public void LoadBootstrap()
++        {
++            AppSettings bootstrap;
++            lock (_sync)
++            {
++                bootstrap = EnvironmentSettingsProvider.Load();
++                AppDefaults.Apply(bootstrap);
++                _bootstrap = bootstrap;
++                _current = bootstrap;
++                _sourceIsApi = false;
++            }
++
++            TryValidate(bootstrap);
++
++            _logger.LogInformation(
++                "Bootstrap settings loaded from Machine Environment Variables. " +
++                "Enabled metrics count: {EnabledMetricsCount}",
++                _current.EnabledMetrics?.Count ?? 0);
++        }
++
++        private void TryValidate(AppSettings settings)
++        {
++            try
++            {
++                AppDefaults.ValidateRequired(settings);
++            }
++            catch (SettingsValidationException ex)
++            {
++                _logger.LogWarning(
++                    LogEvents.SettingsValidationFailedId,
++                    "Required settings validation failed: {Message}", ex.Message);
++            }
++        }
++
++        public async Task<bool> RefreshFromApiAsync(bool logFailures = false)
++        {
++            await _refreshLock.WaitAsync();
++            try
++            {
++                string? apiUrl = _current.API?.Settings;
++                if (string.IsNullOrWhiteSpace(apiUrl))
++                {
++                    if (logFailures)
++                        _logger.LogWarning("Settings API URL is empty in Environment settings.");
++                    return false;
++                }
++
++                using HttpResponseMessage response = await _httpClient.GetAsync(apiUrl);
++                if (!response.IsSuccessStatusCode)
++                {
++                    if (logFailures)
++                        _logger.LogWarning("Settings API returned status code: {StatusCode}", response.StatusCode);
++                    return false;
++                }
++
++                string jsonString = await response.Content.ReadAsStringAsync();
++                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
++                AppSettings? remoteSettings =
++                    JsonSerializer.Deserialize<AppSettings>(jsonString, options);
++
++                if (remoteSettings == null)
++                {
++                    if (logFailures)
++                        _logger.LogWarning("Settings API response could not be deserialized.");
++                    return false;
++                }
++
++                AppDefaults.Apply(remoteSettings);
++
++                // Infrastructure settings (API endpoints + Kafka topics) are authoritative
++                // only from the machine environment (bootstrap); the API cannot override them.
++                PreserveEnvironmentInfrastructureSettings(remoteSettings);
++
++                TryValidate(remoteSettings);
++
++                AppSettings currentSnapshot;
++                lock (_sync) currentSnapshot = _current;
++
++                string currentJson = NormalizeSettings(currentSnapshot);
++                string newJson = NormalizeSettings(remoteSettings);
++
++                if (currentJson == newJson)
++                    return false;
++
++                lock (_sync)
++                {
++                    _current = remoteSettings;
++                    _sourceIsApi = true;
++                }
++
++                _logger.LogInformation("Settings updated from API successfully.");
++                SettingsChanged?.Invoke(remoteSettings);
++                return true;
++            }
++            catch (Exception ex)
++            {
++                if (logFailures)
++                {
++                    _logger.LogWarning(
++                        "Offline Mode or API Error! Using Environment settings. Msg: {Message}",
++                        ex.Message);
++                }
++                else
++                {
++                    _logger.LogDebug(ex, "Settings API refresh failed.");
++                }
++                return false;
++            }
++            finally
++            {
++                _refreshLock.Release();
++            }
++        }
++
++        private void PreserveEnvironmentInfrastructureSettings(AppSettings remoteSettings)
++        {
++            AppSettings bootstrap;
++            lock (_sync) bootstrap = _bootstrap;
++            remoteSettings.API = bootstrap.API;
++            remoteSettings.Kafka = bootstrap.Kafka;
++        }
++
++        private static string NormalizeSettings(AppSettings settings)
++        {
++            return JsonSerializer.Serialize(settings, new JsonSerializerOptions
++            {
++                WriteIndented = false
++            });
++        }
++
++        public void Dispose()
++        {
++            if (_disposed)
++                return;
++            _disposed = true;
++            _refreshLock.Dispose();
++        }
++    }
++}
+diff --git a/DatabaseManager.cs b/DatabaseManager.cs
+index df4c9f2..d8c42aa 100644
+--- a/DatabaseManager.cs
++++ b/DatabaseManager.cs
+@@ -6,7 +6,6 @@ using System.Drawing;
+ using System.Collections.Generic;
+ using Ergonomy.Configuration;
+ using System.Text.Json;
+-using Microsoft.Extensions.Configuration;
+ using System.Threading.Tasks;
+ using System.Globalization;
+ 
+@@ -16,13 +15,9 @@ namespace Ergonomy.Database
+     {
+         private readonly LocalDatabaseManager _localDb;
+ 
+-        // توجه: شما در کل پروژه در حال حذف appsettings هستید،
+-        // اما فعلاً این کلاس هنوز از appsettings.json می‌خواند.
+-        // دست نزنیم تا رفتار فعلی نشکند؛ بعداً باید با Env Vars جایگزین شود.
+-        private readonly IConfiguration _configuration = new ConfigurationBuilder()
+-            .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
+-            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+-            .Build();
++        // No standalone ConfigurationBuilder. The "check postgres connection" flag is now an
++        // explicit constructor parameter (the previous appsettings.json read was removed).
++        private readonly bool _checkPostgresConnection;
+ 
+         private readonly string _host;
+         private readonly string _database;
+@@ -39,6 +34,7 @@ namespace Ergonomy.Database
+             string user,
+             string password,
+             int port,
++            bool checkPostgresConnection = false,
+             LocalDatabaseManager? localDb = null)
+         {
+             _host = host;
+@@ -46,6 +42,7 @@ namespace Ergonomy.Database
+             _user = user;
+             _password = password;
+             _port = port;
++            _checkPostgresConnection = checkPostgresConnection;
+ 
+             _localDb = localDb ?? new LocalDatabaseManager();
+         }
+@@ -89,10 +86,7 @@ namespace Ergonomy.Database
+         public async Task CheckAndLogPostgresConnectionAsync(
+             string windowsUsername)
+         {
+-            bool checkEnabled = _configuration.GetValue<bool>(
+-                "AppSettings:CheckPostgresConnection");
+-
+-            if (!checkEnabled)
++            if (!_checkPostgresConnection)
+                 return;
+ 
+             string statusMessage;
+diff --git a/Ergonomy.csproj b/Ergonomy.csproj
+index d94e0d1..70a9c3e 100644
+--- a/Ergonomy.csproj
++++ b/Ergonomy.csproj
+@@ -20,6 +20,9 @@
+     <PackageReference Include="Microsoft.Extensions.Configuration" Version="8.0.0" />
+     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
+     <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="8.0.0" />
++    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="8.0.0" />
++    <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
++    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.0" />
+     <PackageReference Include="Npgsql" Version="10.0.2" />
+     <PackageReference Include="System.Diagnostics.EventLog" Version="10.0.5" />
+     <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="10.0.5" />
+diff --git a/ErgonomyManager.cs b/ErgonomyManager.cs
+index 62ba586..e85f4e4 100644
+--- a/ErgonomyManager.cs
++++ b/ErgonomyManager.cs
+@@ -7,6 +7,7 @@ using Ergonomy.Configuration;
+ using Ergonomy.Database;
+ using Ergonomy.Hooks;
+ using Ergonomy.Logging;
++using Ergonomy.Services;
+ 
+ namespace Ergonomy.Core
+ {
+@@ -15,17 +16,13 @@ namespace Ergonomy.Core
+         private AppSettings _appSettings;
+         private readonly LocalDatabaseManager _localDb;
+         private readonly Control? _uiAnchor;
++        private readonly MachineIdentity _identity;
+ 
+-        private GlobalInputHook? _globalInputHook;
+         private ActivityMonitor? _activityMonitor;
+         private DataLogger? _dataLogger;
+         private AlarmManager? _alarmManager;
+         private System.Timers.Timer? _notificationTimer;
+ 
+-        private readonly string _sessionGuid;
+-        private readonly string _windowsSid;
+-        private readonly string _windowsUsername;
+-
+         // Serializes lifecycle transitions and prevents overlapping
+         // threshold evaluations / duplicate alarm requests.
+         private readonly object _lifecycleLock = new object();
+@@ -39,24 +36,20 @@ namespace Ergonomy.Core
+         public ErgonomyManager(
+             AppSettings appSettings,
+             LocalDatabaseManager localDb,
+-            string sessionGuid,
+-            string windowsSid,
+-            string windowsUsername,
++            MachineIdentity identity,
++            ActivityMonitor activityMonitor,
++            AlarmManager alarmManager,
++            DataLogger dataLogger,
+             Control? uiAnchor = null)
+         {
+             _appSettings = appSettings;
+             _localDb = localDb;
+-            _sessionGuid = sessionGuid;
+-            _windowsSid = windowsSid;
+-            _windowsUsername = windowsUsername;
++            _identity = identity ?? throw new ArgumentNullException(nameof(identity));
+             _uiAnchor = uiAnchor;
+ 
+-            _globalInputHook = new GlobalInputHook();
+-            _activityMonitor = new ActivityMonitor(_globalInputHook);
+-            _alarmManager = new AlarmManager(_appSettings);
+-            _dataLogger = new DataLogger(_activityMonitor, () => _alarmManager.SessionCloseCounter, _appSettings);
+-
+-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Ergonomy] ErgonomyManager created.");
++            _activityMonitor = activityMonitor ?? throw new ArgumentNullException(nameof(activityMonitor));
++            _alarmManager = alarmManager ?? throw new ArgumentNullException(nameof(alarmManager));
++            _dataLogger = dataLogger ?? throw new ArgumentNullException(nameof(dataLogger));
+         }
+ 
+         public void UpdateSettings(AppSettings appSettings)
+@@ -229,9 +222,9 @@ namespace Ergonomy.Core
+ 
+             var sessionData = new UserActivityPayload
+             {
+-                SessionId = _sessionGuid.ToString(),
+-                WindowsSid = _windowsSid,
+-                WindowsUsername = _windowsUsername,
++                SessionId = _identity.SessionGuid,
++                WindowsSid = _identity.WindowsSid,
++                WindowsUsername = _identity.WindowsUsername,
+                 StateType = stateType,
+                 KeyboardActiveSeconds = keyboardSeconds,
+                 MouseActiveSeconds = mouseSeconds,
+@@ -284,7 +277,7 @@ namespace Ergonomy.Core
+             _notificationTimer?.Stop();
+             _notificationTimer?.Dispose();
+             _notificationTimer = null;
+-            _globalInputHook?.Dispose();
++            _activityMonitor?.Dispose();
+         }
+     }
+ }
+diff --git a/Hooks/ActivityMonitor.cs b/Hooks/ActivityMonitor.cs
+index 2eb8acc..251cc1c 100644
+--- a/Hooks/ActivityMonitor.cs
++++ b/Hooks/ActivityMonitor.cs
+@@ -93,6 +93,7 @@ namespace Ergonomy.Hooks
+         }
+ 
+         private int _samplingInProgress;
++        private bool _disposed;
+ 
+         private void OnSampleTimerElapsed(object? sender, ElapsedEventArgs e)
+         {
+@@ -174,9 +175,14 @@ namespace Ergonomy.Hooks
+ 
+         public void Dispose()
+         {
++            if (_disposed)
++                return;
++            _disposed = true;
++
+             Stop();
+             _sampleTimer.Elapsed -= OnSampleTimerElapsed;
+             _sampleTimer.Dispose();
++            _globalInputHook.Dispose();
+         }
+     }
+ }
+diff --git a/Logging/ConsoleStructuredLogger.cs b/Logging/ConsoleStructuredLogger.cs
+new file mode 100644
+index 0000000..cccfe21
+--- /dev/null
++++ b/Logging/ConsoleStructuredLogger.cs
+@@ -0,0 +1,75 @@
++using System;
++using System.Collections.Concurrent;
++using System.Collections.Generic;
++using System.Text;
++using Microsoft.Extensions.Logging;
++
++namespace Ergonomy.Logging
++{
++    /// <summary>
++    /// A lightweight <see cref="ILoggerProvider"/> that renders structured (message-template)
++    /// logs as human-readable labeled lines on stdout. This keeps the existing
++    /// Console.WriteLine-based output working while allowing services to use ILogger&lt;T&gt;.
++    /// No secrets/tokens/keys are logged by design; callers must keep messages safe.
++    /// </summary>
++    public sealed class ConsoleStructuredLogProvider : ILoggerProvider
++    {
++        private readonly ConcurrentDictionary<string, ConsoleStructuredLogger> _loggers =
++            new(StringComparer.Ordinal);
++
++        public ILogger CreateLogger(string categoryName) =>
++            _loggers.GetOrAdd(categoryName, _ => new ConsoleStructuredLogger(categoryName));
++
++        public void Dispose()
++        {
++            _loggers.Clear();
++        }
++
++        private sealed class ConsoleStructuredLogger : ILogger
++        {
++            private readonly string _category;
++            private readonly object _lock = new();
++
++            public ConsoleStructuredLogger(string category) => _category = category;
++
++            public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
++
++            public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
++
++            public void Log<TState>(
++                LogLevel logLevel,
++                EventId eventId,
++                TState state,
++                Exception? exception,
++                Func<TState, Exception?, string> formatter)
++            {
++                if (!IsEnabled(logLevel))
++                    return;
++
++                string message = formatter(state, exception);
++                string line = BuildLine(logLevel, eventId, message, exception);
++
++                lock (_lock)
++                {
++                    Console.WriteLine(line);
++                }
++            }
++
++            private string BuildLine(
++                LogLevel logLevel, EventId eventId, string message, Exception? exception)
++            {
++                var ts = DateTime.Now.ToString("HH:mm:ss");
++                var sb = new StringBuilder();
++                sb.Append('[').Append(ts).Append("] ");
++                sb.Append('[').Append(logLevel.ToString().ToUpper()).Append("] ");
++                sb.Append('[').Append(_category).Append(']');
++                if (eventId.Id != 0)
++                    sb.Append(" [eid=").Append(eventId.Id).Append(']');
++                sb.Append(' ').Append(message);
++                if (exception != null)
++                    sb.Append(" | EX: ").Append(exception.Message);
++                return sb.ToString();
++            }
++        }
++    }
++}
+diff --git a/Logging/LogEvents.cs b/Logging/LogEvents.cs
+new file mode 100644
+index 0000000..67d11f8
+--- /dev/null
++++ b/Logging/LogEvents.cs
+@@ -0,0 +1,46 @@
++using Microsoft.Extensions.Logging;
++
++namespace Ergonomy.Logging
++{
++    /// <summary>
++    /// Well-known EventIds for recurring lifecycle events so logs can be filtered/documented.
++    /// </summary>
++    public static class LogEvents
++    {
++        public const int SettingsLoaded = 1000;
++        public const int SettingsRefreshed = 1010;
++        public const int SettingsRefreshFailed = 1011;
++        public const int SettingsValidationFailed = 1012;
++
++        public const int WorkerStarted = 2000;
++        public const int WorkerStopped = 2010;
++        public const int WorkerError = 2020;
++
++        public const int PermissionEvaluated = 3000;
++        public const int PermissionDisabled = 3010;
++
++        public const int HealthChecked = 4000;
++        public const int HealthFailed = 4010;
++
++        public const int SyncBatchStart = 5000;
++        public const int SyncBatchComplete = 5010;
++        public const int SyncRetryBackoff = 5020;
++        public const int SyncPoisonRecord = 5030;
++        public const int SyncSkipped = 5040;
++
++        public static readonly EventId WorkerStartedId = new(WorkerStarted, "WorkerStarted");
++        public static readonly EventId WorkerStoppedId = new(WorkerStopped, "WorkerStopped");
++        public static readonly EventId WorkerErrorId = new(WorkerError, "WorkerError");
++        public static readonly EventId SettingsLoadedId = new(SettingsLoaded, "SettingsLoaded");
++        public static readonly EventId SettingsRefreshedId = new(SettingsRefreshed, "SettingsRefreshed");
++        public static readonly EventId SettingsRefreshFailedId = new(SettingsRefreshFailed, "SettingsRefreshFailed");
++        public static readonly EventId SettingsValidationFailedId = new(SettingsValidationFailed, "SettingsValidationFailed");
++        public static readonly EventId PermissionEvaluatedId = new(PermissionEvaluated, "PermissionEvaluated");
++        public static readonly EventId HealthCheckedId = new(HealthChecked, "HealthChecked");
++        public static readonly EventId SyncBatchStartId = new(SyncBatchStart, "SyncBatchStart");
++        public static readonly EventId SyncBatchCompleteId = new(SyncBatchComplete, "SyncBatchComplete");
++        public static readonly EventId SyncRetryBackoffId = new(SyncRetryBackoff, "SyncRetryBackoff");
++        public static readonly EventId SyncPoisonRecordId = new(SyncPoisonRecord, "SyncPoisonRecord");
++        public static readonly EventId SyncSkippedId = new(SyncSkipped, "SyncSkipped");
++    }
++}
+diff --git a/MainApplicationContext.cs b/MainApplicationContext.cs
+index c3d88b7..d008607 100644
+--- a/MainApplicationContext.cs
++++ b/MainApplicationContext.cs
+@@ -1,61 +1,89 @@
+-using Ergonomy.Configuration;
+-using Ergonomy.Core;
+-using Ergonomy.Database;
+-using Ergonomy.Hooks;
+-using Microsoft.Data.Sqlite;
+ using System;
+-using System.Diagnostics;
++using System.Drawing;
+ using System.Globalization;
+-using System.Security.Principal;
+-using System.Text.Json;
+ using System.Threading;
+ using System.Threading.Tasks;
+-using System.Timers;
+ using System.Windows.Forms;
+-
++using Microsoft.Extensions.Logging;
++using Ergonomy.Configuration;
++using Ergonomy.Core;
++using Ergonomy.Database;
++using Ergonomy.Logging;
++using Ergonomy.Observability;
++using Ergonomy.Services;
+ 
+ namespace Ergonomy
+ {
++    /// <summary>
++    /// Lightweight UI/lifecycle shell. Owns the WinForms application context (notify icon, UI-thread
++    /// exception handling, alarm marshalling anchor) and starts/stops the extracted workers and
++    /// services. It no longer constructs timers or builds settings/sync/metrics logic inline.
++    /// </summary>
+     public class MainApplicationContext : ApplicationContext
+     {
+-        private readonly HttpClient _httpClient;
+-        private readonly SemaphoreSlim _settingsRefreshLock = new(1, 1);
++        private readonly ISettingsService _settingsService;
++        private readonly SyncEngine _syncEngine;
++        private readonly ErgonomyManager _ergonomyManager;
++        private readonly CommandManager _commandManager;
++        private readonly MessageLogService _messageLog;
++        private readonly PermissionsEvaluator _permissions;
++        private readonly SettingsRefreshWorker _settingsRefreshWorker;
++        private readonly HealthMonitorWorker _healthMonitorWorker;
++        private readonly PermissionMonitorWorker _permissionMonitorWorker;
++        private readonly AdvancedMetricsWorker _advancedMetricsWorker;
++        private readonly MetricsEndpoint _metricsEndpoint;
++        private readonly MachineIdentity _identity;
++        private readonly WakeUpScheduler _wakeUpScheduler;
++        private readonly HealthCheckService _healthCheckService;
++        private readonly MetricsConfig _metricsConfig;
++        private readonly ILogger<MainApplicationContext> _logger;
++        private readonly Control _uiAnchor;
++        private readonly KafkaConnect _kafkaConnect;
+ 
+-        private CommandManager? _commandManager;
+-        private AppSettings _appSettings = null!;
+-        private LocalDatabaseManager _localDb;
+-        private SyncEngine? _syncEngine;
+         private NotifyIcon? _notifyIcon;
+-        private KafkaConnect? _kafkaConnect;
+-        private ErgonomyManager? _ergonomyManager;
+-
+-        // Hidden UI anchor used exclusively to marshal WinForms UI work
+-        // (alarm/notification forms) onto the UI thread from worker threads.
+-        private readonly Control _uiAnchor = new Control();
+-        private bool _settingsSourceIsApi;
+-
+-        private System.Timers.Timer? _healthCheckTimer;
+-        private System.Timers.Timer? _wakeUpTimer;
+-        private System.Timers.Timer? _settingsUpdateTimer;
+-        private System.Timers.Timer? _advancedMetricsTimer;
+-        private System.Timers.Timer? _sqlitePermissionTimer;
+-        private System.Timers.Timer? _kafkaPermissionTimer;
+-
+-        private bool _isLocalCollectionRunning;
+-        private bool _isSyncEngineRunning;
+-        private int _advancedMetricsExecutionGate;
+         private bool _isDisposed;
+ 
+-        private readonly string _windowsSid;
+-        private readonly string _windowsUsername;
+-        private readonly string _sessionGuid;
+-
+-        public MainApplicationContext()
+-        {
+-            _httpClient = new HttpClient
+-            {
+-                Timeout = TimeSpan.FromSeconds(15)
+-            };
++        public MainApplicationContext(
++            ISettingsService settingsService,
++            KafkaConnect kafkaConnect,
++            SyncEngine syncEngine,
++            ErgonomyManager ergonomyManager,
++            CommandManager commandManager,
++            MessageLogService messageLog,
++            PermissionsEvaluator permissions,
++            AdvancedMetricsWorker advancedMetricsWorker,
++            SettingsRefreshWorker settingsRefreshWorker,
++            HealthMonitorWorker healthMonitorWorker,
++            PermissionMonitorWorker permissionMonitorWorker,
++            MetricsEndpoint metricsEndpoint,
++            MachineIdentity identity,
++            WakeUpScheduler wakeUpScheduler,
++            HealthCheckService healthCheckService,
++            MetricsConfig metricsConfig,
++            ILogger<MainApplicationContext> logger,
++            Control uiAnchor)
++        {
++            _settingsService = settingsService;
++            _kafkaConnect = kafkaConnect;
++            _syncEngine = syncEngine;
++            _ergonomyManager = ergonomyManager;
++            _commandManager = commandManager;
++            _messageLog = messageLog;
++            _permissions = permissions;
++            _advancedMetricsWorker = advancedMetricsWorker;
++            _settingsRefreshWorker = settingsRefreshWorker;
++            _healthMonitorWorker = healthMonitorWorker;
++            _permissionMonitorWorker = permissionMonitorWorker;
++            _metricsEndpoint = metricsEndpoint;
++            _identity = identity;
++            _wakeUpScheduler = wakeUpScheduler;
++            _healthCheckService = healthCheckService;
++            _metricsConfig = metricsConfig;
++            _logger = logger;
++            _uiAnchor = uiAnchor;
++
++            // SQLite becoming inaccessible triggers the sleep-and-retry lifecycle.
++            _healthCheckService.OnSqliteCriticalFailure = HandleCriticalFailure;
+ 
+             Application.ThreadException += (s, e) => HandleCriticalFailure(e.Exception.Message);
+             AppDomain.CurrentDomain.UnhandledException += (s, e) =>
+@@ -64,696 +92,111 @@ namespace Ergonomy
+                     HandleCriticalFailure(ex.Message);
+             };
+ 
+-            // ---- UI thread anchor ----
+-            // Keep a hidden Control on the UI thread that we can use to marshal
+-            // alarm/notification forms back onto this thread from worker/timer
+-            // threads. It also forces the WinForms SyncContext to be installed.
+-            try
+-            {
+-                _uiAnchor.CreateControl();
+-            }
+-            catch (Exception ex)
++            // Command manager callbacks (routed to workers/services, not the shell).
++            _commandManager.OnLogRequired = _messageLog.Log;
++            _commandManager.OnForceSync = () => _syncEngine.ForceSyncAsync();
++            _commandManager.OnStopCollection = () =>
+             {
+-                Console.WriteLine(
+-                    $"[{DateTime.Now:HH:mm:ss}] ⚠️ [Ergonomy] Could not create UI anchor control: {ex.Message}");
+-            }
+-            // Immediately reset the SyncContext so the blocking startup settings
+-            // refresh below resumes its continuation on the thread pool instead of
+-            // deadlocking the UI thread (which has no message pump yet). Application.Run
+-            // re-installs a fresh WindowsFormsSynchronizationContext afterwards.
+-            SynchronizationContext.SetSynchronizationContext(null);
+-
+-            LoadAppSettings();
+-            
+-            _windowsSid = GetWindowsSID();
+-            try { _windowsUsername = WindowsIdentity.GetCurrent().Name; }
+-            catch { _windowsUsername = Environment.UserName; }
+-
+-            _sessionGuid = Guid.NewGuid().ToString();
+-
+-            _localDb = new LocalDatabaseManager(_appSettings.Outbox);
+-            _kafkaConnect = new KafkaConnect(
+-            _appSettings.Kafka.BootstrapServers,
+-            _appSettings.Kafka.UserActivityTopic,
+-            _appSettings.Kafka.SystemMetricsTopic,
+-            _appSettings.Kafka.AppLogsTopic);
+-
+-
+-
+-            TestKafkaConnectionAtStartup();
+-
+-            _syncEngine = new SyncEngine(_kafkaConnect, _localDb, _appSettings.SyncEngineIntervalMinutes);
+-            _ergonomyManager = new ErgonomyManager(_appSettings, _localDb, _sessionGuid, _windowsSid, _windowsUsername, _uiAnchor);
+-
+-            _commandManager = new CommandManager(
+-                _appSettings,
+-                _windowsUsername,
+-                _localDb)
++                _permissions.StopAllDataCollection();
++                _permissions.SetLocalCollectionRunning(false);
++            };
++            _commandManager.OnStartCollection = () =>
+             {
+-                OnLogRequired = SaveLogToDatabase,
+-                OnForceSync = () => _syncEngine?.ForceSyncAsync(),
+-                OnStopCollection = () =>
+-                {
+-                    StopAllDataCollection();
+-                    _isLocalCollectionRunning = false;
+-                },
+-                OnStartCollection = () =>
+-                {
+-                    StartLocalDataCollection();
+-                    _isLocalCollectionRunning = true;
+-                }
++                _permissions.StartLocalDataCollection();
++                _permissions.SetLocalCollectionRunning(true);
+             };
+ 
+-            _commandManager.Start();
+-
+             _notifyIcon = new NotifyIcon
+             {
+-                Icon = System.Drawing.SystemIcons.Application,
++                Icon = SystemIcons.Application,
+                 Visible = true,
+                 Text = "Ergonomy"
+             };
+ 
+-            StartHealthMonitoring();
++            _settingsService.SettingsChanged += OnSettingsChanged;
+ 
++            // Initial Settings-API refresh (bootstrap is already loaded by Program.Main).
++            // Runs on the UI thread with the SyncContext reset, so the blocking refresh does not
++            // deadlock and the continuation executes on the thread pool (matching original flow).
+             try
+             {
+-                UpdateSettingsFromApiAsync(logFailures: true).GetAwaiter().GetResult();
++                _settingsService.RefreshFromApiAsync(logFailures: true).GetAwaiter().GetResult();
+             }
+             catch (Exception ex)
+             {
+-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Initial settings refresh failed. Using Environment settings. Msg: {ex.Message}");
++                _logger.LogWarning("Initial settings refresh failed. Using Environment settings. Msg: {Message}", ex.Message);
+             }
+ 
+-            EvaluateSqlitePermission();
+-            EvaluateKafkaPermission();
+-            EvaluateErgonomyPermission();
+-
+-            StartSettingsUpdateTimer();
+-            StartSqlitePermissionTimer();
+-            StartKafkaPermissionTimer();
+-        }
+-
+-        private void LoadAppSettings()
+-        {
+-            _appSettings = EnvironmentSettingsProvider.Load();
+-            ApplyDefaultValues(_appSettings);
+-
+-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🌍 Bootstrap settings loaded from Machine Environment Variables.");
+-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Enabled metrics count: {_appSettings.EnabledMetrics?.Count ?? 0}");
+-        }
+-
+-        private void ApplyDefaultValues(AppSettings settings)
+-        {
+-            if (settings.SyncEngineIntervalMinutes <= 0)
+-                settings.SyncEngineIntervalMinutes = 1;
+-
+-            if (settings.AdvancedMetricsIntervalMinutes <= 0)
+-                settings.AdvancedMetricsIntervalMinutes = 120;
++            // Initial permission evaluation (starts local/sync/ergonomics as permitted).
++            _permissions.EvaluateAll();
+ 
+-            if (settings.SettingsCheckIntervalSeconds <= 0)
+-                settings.SettingsCheckIntervalSeconds = 60;
+-
+-            if (settings.PermissionSqliteRetryIntervalHours <= 0)
+-                settings.PermissionSqliteRetryIntervalHours = 1;
+-
+-            if (settings.PermissionKafkaRetryIntervalHours <= 0)
+-                settings.PermissionKafkaRetryIntervalHours = 1;
+-
+-            if (settings.ConnectionFailureSleepMinutes <= 0)
+-                settings.ConnectionFailureSleepMinutes = 5;
+-        }
+-
+-        private AppSettings PreserveEnvironmentInfrastructureSettings(AppSettings remoteSettings)
+-        {
+-            remoteSettings.API = _appSettings.API;
+-            remoteSettings.Kafka = _appSettings.Kafka;
+-            return remoteSettings;
+-        }
+-
+-
+-        private string? GetBootstrapApiSettingsUrl()
+-        {
+-            return _appSettings.API.Settings;
+-        }
+-
+-        private string NormalizeSettings(AppSettings settings)
+-        {
+-            return JsonSerializer.Serialize(settings, new JsonSerializerOptions
+-            {
+-                WriteIndented = false
+-            });
+-        }
+-
+-        private async Task UpdateSettingsFromApiAsync(bool logFailures = false)
+-        {
+-            await _settingsRefreshLock.WaitAsync();
+-            try
+-            {
+-                string? apiUrl = GetBootstrapApiSettingsUrl();
+-                if (string.IsNullOrWhiteSpace(apiUrl))
+-                {
+-                    if (logFailures)
+-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Settings API URL is empty in Environment settings.");
+-                    return;
+-                }
+-
+-                using HttpResponseMessage response = await _httpClient.GetAsync(apiUrl);
+-                if (!response.IsSuccessStatusCode)
+-                {
+-                    if (logFailures)
+-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Settings API returned status code: {response.StatusCode}");
+-                    return;
+-                }
+-
+-                string jsonString = await response.Content.ReadAsStringAsync();
+-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+-                AppSettings? remoteSettings = JsonSerializer.Deserialize<AppSettings>(jsonString, options);
+-
+-                if (remoteSettings == null)
+-                {
+-                    if (logFailures)
+-                        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Settings API response could not be deserialized.");
+-                    return;
+-                }
+-
+-                ApplyDefaultValues(remoteSettings);
+-
+-                // حفظ URLهای API از Environment، چون اینها bootstrap هستند
+-                remoteSettings = PreserveEnvironmentInfrastructureSettings(remoteSettings);
+-
+-                string currentJson = NormalizeSettings(_appSettings);
+-                string newJson = NormalizeSettings(remoteSettings);
+-
+-                if (currentJson == newJson)
+-                    return;
++            // Start the extracted periodic workers.
++            _settingsRefreshWorker.Start();
++            _healthMonitorWorker.Start();
++            _permissionMonitorWorker.Start();
++            _commandManager.Start();
+ 
+-                _appSettings = remoteSettings;
+-                _settingsSourceIsApi = true;
++            // Internal Prometheus scrape endpoint (no new Kafka/SQLite pipeline).
++            StartMetricsEndpoint();
+ 
+-                ReconfigureRuntimeBasedOnSettings();
++            // Kafka startup delivery probe (non-blocking).
++            TestKafkaConnectionAtStartup();
+ 
+-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ✅ Settings updated from API successfully.");
+-            }
+-            catch (Exception ex)
+-            {
+-                if (logFailures)
+-                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ Offline Mode or API Error! Using Environment settings. Msg: {ex.Message}");
+-            }
+-            finally
+-            {
+-                _settingsRefreshLock.Release();
+-            }
++            _logger.LogInformation("MainApplicationContext started. Workers: settings, health, permission, advanced-metrics.");
+         }
+ 
+-
+-        private void ReconfigureRuntimeBasedOnSettings()
++        private void StartMetricsEndpoint()
+         {
+-            _syncEngine?.UpdateSyncInterval(_appSettings.SyncEngineIntervalMinutes);
+-
+-            _commandManager?.UpdateSettings(_appSettings);
+-
+-            _ergonomyManager?.UpdateSettings(_appSettings);
+-            if (_ergonomyManager != null)
+-                _ergonomyManager.SettingsSourceIsApi = _settingsSourceIsApi;
+-
+-            RestartSettingsUpdateTimer();
+-            RestartPermissionTimers();
+-
+-            EvaluateSqlitePermission();
+-            EvaluateKafkaPermission();
+-            EvaluateErgonomyPermission();
++            _metricsEndpoint.Start(_metricsConfig.Port);
+         }
+ 
+-
+-        private void RestartPermissionTimers()
++        private void OnSettingsChanged(AppSettings newSettings)
+         {
+-            StartSqlitePermissionTimer();
+-            StartKafkaPermissionTimer();
++            _logger.LogInformation(LogEvents.SettingsRefreshedId, "Settings updated from API; reconfiguring runtime.");
++            _syncEngine.UpdateSyncInterval(newSettings.SyncEngineIntervalMinutes);
++            _commandManager.UpdateSettings(newSettings);
++            _ergonomyManager.UpdateSettings(newSettings);
++            _ergonomyManager.SettingsSourceIsApi = _settingsService.SettingsSourceIsApi;
++            _permissions.EvaluateAll();
+         }
+ 
+         private void HandleCriticalFailure(string errorMessage)
+         {
+-            SaveLogToDatabase("FATAL", $"Critical error occurred: {errorMessage}. Forcing system to sleep state.");
++            _messageLog.Log("FATAL", $"Critical error occurred: {errorMessage}. Forcing system to sleep state.");
+             GoToSleepAndRetry();
+         }
+ 
+         private void GoToSleepAndRetry()
+         {
+-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 💤 Entering Sleep Mode due to critical failures...");
+-
+-            StopAllDataCollection();
+-            _isLocalCollectionRunning = false;
+-
+-            _syncEngine?.Stop();
+-            _isSyncEngineRunning = false;
+-
+-            StopTimer(ref _sqlitePermissionTimer);
+-            StopTimer(ref _kafkaPermissionTimer);
+-            StopTimer(ref _settingsUpdateTimer);
+-            StopTimer(ref _healthCheckTimer);
+-
+-            double sleepMinutes = _appSettings.ConnectionFailureSleepMinutes;
+-
+-            StopTimer(ref _wakeUpTimer);
+-            _wakeUpTimer = new System.Timers.Timer(sleepMinutes * 60 * 1000)
+-            {
+-                AutoReset = false
+-            };
+-            _wakeUpTimer.Elapsed += async (s, e) => await WakeUpAsync();
+-            _wakeUpTimer.Start();
+-        }
+-
+-        private async Task WakeUpAsync()
+-        {
+-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ☀️ Waking up and re-evaluating connections...");
+-
+-            StartHealthMonitoring();
+-
+-            await UpdateSettingsFromApiAsync(logFailures: true);
+-
+-            EvaluateSqlitePermission();
+-            EvaluateKafkaPermission();
+-            EvaluateErgonomyPermission();
+-
+-            StartSettingsUpdateTimer();
+-            StartSqlitePermissionTimer();
+-            StartKafkaPermissionTimer();
+-
+-            _commandManager?.Start();
+-        }
+-
+-        private void StartHealthMonitoring()
+-        {
+-            StopTimer(ref _healthCheckTimer);
+-
+-            const double intervalMinutes = 15;
+-
+-            _healthCheckTimer = new System.Timers.Timer(intervalMinutes * 60 * 1000)
+-            {
+-                AutoReset = false
+-            };
+-
+-            _healthCheckTimer.Elapsed += async (sender, e) =>
+-            {
+-                try
+-                {
+-                    await PerformAllHealthChecksAsync();
+-                }
+-                finally
+-                {
+-                    if (!_isDisposed)
+-                        _healthCheckTimer?.Start();
+-                }
+-            };
+-
+-            _healthCheckTimer.Start();
+-            _ = Task.Run(PerformAllHealthChecksAsync);
+-        }
+-
++            _logger.LogWarning("Entering Sleep Mode due to critical failures...");
+ 
++            _permissions.StopAll();
+ 
+-        private async Task PerformAllHealthChecksAsync()
+-        {
+-            await CheckApiHealthAsync();
+-            await CheckSqliteHealthAsync();
+-            await CheckSelfPerformanceAsync();
+-        }
++            _settingsRefreshWorker.Stop();
++            _healthMonitorWorker.Stop();
++            _permissionMonitorWorker.Stop();
+ 
+-        private async Task CheckApiHealthAsync()
+-        {
+-            string? apiUrl = GetBootstrapApiSettingsUrl();
+-            if (string.IsNullOrWhiteSpace(apiUrl))
+-                return;
+-
+-            try
+-            {
+-                using var response = await _httpClient.GetAsync(apiUrl);
+-                if (response.IsSuccessStatusCode)
+-                {
+-                    await SendHealthLogAsync("INFO", "Settings API is healthy and accessible.", "ApiHealth");
+-                }
+-                else
+-                {
+-                    await SendHealthLogAsync("WARN", $"Settings API returned status code: {response.StatusCode}", "ApiHealth");
+-                }
+-            }
+-            catch (Exception ex)
+-            {
+-                await SendHealthLogAsync("ERROR", $"API Health Check Error: {ex.Message}", "ApiHealth");
+-            }
++            double sleepMinutes = _settingsService.Current.ConnectionFailureSleepMinutes;
++            _wakeUpScheduler.Schedule(TimeSpan.FromMinutes(sleepMinutes), WakeUpAsync);
+         }
+ 
+-        private async Task CheckSqliteHealthAsync()
++        private void WakeUpAsync()
+         {
+-            string statusMessage;
+-            string logLevel;
+-            string sqliteDbPath = Environment.GetEnvironmentVariable("ERGONOMY_SQLITE_CONNECTION_STRING", EnvironmentVariableTarget.Machine)
+-                ?? "Data Source=localbuffer.db";
+-
+-            try
+-            {
+-                using var conn = new SqliteConnection(sqliteDbPath);
+-                await conn.OpenAsync();
+-                using var cmd = conn.CreateCommand();
+-                cmd.CommandText = "SELECT 1;";
+-                await cmd.ExecuteScalarAsync();
+-
+-                statusMessage = "SQLite database is healthy and accessible.";
+-                logLevel = "INFO";
+-            }
+-            catch (Exception ex)
+-            {
+-                statusMessage = $"SQLite Error (Possible lock or corruption): {ex.Message}";
+-                logLevel = "ERROR";
+-                HandleCriticalFailure("SQLite is inaccessible. Data collection cannot continue.");
+-            }
+-
+-            await SendHealthLogAsync(logLevel, statusMessage, "SqliteHealth");
+-        }
++            _logger.LogInformation("Waking up and re-evaluating connections...");
+ 
+-
+-        private async Task CheckSelfPerformanceAsync()
+-        {
++            _healthMonitorWorker.Start();
+             try
+             {
+-                using Process process = Process.GetCurrentProcess();
+-                long memoryUsedMB = process.WorkingSet64 / (1024 * 1024);
+-
+-                string statusMessage = $"Agent Performance: Memory Usage is {memoryUsedMB} MB. Thread Count: {process.Threads.Count}";
+-                string logLevel = memoryUsedMB > 500 ? "WARN" : "INFO";
+-
+-                await SendHealthLogAsync(logLevel, statusMessage, "AgentPerformance");
++                _settingsService.RefreshFromApiAsync(logFailures: true).GetAwaiter().GetResult();
+             }
+             catch (Exception ex)
+             {
+-                await SendHealthLogAsync("ERROR", $"Failed to check self performance: {ex.Message}", "AgentPerformance");
+-            }
+-        }
+-
+-        private Task SendHealthLogAsync(
+-            string logLevel,
+-            string message,
+-            string category)
+-        {
+-            if (_localDb == null)
+-                return Task.CompletedTask;
+-
+-            DateTime currentTime = DateTime.Now;
+-            PersianCalendar pc = new PersianCalendar();
+-
+-            var logObj = new
+-            {
+-                CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+-                CollectedAt_Shamsi =
+-                    $"{pc.GetYear(currentTime):0000}/" +
+-                    $"{pc.GetMonth(currentTime):00}/" +
+-                    $"{pc.GetDayOfMonth(currentTime):00} " +
+-                    $"{currentTime:HH:mm:ss}",
+-
+-                LogLevel = logLevel,
+-                Message = message,
+-                WindowsUsername = _windowsUsername,
+-                WindowsSid = _windowsSid,
+-                MachineName = Environment.MachineName,
+-                Category = category
+-            };
+-
+-            try
+-            {
+-                var result = _localDb.SaveUserActivity(
+-                    QueueTargets.AppLogs,
+-                    logObj);
+-
+-                switch (result)
+-                {
+-                    case OutboxSaveResult.Saved:
+-                        Console.WriteLine(
+-                            $"[{DateTime.Now:HH:mm:ss}] " +
+-                            $"[{logLevel}] [{category}] {message}");
+-                        break;
+-
+-                    case OutboxSaveResult.DroppedLowPriority:
+-                        Console.WriteLine(
+-                            $"[{DateTime.Now:HH:mm:ss}] ⚠️ [OUTBOX] " +
+-                            $"Health log dropped due to critical capacity: {category}");
+-                        break;
+-
+-                    case OutboxSaveResult.Failed:
+-                    default:
+-                        Console.WriteLine(
+-                            $"[{DateTime.Now:HH:mm:ss}] ❌ [OUTBOX ERROR] " +
+-                            $"Failed to enqueue {category} health log.");
+-                        break;
+-                }
+-            }
+-            catch (Exception ex)
+-            {
+-                Console.WriteLine(
+-                    $"[{DateTime.Now:HH:mm:ss}] ❌ [OUTBOX ERROR] " +
+-                    $"Failed to queue {category} log: {ex.Message}");
+-            }
+-
+-            return Task.CompletedTask;
+-        }
+-
+-        private void EvaluateSqlitePermission()
+-        {
+-            bool allowSqlite = _appSettings.AllowSqliteWrite;
+-            double intervalHours = _appSettings.PermissionSqliteRetryIntervalHours;
+-
+-            string msg = $"[SQLite Status] Permission: {allowSqlite} | Checking continuously every {intervalHours} hour(s).";
+-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🔍 {msg}");
+-            SaveLogToDatabase("INFO", msg);
+-
+-            if (allowSqlite)
+-            {
+-                if (!_isLocalCollectionRunning)
+-                {
+-                    StartLocalDataCollection();
+-                    _isLocalCollectionRunning = true;
+-                }
+-            }
+-            else
+-            {
+-                if (_isLocalCollectionRunning)
+-                {
+-                    StopAllDataCollection();
+-                    _isLocalCollectionRunning = false;
+-                }
+-
+-                if (_isSyncEngineRunning)
+-                {
+-                    _syncEngine?.Stop();
+-                    _isSyncEngineRunning = false;
+-                }
+-
+-                SaveLogToDatabase("WARNING", "Local Collection (SQLite): Access DENIED. Process is CANCELED/SLEEPING.");
+-            }
+-        }
+-
+-        private void EvaluateKafkaPermission()
+-        {
+-            bool allowSqlite = _appSettings.AllowSqliteWrite;
+-            bool allowKafka = _appSettings.AllowKafkaWrite;
+-            double intervalHours = _appSettings.PermissionKafkaRetryIntervalHours;
+-
+-            string msg = $"[Kafka Sync Status] Permission: {allowKafka} | Checking continuously every {intervalHours} hour(s).";
+-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🔍 {msg}");
+-            SaveLogToDatabase("INFO", msg);
+-
+-            if (allowSqlite && allowKafka)
+-            {
+-                if (!_isSyncEngineRunning)
+-                {
+-                    _syncEngine?.Start();
+-                    _isSyncEngineRunning = true;
+-                    SaveLogToDatabase("INFO", "Sync Engine Started (Kafka Allowed).");
+-                }
+-            }
+-            else
+-            {
+-                if (_isSyncEngineRunning)
+-                {
+-                    _syncEngine?.Stop();
+-                    _isSyncEngineRunning = false;
+-                }
+-
+-                SaveLogToDatabase("WARNING", "Data Sync (Kafka): Access DENIED. Sync Process is CANCELED.");
+-            }
+-        }
+-
+-        private void EvaluateErgonomyPermission()
+-        {
+-            bool allowErgonomy = _appSettings.AllowErgonomyCollection;
+-            bool wasRunning = _ergonomyManager?.IsRunning ?? false;
+-
+-            string msg = $"[Ergonomy Status] Permission: {allowErgonomy}";
+-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🔍 {msg}");
+-            SaveLogToDatabase("INFO", msg);
+-
+-            if (allowErgonomy)
+-            {
+-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Ergonomy permission is true; ensuring manager is started.");
+-                _ergonomyManager?.Start();
+-                SaveLogToDatabase(
+-                    "INFO",
+-                    _ergonomyManager?.IsRunning == true
+-                        ? "ErgonomyCollection: manager started successfully (hooks/timers active)."
+-                        : "ErgonomyCollection: permission true but manager did NOT start.");
+-            }
+-            else
+-            {
+-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Ergonomy permission is false; stopping manager.");
+-                _ergonomyManager?.Stop("AllowErgonomyCollection is false");
+-                SaveLogToDatabase("WARNING", "Ergonomy Collection: Access DENIED or Disabled. Process is STOPPED.");
+-            }
+-
+-            if (wasRunning != allowErgonomy)
+-            {
+-                Console.WriteLine(
+-                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Settings update changed AllowErgonomyCollection from " +
+-                    $"{wasRunning} to {allowErgonomy}.");
+-            }
+-        }
+-
+-        private void StartSettingsUpdateTimer()
+-        {
+-            StopTimer(ref _settingsUpdateTimer);
+-
+-            _settingsUpdateTimer = new System.Timers.Timer(_appSettings.SettingsCheckIntervalSeconds * 1000)
+-            {
+-                AutoReset = false
+-            };
+-
+-            _settingsUpdateTimer.Elapsed += async (s, e) =>
+-            {
+-                try
+-                {
+-                    await UpdateSettingsFromApiAsync(logFailures: false);
+-                }
+-                finally
+-                {
+-                    if (!_isDisposed)
+-                        _settingsUpdateTimer?.Start();
+-                }
+-            };
+-
+-            _settingsUpdateTimer.Start();
+-        }
+-
+-        private void RestartSettingsUpdateTimer()
+-        {
+-            StartSettingsUpdateTimer();
+-        }
+-
+-        private void StartSqlitePermissionTimer()
+-        {
+-            StopTimer(ref _sqlitePermissionTimer);
+-
+-            _sqlitePermissionTimer = new System.Timers.Timer(_appSettings.PermissionSqliteRetryIntervalHours * 60 * 60 * 1000)
+-            {
+-                AutoReset = false
+-            };
+-
+-            _sqlitePermissionTimer.Elapsed += (s, e) =>
+-            {
+-                try
+-                {
+-                    EvaluateSqlitePermission();
+-                    EvaluateErgonomyPermission();
+-                }
+-                finally
+-                {
+-                    if (!_isDisposed)
+-                        _sqlitePermissionTimer?.Start();
+-                }
+-            };
+-
+-            _sqlitePermissionTimer.Start();
+-        }
+-
+-        private void StartKafkaPermissionTimer()
+-        {
+-            StopTimer(ref _kafkaPermissionTimer);
+-
+-            _kafkaPermissionTimer = new System.Timers.Timer(_appSettings.PermissionKafkaRetryIntervalHours * 60 * 60 * 1000)
+-            {
+-                AutoReset = false
+-            };
+-
+-            _kafkaPermissionTimer.Elapsed += (s, e) =>
+-            {
+-                try
+-                {
+-                    EvaluateKafkaPermission();
+-                }
+-                finally
+-                {
+-                    if (!_isDisposed)
+-                        _kafkaPermissionTimer?.Start();
+-                }
+-            };
+-
+-            _kafkaPermissionTimer.Start();
+-        }
+-
+-        private void StartLocalDataCollection()
+-        {
+-            StopAllDataCollection();
+-
+-            double advancedIntervalMinutes = _appSettings.AdvancedMetricsIntervalMinutes > 0
+-                ? _appSettings.AdvancedMetricsIntervalMinutes
+-                : 120;
+-
+-            _advancedMetricsTimer = new System.Timers.Timer(advancedIntervalMinutes * 60 * 1000)
+-            {
+-                AutoReset = true
+-            };
+-
+-            _advancedMetricsTimer.Elapsed += OnAdvancedMetricsTimerElapsed;
+-            _advancedMetricsTimer.Start();
+-
+-            SaveLogToDatabase("INFO", "Local System Metrics Collection Started.");
+-        }
+-
+-        private void StopAllDataCollection()
+-        {
+-            StopTimer(ref _advancedMetricsTimer);
+-            _ergonomyManager?.Stop("local data collection stopped");
+-        }
+-
+-        private async void OnAdvancedMetricsTimerElapsed(object? sender, ElapsedEventArgs e)
+-        {
+-            if (Interlocked.Exchange(ref _advancedMetricsExecutionGate, 1) == 1)
+-                return;
+-
+-            try
+-            {
+-                if (_appSettings == null || _appSettings.EnabledMetrics == null)
+-                {
+-                    SaveLogToDatabase("WARNING", "Advanced metrics collection skipped because settings are not ready.");
+-                    return;
+-                }
+-
+-                await Task.Run(() =>
+-                {
+-                    var collector = new AdvancedMetricsCollector(
+-                        _appSettings.EnabledMetrics,
+-                        _appSettings.TopProcessesCount,
+-                        _appSettings.NetworkTraceTargetIP);
+-
+-                    var metrics = collector.Collect();
+-                    _localDb.SaveUserActivity(QueueTargets.AdvancedSystemMetrics, metrics);
+-                });
+-            }
+-            catch (Exception ex)
+-            {
+-                SaveLogToDatabase("ERROR", $"Error queuing metrics: {ex.Message}");
+-            }
+-            finally
+-            {
+-                Interlocked.Exchange(ref _advancedMetricsExecutionGate, 0);
++                _logger.LogWarning("Wake-up settings refresh failed: {Message}", ex.Message);
+             }
++            _permissions.EvaluateAll();
++            _settingsRefreshWorker.Start();
++            _permissionMonitorWorker.Start();
++            _commandManager.Start();
+         }
+ 
+         private void TestKafkaConnectionAtStartup()
+@@ -765,122 +208,54 @@ namespace Ergonomy
+             {
+                 try
+                 {
+-                    if (_kafkaConnect == null)
+-                        return;
+-
+                     var startupLog = new
+                     {
+                         CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                         CollectedAt_Shamsi =
+-                            $"{pc.GetYear(currentTime):0000}/" +
+-                            $"{pc.GetMonth(currentTime):00}/" +
+-                            $"{pc.GetDayOfMonth(currentTime):00} " +
+-                            $"{currentTime:HH:mm:ss}",
+-
++                            $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/" +
++                            $"{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
+                         LogLevel = "INFO",
+                         Message = "Application Started and Kafka delivery probe succeeded.",
+-                        WindowsUsername = _windowsUsername,
+-                        WindowsSid = _windowsSid,
++                        WindowsUsername = _identity.WindowsUsername,
++                        WindowsSid = _identity.WindowsSid,
+                         MachineName = Environment.MachineName,
+                         Category = "KafkaStartupProbe"
+                     };
+ 
+-                    await _kafkaConnect.SendAppLogAsync(
+-                        Guid.NewGuid().ToString("N"),
+-                        startupLog);
+-
+-                    Console.WriteLine(
+-                        $"[{DateTime.Now:HH:mm:ss}] " +
+-                        $"🚀 [KAFKA OK] Startup delivery probe succeeded.");
++                    await _kafkaConnect.SendAppLogAsync(Guid.NewGuid().ToString("N"), startupLog);
++                    _logger.LogInformation("[KAFKA OK] Startup delivery probe succeeded.");
+                 }
+                 catch (Exception ex)
+                 {
+-                    Console.WriteLine(
+-                        $"[{DateTime.Now:HH:mm:ss}] " +
+-                        $"❌ [KAFKA ERROR] Startup delivery probe failed: " +
+-                        $"{ex.Message}");
++                    _logger.LogWarning("Startup delivery probe failed: {Message}", ex.Message);
+                 }
+             });
+         }
+ 
+-
+-        private string GetWindowsSID()
+-        {
+-            try { return WindowsIdentity.GetCurrent()?.User?.Value ?? "UNKNOWN"; }
+-            catch { return "UNKNOWN"; }
+-        }
+-
+-        private void SaveLogToDatabase(string level, string message)
+-        {
+-            DateTime currentTime = DateTime.Now;
+-            PersianCalendar pc = new PersianCalendar();
+-
+-            try
+-            {
+-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [{level}] {message}");
+-
+-                var logEntry = new
+-                {
+-                    CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+-                    CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
+-                    LogLevel = level,
+-                    Message = message,
+-                    WindowsUsername = _windowsUsername,
+-                    WindowsSid = _windowsSid,
+-                    MachineName = Environment.MachineName
+-                };
+-
+-                _localDb?.SaveUserActivity("app_logs", logEntry);
+-            }
+-            catch
+-            {
+-            }
+-        }
+-
+-        private void StopTimer(ref System.Timers.Timer? timer)
+-        {
+-            if (timer == null)
+-                return;
+-
+-            try
+-            {
+-                timer.Stop();
+-                timer.Dispose();
+-            }
+-            catch
+-            {
+-            }
+-            finally
+-            {
+-                timer = null;
+-            }
+-        }
+-
+         protected override void Dispose(bool disposing)
+         {
+             if (disposing && !_isDisposed)
+             {
+                 _isDisposed = true;
+ 
+-                SaveLogToDatabase("INFO", "Application shutting down.");
++                _settingsService.SettingsChanged -= OnSettingsChanged;
++
++                _messageLog.Log("INFO", "Application shutting down.");
+ 
+-                StopTimer(ref _healthCheckTimer);
+-                StopTimer(ref _wakeUpTimer);
+-                StopTimer(ref _settingsUpdateTimer);
+-                StopTimer(ref _advancedMetricsTimer);
+-                StopTimer(ref _sqlitePermissionTimer);
+-                StopTimer(ref _kafkaPermissionTimer);
++                _settingsRefreshWorker.Stop();
++                _healthMonitorWorker.Stop();
++                _permissionMonitorWorker.Stop();
++                _advancedMetricsWorker.Stop();
+ 
+-                _syncEngine?.Stop();
+-                _ergonomyManager?.Stop("application shutdown");
++                _syncEngine.Stop("application shutdown");
++                _ergonomyManager.Stop("application shutdown");
+ 
+-                _ergonomyManager?.Dispose();
++                _commandManager.Dispose();
++                _metricsEndpoint.Dispose();
++                _wakeUpScheduler.Dispose();
++                _kafkaConnect.Dispose();
+                 _notifyIcon?.Dispose();
+                 _uiAnchor.Dispose();
+-                _kafkaConnect?.Dispose();
+-                _commandManager?.Dispose();
+-                _httpClient.Dispose();
+-                _settingsRefreshLock.Dispose();
+             }
+ 
+             base.Dispose(disposing);
+diff --git a/Observability/AgentMetrics.cs b/Observability/AgentMetrics.cs
+new file mode 100644
+index 0000000..b55f43d
+--- /dev/null
++++ b/Observability/AgentMetrics.cs
+@@ -0,0 +1,164 @@
++using System;
++using System.Collections.Concurrent;
++using System.Collections.Generic;
++using System.Linq;
++using System.Text;
++
++namespace Ergonomy.Observability
++{
++    /// <summary>
++    /// Minimal, thread-safe in-process metric registry for Prometheus text exposition.
++    /// This intentionally does NOT use Kafka, SQLite, or ClickHouse for observability:
++    /// the central Prometheus server scrapes the Agent over HTTP.
++    /// Uses only low-cardinality labels (machine name / agent id / environment).
++    /// </summary>
++    public sealed class AgentMetrics
++    {
++        private readonly ConcurrentDictionary<string, MetricFamily> _families =
++            new(StringComparer.OrdinalIgnoreCase);
++
++        public Counter IncrementCounter(string name, string help, long delta = 1)
++        {
++            var family = GetOrAddFamily(name, help, "counter");
++            family.AddPoint(null, delta);
++            return new Counter(family.Name);
++        }
++
++        public Counter IncrementCounter(
++            string name, string help, long delta, IReadOnlyDictionary<string, string> labels)
++        {
++            var family = GetOrAddFamily(name, help, "counter");
++            family.AddPoint(labels, delta);
++            return new Counter(family.Name);
++        }
++
++        public void SetGauge(string name, string help, double value)
++        {
++            var family = GetOrAddFamily(name, help, "gauge");
++            family.AddPoint(null, value);
++        }
++
++        public void SetGauge(
++            string name, string help, double value, IReadOnlyDictionary<string, string> labels)
++        {
++            var family = GetOrAddFamily(name, help, "gauge");
++            family.AddPoint(labels, value);
++        }
++
++        public void IncrementGauge(string name, string help, double delta)
++        {
++            var family = GetOrAddFamily(name, help, "gauge");
++            family.AddPoint(null, delta);
++        }
++
++        private MetricFamily GetOrAddFamily(string name, string help, string type)
++        {
++            return _families.GetOrAdd(name, _ => new MetricFamily(name, help, type));
++        }
++
++        public string RenderPrometheusText()
++        {
++            var sb = new StringBuilder();
++            foreach (var family in _families.Values.OrderBy(f => f.Name, StringComparer.Ordinal))
++            {
++                sb.Append("# HELP ").Append(family.Name).Append(' ').Append(family.Help).Append('\n');
++                sb.Append("# TYPE ").Append(family.Name).Append(' ').Append(family.Type).Append('\n');
++
++                foreach (var point in family.GetOrderedPoints())
++                {
++                    sb.Append(family.Name);
++                    if (point.Labels != null && point.Labels.Count > 0)
++                    {
++                        sb.Append('{').Append(
++                            string.Join(",", point.Labels.Select(kv =>
++                                $"{kv.Key}=\"{EscapeLabel(kv.Value)}\""))).Append('}');
++                    }
++                    sb.Append(' ').Append(point.Value.ToString(System.Globalization.CultureInfo.InvariantCulture))
++                        .Append('\n');
++                }
++            }
++            return sb.ToString();
++        }
++
++        private static string EscapeLabel(string value)
++        {
++            return value.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n");
++        }
++
++        private sealed class MetricFamily
++        {
++            public string Name { get; }
++            public string Help { get; }
++            public string Type { get; }
++            private readonly ConcurrentDictionary<string, MetricPoint> _points = new();
++
++            public MetricFamily(string name, string help, string type)
++            {
++                Name = name;
++                Help = help;
++                Type = type;
++            }
++
++            public void AddPoint(IReadOnlyDictionary<string, string>? labels, double value)
++            {
++                string key = labels == null
++                    ? string.Empty
++                    : string.Join("|", labels.Select(kv => kv.Key + "=" + kv.Value).OrderBy(k => k));
++
++                if (Type == "gauge")
++                {
++                    // Gauges overwrite the current value.
++                    _points.AddOrUpdate(
++                        key,
++                        _ => new MetricPoint(labels, value),
++                        (_, existing) => { existing.Set(value); return existing; });
++                }
++                else
++                {
++                    // Counters accumulate.
++                    _points.AddOrUpdate(
++                        key,
++                        _ => new MetricPoint(labels, value),
++                        (_, existing) => { existing.Add(value); return existing; });
++                }
++            }
++
++            public IEnumerable<MetricPoint> GetOrderedPoints() =>
++                _points.Values.OrderBy(p => p.LabelsKey, StringComparer.Ordinal);
++        }
++
++        private sealed class MetricPoint
++        {
++            private double _value;
++            private readonly object _sync = new();
++            public IReadOnlyDictionary<string, string>? Labels { get; }
++            public string LabelsKey { get; }
++            public double Value { get { lock (_sync) return _value; } }
++
++            public MetricPoint(IReadOnlyDictionary<string, string>? labels, double value)
++            {
++                Labels = labels;
++                LabelsKey = labels == null
++                    ? string.Empty
++                    : string.Join("|", labels.Select(kv => kv.Key + "=" + kv.Value).OrderBy(k => k));
++                _value = value;
++            }
++
++            public void Add(double delta)
++            {
++                lock (_sync) _value += delta;
++            }
++
++            public void Set(double value)
++            {
++                lock (_sync) _value = value;
++            }
++        }
++    }
++
++    public readonly struct Counter
++    {
++        public string Name { get; }
++        public Counter(string name) => Name = name;
++    }
++}
+diff --git a/Observability/MetricsConfig.cs b/Observability/MetricsConfig.cs
+new file mode 100644
+index 0000000..56a6928
+--- /dev/null
++++ b/Observability/MetricsConfig.cs
+@@ -0,0 +1,43 @@
++using System;
++
++namespace Ergonomy.Observability
++{
++    /// <summary>
++    /// Infrastructure configuration for the internal Prometheus scrape endpoint. Resolved once
++    /// from the machine environment at the composition root so services never read environment
++    /// variables directly. Infrastructure settings remain authoritative in the provider/composition
++    /// root (they are not delegated to the Settings API).
++    /// </summary>
++    public sealed class MetricsConfig
++    {
++        public int Port { get; }
++        public string Environment { get; }
++        public string AgentId { get; }
++
++        public MetricsConfig(int port, string environment, string agentId)
++        {
++            Port = port;
++            Environment = environment;
++            AgentId = agentId;
++        }
++
++        public static MetricsConfig FromEnvironment()
++        {
++            int port = 9100;
++            string? portEnv = Environment.GetEnvironmentVariable(
++                "ERGONOMY_METRICS_PORT", EnvironmentVariableTarget.Machine);
++            if (int.TryParse(portEnv, out int parsed) && parsed > 0 && parsed < 65536)
++                port = parsed;
++
++            string environment = Environment.GetEnvironmentVariable(
++                "ERGONOMY_ENVIRONMENT", EnvironmentVariableTarget.Machine)
++                ?? "production";
++
++            string agentId = Environment.GetEnvironmentVariable(
++                "ERGONOMY_AGENT_ID", EnvironmentVariableTarget.Machine)
++                ?? Environment.MachineName;
++
++            return new MetricsConfig(port, environment, agentId);
++        }
++    }
++}
+diff --git a/Observability/MetricsEndpoint.cs b/Observability/MetricsEndpoint.cs
+new file mode 100644
+index 0000000..718cf18
+--- /dev/null
++++ b/Observability/MetricsEndpoint.cs
+@@ -0,0 +1,199 @@
++using System;
++using System.Net;
++using System.Threading;
++using System.Threading.Tasks;
++using Microsoft.Extensions.Logging;
++
++namespace Ergonomy.Observability
++{
++    /// <summary>
++    /// Internal HTTP endpoint exposing Prometheus text metrics. The central Prometheus server
++    /// scrapes this URL directly (network/firewall rules allow the scrape). No persistence
++    /// pipeline (Kafka/ClickHouse/SQLite) is used for observability metrics.
++    /// </summary>
++    public sealed class MetricsEndpoint : IDisposable
++    {
++        private readonly AgentMetrics _metrics;
++        private readonly MachineIdentityLabels _identity;
++        private readonly ILogger<MetricsEndpoint> _logger;
++        private HttpListener? _listener;
++        private CancellationTokenSource? _cts;
++        private Task? _loop;
++        private bool _disposed;
++
++        public MetricsEndpoint(
++            AgentMetrics metrics,
++            MachineIdentityLabels identity,
++            ILogger<MetricsEndpoint> logger)
++        {
++            _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
++            _identity = identity ?? throw new ArgumentNullException(nameof(identity));
++            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
++        }
++
++        public string BindUrl { get; private set; } = "127.0.0.1:9090";
++
++        public void Start(int port)
++        {
++            if (_listener != null)
++                return;
++
++            // Prefer a wildcard bind so the central Prometheus server can scrape the Agent.
++            bool bound = TryStart($"http://+:{port}/");
++
++            if (!bound)
++            {
++                // Fall back to loopback so the Agent can still be scraped on the same machine.
++                _logger.LogWarning(
++                    "Metrics endpoint could not bind to wildcard prefix on port {Port}. " +
++                    "Falling back to loopback. Apply a URL ACL / firewall rule for scraping.",
++                    port);
++                bound = TryStart($"http://127.0.0.1:{port}/");
++            }
++
++            if (!bound)
++            {
++                _logger.LogError(
++                    "Metrics endpoint could not be started on any prefix; continuing without metrics.");
++                _listener = null;
++                return;
++            }
++
++            _cts = new CancellationTokenSource();
++            _loop = Task.Run(() => ServeLoopAsync(_listener, _cts.Token), _cts.Token);
++            _logger.LogInformation("Prometheus metrics endpoint listening on {Url}", BindUrl);
++        }
++
++        private bool TryStart(string prefix)
++        {
++            try
++            {
++                var listener = new HttpListener();
++                listener.Prefixes.Add(prefix);
++                listener.Start();
++                _listener = listener;
++                BindUrl = prefix;
++                return true;
++            }
++            catch (HttpListenerException ex)
++            {
++                _logger.LogDebug("Metrics bind attempt to {Prefix} failed: {Message}", prefix, ex.Message);
++                return false;
++            }
++        }
++
++        private async Task ServeLoopAsync(HttpListener listener, CancellationToken ct)
++        {
++            while (!ct.IsCancellationRequested)
++            {
++                HttpListenerContext ctx;
++                try
++                {
++                    ctx = await listener.GetContextAsync().ConfigureAwait(false);
++                }
++                catch (ObjectDisposedException)
++                {
++                    break;
++                }
++                catch (HttpListenerException)
++                {
++                    break;
++                }
++                catch (Exception ex)
++                {
++                    _logger.LogError(ex, "Metrics endpoint accept failed.");
++                    continue;
++                }
++
++                _ = Task.Run(() => HandleRequest(ctx));
++            }
++        }
++
++        private void HandleRequest(HttpListenerContext ctx)
++        {
++            try
++            {
++                string path = ctx.Request.Url?.AbsolutePath ?? "/";
++                bool isMetrics = path.Equals("/metrics", StringComparison.OrdinalIgnoreCase)
++                                 || path.Equals("/stats/prometheus", StringComparison.OrdinalIgnoreCase)
++                                 || path.Equals("/", StringComparison.OrdinalIgnoreCase);
++
++                byte[] body;
++                string contentType;
++                int status;
++
++                if (isMetrics)
++                {
++                    body = System.Text.Encoding.UTF8.GetBytes(
++                        RenderWithIdentity(_metrics.RenderPrometheusText()));
++                    contentType = "text/plain; version=0.0.4; charset=utf-8";
++                    status = 200;
++                }
++                else
++                {
++                    body = System.Text.Encoding.UTF8.GetBytes("Not found.\n");
++                    contentType = "text/plain; charset=utf-8";
++                    status = 404;
++                }
++
++                ctx.Response.StatusCode = status;
++                ctx.Response.ContentType = contentType;
++                ctx.Response.OutputStream.Write(body, 0, body.Length);
++            }
++            catch (Exception ex)
++            {
++                _logger.LogError(ex, "Metrics request handling failed.");
++                try { ctx.Response.StatusCode = 500; ctx.Response.Close(); } catch { }
++            }
++            finally
++            {
++                try { ctx.Response.OutputStream.Close(); } catch { }
++            }
++        }
++
++        private string RenderWithIdentity(string body)
++        {
++            // Inject stable, low-cardinality identity labels (machine name, env, agent id).
++            // No usernames, session ids, or message ids.
++            return body
++                + $"agent_info{{machine=\"{Escape(_identity.MachineName)}\",environment=\"{Escape(_identity.Environment)}\",agent_id=\"{Escape(_identity.AgentId)}\"}} 1\n";
++        }
++
++        private static string Escape(string v) =>
++            v.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n");
++
++        public void Stop()
++        {
++            _cts?.Cancel();
++            try { _listener?.Stop(); } catch { }
++            try { _listener?.Close(); } catch { }
++            try { _loop?.Wait(TimeSpan.FromSeconds(3)); } catch { }
++        }
++
++        public void Dispose()
++        {
++            if (_disposed)
++                return;
++            _disposed = true;
++
++            Stop();
++            _cts?.Dispose();
++            _listener?.Close();
++        }
++    }
++
++    /// <summary>Stable identity labels used only in metrics (low-cardinality).</summary>
++    public sealed class MachineIdentityLabels
++    {
++        public string MachineName { get; }
++        public string Environment { get; }
++        public string AgentId { get; }
++
++        public MachineIdentityLabels(string machineName, string environment, string agentId)
++        {
++            MachineName = machineName;
++            Environment = environment;
++            AgentId = agentId;
++        }
++    }
++}
+diff --git a/Program.cs b/Program.cs
+index 942dc11..a9e57dc 100644
+--- a/Program.cs
++++ b/Program.cs
+@@ -1,15 +1,49 @@
++using System;
++using System.Threading;
++using System.Windows.Forms;
++using Microsoft.Extensions.DependencyInjection;
++using Ergonomy.Configuration;
++using Ergonomy.Services;
++
+ namespace Ergonomy
+ {
+     internal static class Program
+     {
+         /// <summary>
+         ///  The main entry point for the application.
++        ///  A DI service provider (composition root) is built once on the UI thread and injected
++        ///  into the thin MainApplicationContext shell. The WinForms STA message loop remains the
++        ///  process pump (the generic-host run loop is intentionally not used).
+         /// </summary>
+         [STAThread]
+         static void Main()
+         {
+             ApplicationConfiguration.Initialize();
+-            Application.Run(new MainApplicationContext());
++
++            // Hidden UI anchor / marshalling control, created on the UI thread. It is used to
++            // marshal alarm + notification forms onto the UI thread from worker/timer threads.
++            var uiAnchor = new Control();
++            try
++            {
++                uiAnchor.CreateControl();
++            }
++            catch (Exception ex)
++            {
++                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ [Ergonomy] Could not create UI anchor control: {ex.Message}");
++            }
++
++            // Reset the WinForms SynchronizationContext so the blocking startup Settings-API refresh
++            // (performed inside MainApplicationContext) does not deadlock the UI thread before the
++            // message loop starts. Application.Run installs a fresh WindowsFormsSynchronizationContext.
++            SynchronizationContext.SetSynchronizationContext(null);
++
++            using var provider = ServiceRegistrar.Build(uiAnchor);
++
++            var settingsService = provider.GetRequiredService<ISettingsService>();
++            settingsService.LoadBootstrap();
++
++            using var context = provider.GetRequiredService<MainApplicationContext>();
++            Application.Run(context);
+         }
+     }
+ }
+diff --git a/REPORT.md b/REPORT.md
+index 5b983a5..1d21812 100644
+--- a/REPORT.md
++++ b/REPORT.md
+@@ -205,3 +205,41 @@ This is preserved; my fix does **not** move any work into the hook callback.
+ 11. Change API settings `AllowErgonomyCollection` true→false → confirm hooks/timers
+     stop (`Manager stopped because: AllowErgonomyCollection is false`); then
+     false→true → confirm it resumes **without** restarting the app.
++
++## Architecture Refactor (second task)
++
++### What changed
++MainApplicationContext is now a thin UI/lifecycle shell. Object creation moved to a DI
++composition root; timers moved to workers; settings/sync/logging/observability extracted.
++
++### Files modified
++- `MainApplicationContext.cs` — reduced to a shell (no timers, no settings/sync/metrics logic).
++- `Program.cs` — builds the DI ServiceProvider, loads bootstrap, runs the app context.
++- `Ergonomy.csproj` — added Microsoft.Extensions.DependencyInjection/Logging/Logging.Abstractions.
++- `SyncEngine.cs` — converted to a cancelable PeriodicTimer worker; added Prometheus metrics.
++- `CommandManager.cs` — `dynamic` -> typed `AppSettings`.
++- `DatabaseManager.cs` — removed standalone ConfigurationBuilder / appsettings read.
++- `ErgonomyManager.cs` — deps injected (MachineIdentity, ActivityMonitor, AlarmManager, DataLogger).
++- `Hooks/ActivityMonitor.cs` — owns/disposes the hook; disposal guard.
++
++### New files
++- `Configuration/AppDefaults.cs`, `Configuration/SettingsService.cs`
++- `Services/`: `ServiceRegistrar.cs`, `WorkerBase.cs`, `SettingsRefreshWorker.cs`,
++  `HealthMonitorWorker.cs`, `PermissionMonitorWorker.cs`, `AdvancedMetricsWorker.cs`,
++  `PermissionsEvaluator.cs`, `HealthCheckService.cs`, `MessageLogService.cs`,
++  `MachineIdentity.cs`, `WakeUpScheduler.cs`
++- `Logging/`: `ConsoleStructuredLogger.cs`, `LogEvents.cs`
++- `Observability/`: `AgentMetrics.cs`, `MetricsEndpoint.cs`, `MetricsConfig.cs`
++
++### Remaining risks
++- Build/compile was NOT run (no .NET SDK / NuGet / network in this sandbox). Full compile + runtime
++  verification required on a Windows/.NET 9 host. Commands in knowledge.txt.
++- DI uses a ServiceProvider composition root instead of a Generic Host `.Run()` loop, so that the
++  WinForms STA message loop (Application.Run) remains the process pump. This is a deliberate,
++  documented deviation from "Add a Generic Host"; migrating to Host.Run would change the process
++  lifecycle and require the app to run as a console/windowed host.
++- Structured log output format changed (intended). Single PermissionMonitorWorker replaces the two
++  separate sqlite/kafka permission timers (uses the smaller interval; idempotent).
++- Metrics endpoint bind requires a URL ACL/firewall rule for wildcard; falls back to loopback.
++- Remaining direct env access: HealthCheckService reads ERGONOMY_SQLITE_CONNECTION_STRING (legacy
++  health probe) — not centralized; MetricsConfig/EnvironmentSettingsProvider are the providers.
+diff --git a/Services/AdvancedMetricsWorker.cs b/Services/AdvancedMetricsWorker.cs
+new file mode 100644
+index 0000000..b4fd63f
+--- /dev/null
++++ b/Services/AdvancedMetricsWorker.cs
+@@ -0,0 +1,80 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Configuration;
++using Ergonomy.Database;
++using Ergonomy.Logging;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Periodically collects advanced system metrics and enqueues them on the SQLite outbox.
++    /// Replaces the StartLocalDataCollection / OnAdvancedMetricsTimerElapsed logic in
++    /// MainApplicationContext. Uses a non-overlapping gate so a slow collection never overlaps
++    /// the next tick.
++    /// </summary>
++    public sealed class AdvancedMetricsWorker : WorkerBase
++    {
++        private readonly ISettingsService _settingsService;
++        private readonly LocalDatabaseManager _localDb;
++        private int _gate;
++
++        public AdvancedMetricsWorker(
++            ISettingsService settingsService,
++            LocalDatabaseManager localDb,
++            ILogger<AdvancedMetricsWorker> logger)
++            : base(logger)
++        {
++            _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
++            _localDb = localDb ?? throw new ArgumentNullException(nameof(localDb));
++        }
++
++        protected override string Name => nameof(AdvancedMetricsWorker);
++
++        protected override TimeSpan GetInterval()
++        {
++            double minutes = _settingsService.Current.AdvancedMetricsIntervalMinutes;
++            return TimeSpan.FromMinutes(minutes > 0 ? minutes : 120);
++        }
++
++        protected override async Task DoWorkAsync(CancellationToken ct)
++        {
++            if (Interlocked.Exchange(ref _gate, 1) != 0)
++                return;
++
++            try
++            {
++                AppSettings s = _settingsService.Current;
++                if (s.EnabledMetrics == null)
++                {
++                    Logger.LogWarning(
++                        "Advanced metrics collection skipped because settings are not ready.");
++                    return;
++                }
++
++                var collector = new AdvancedMetricsCollector(
++                    s.EnabledMetrics,
++                    s.TopProcessesCount,
++                    s.NetworkTraceTargetIP);
++
++                var metrics = await Task.Run(
++                    () => collector.Collect(),
++                    ct).ConfigureAwait(false);
++
++                _localDb.SaveUserActivity(QueueTargets.AdvancedSystemMetrics, metrics);
++            }
++            catch (OperationCanceledException)
++            {
++            }
++            catch (Exception ex)
++            {
++                Logger.LogError(ex, "Error collecting advanced metrics.");
++            }
++            finally
++            {
++                Interlocked.Exchange(ref _gate, 0);
++            }
++        }
++    }
++}
+diff --git a/Services/HealthCheckService.cs b/Services/HealthCheckService.cs
+new file mode 100644
+index 0000000..0cd7d8a
+--- /dev/null
++++ b/Services/HealthCheckService.cs
+@@ -0,0 +1,124 @@
++using System;
++using System.Diagnostics;
++using System.Net.Http;
++using System.Threading.Tasks;
++using Microsoft.Data.Sqlite;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Configuration;
++using Ergonomy.Logging;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Performs the API / SQLite / self-performance health probes and routes the results to the
++    /// app_logs outbox. Replaces the health-check methods that lived in MainApplicationContext.
++    /// </summary>
++    public sealed class HealthCheckService
++    {
++        private readonly ISettingsService _settingsService;
++        private readonly MessageLogService _log;
++        private readonly ILogger<HealthCheckService> _logger;
++
++        /// <summary>Invoked when SQLite becomes inaccessible; wired by the lifecycle shell.</summary>
++        public Action<string>? OnSqliteCriticalFailure { get; set; }
++
++        public HealthCheckService(
++            ISettingsService settingsService,
++            MessageLogService log,
++            ILogger<HealthCheckService> logger)
++        {
++            _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
++            _log = log ?? throw new ArgumentNullException(nameof(log));
++            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
++        }
++
++        public async Task RunAllAsync()
++        {
++            await CheckApiHealthAsync().ConfigureAwait(false);
++            await CheckSqliteHealthAsync().ConfigureAwait(false);
++            await CheckSelfPerformanceAsync().ConfigureAwait(false);
++        }
++
++        private async Task CheckApiHealthAsync()
++        {
++            string? apiUrl = _settingsService.Current.API?.Settings;
++            if (string.IsNullOrWhiteSpace(apiUrl))
++                return;
++
++            try
++            {
++                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
++                using var response = await client.GetAsync(apiUrl).ConfigureAwait(false);
++                if (response.IsSuccessStatusCode)
++                {
++                    _log.LogHealth("INFO", "Settings API is healthy and accessible.", "ApiHealth");
++                }
++                else
++                {
++                    _log.LogHealth("WARN", $"Settings API returned status code: {response.StatusCode}", "ApiHealth");
++                }
++            }
++            catch (Exception ex)
++            {
++                _log.LogHealth("ERROR", $"API Health Check Error: {ex.Message}", "ApiHealth");
++            }
++        }
++
++        private Task CheckSqliteHealthAsync()
++        {
++            string sqliteDbPath = Environment.GetEnvironmentVariable(
++                "ERGONOMY_SQLITE_CONNECTION_STRING",
++                EnvironmentVariableTarget.Machine)
++                ?? "Data Source=localbuffer.db";
++
++            string statusMessage;
++            string logLevel;
++
++            try
++            {
++                using var conn = new SqliteConnection(sqliteDbPath);
++                conn.Open();
++                using var cmd = conn.CreateCommand();
++                cmd.CommandText = "SELECT 1;";
++                cmd.ExecuteScalar();
++
++                statusMessage = "SQLite database is healthy and accessible.";
++                logLevel = "INFO";
++            }
++            catch (Exception ex)
++            {
++                statusMessage = $"SQLite Error (Possible lock or corruption): {ex.Message}";
++                logLevel = "ERROR";
++                _logger.LogError(
++                    LogEvents.HealthFailedId,
++                    "SQLite is inaccessible. Data collection cannot continue: {Message}",
++                    ex.Message);
++                OnSqliteCriticalFailure?.Invoke("SQLite is inaccessible. Data collection cannot continue.");
++            }
++
++            _log.LogHealth(logLevel, statusMessage, "SqliteHealth");
++            return Task.CompletedTask;
++        }
++
++        private Task CheckSelfPerformanceAsync()
++        {
++            try
++            {
++                using var process = Process.GetCurrentProcess();
++                long memoryUsedMB = process.WorkingSet64 / (1024 * 1024);
++
++                string statusMessage =
++                    $"Agent Performance: Memory Usage is {memoryUsedMB} MB. Thread Count: {process.Threads.Count}";
++                string logLevel = memoryUsedMB > 500 ? "WARN" : "INFO";
++
++                _log.LogHealth(logLevel, statusMessage, "AgentPerformance");
++            }
++            catch (Exception ex)
++            {
++                _log.LogHealth("ERROR", $"Failed to check self performance: {ex.Message}", "AgentPerformance");
++            }
++
++            return Task.CompletedTask;
++        }
++    }
++}
+diff --git a/Services/HealthMonitorWorker.cs b/Services/HealthMonitorWorker.cs
+new file mode 100644
+index 0000000..15718d9
+--- /dev/null
++++ b/Services/HealthMonitorWorker.cs
+@@ -0,0 +1,36 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++using Microsoft.Extensions.Logging;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Periodically runs the API/SQLite/self-performance health probes. Runs once immediately
++    /// at startup (mirrors the previous Task.Run(PerformAllHealthChecksAsync)) and then on a
++    /// fixed 15-minute interval.
++    /// </summary>
++    public sealed class HealthMonitorWorker : WorkerBase
++    {
++        private readonly HealthCheckService _healthCheckService;
++
++        public HealthMonitorWorker(
++            HealthCheckService healthCheckService,
++            ILogger<HealthMonitorWorker> logger)
++            : base(logger)
++        {
++            _healthCheckService = healthCheckService ?? throw new ArgumentNullException(nameof(healthCheckService));
++        }
++
++        protected override string Name => nameof(HealthMonitorWorker);
++
++        protected override bool ImmediateFirstRun => true;
++
++        protected override TimeSpan GetInterval() => TimeSpan.FromMinutes(15);
++
++        protected override async Task DoWorkAsync(CancellationToken ct)
++        {
++            await _healthCheckService.RunAllAsync().ConfigureAwait(false);
++        }
++    }
++}
+diff --git a/Services/MachineIdentity.cs b/Services/MachineIdentity.cs
+new file mode 100644
+index 0000000..a92516a
+--- /dev/null
++++ b/Services/MachineIdentity.cs
+@@ -0,0 +1,25 @@
++using System;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Immutable stable identity of the device/agent used for logging and payload labels.
++    /// Avoids retrieving WindowsIdentity multiple times and keeps usernames out of
++    /// high-cardinality observability labels.
++    /// </summary>
++    public sealed class MachineIdentity
++    {
++        public string WindowsSid { get; }
++        public string WindowsUsername { get; }
++        public string MachineName { get; }
++        public string SessionGuid { get; }
++
++        public MachineIdentity(string windowsSid, string windowsUsername, string machineName)
++        {
++            WindowsSid = windowsSid;
++            WindowsUsername = windowsUsername;
++            MachineName = machineName;
++            SessionGuid = Guid.NewGuid().ToString();
++        }
++    }
++}
+diff --git a/Services/MessageLogService.cs b/Services/MessageLogService.cs
+new file mode 100644
+index 0000000..a952014
+--- /dev/null
++++ b/Services/MessageLogService.cs
+@@ -0,0 +1,114 @@
++using System;
++using System.Globalization;
++using System.Threading;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Database;
++using Ergonomy.Configuration;
++using Ergonomy.Services;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Centralizes the "app_logs" console + SQLite-outbox diagnostics channel that previously
++    /// lived inside MainApplicationContext (SaveLogToDatabase). Reusable by any worker/service
++    /// without coupling them to the UI shell.
++    /// </summary>
++    public sealed class MessageLogService : IDisposable
++    {
++        private readonly LocalDatabaseManager _localDb;
++        private readonly MachineIdentity _identity;
++        private readonly ILogger<MessageLogService> _logger;
++        private int _disposed;
++
++        public MessageLogService(
++            LocalDatabaseManager localDb,
++            MachineIdentity identity,
++            ILogger<MessageLogService> logger)
++        {
++            _localDb = localDb ?? throw new ArgumentNullException(nameof(localDb));
++            _identity = identity ?? throw new ArgumentNullException(nameof(identity));
++            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
++        }
++
++        /// <summary>Writes a diagnostic entry to stdout and enqueues it on the SQLite app_logs outbox.</summary>
++        public void Log(string level, string message)
++        {
++            _logger.LogInformation(
++                "AgentLog Level={LogLevel} Message={Message}",
++                level,
++                message);
++
++            DateTime currentTime = DateTime.Now;
++            PersianCalendar pc = new PersianCalendar();
++
++            var logEntry = new
++            {
++                CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
++                CollectedAt_Shamsi =
++                    $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/" +
++                    $"{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
++                LogLevel = level,
++                Message = message,
++                WindowsUsername = _identity.WindowsUsername,
++                WindowsSid = _identity.WindowsSid,
++                MachineName = _identity.MachineName
++            };
++
++            try
++            {
++                _localDb.SaveUserActivity(QueueTargets.AppLogs, logEntry);
++            }
++            catch (Exception ex)
++            {
++                _logger.LogError(ex, "Failed to enqueue app_logs entry.");
++            }
++        }
++
++        /// <summary>Logs a health-check message to the app_logs outbox and synchronously reports status.</summary>
++        public void LogHealth(
++            string logLevel,
++            string message,
++            string category,
++            bool reportConsole = true)
++        {
++            DateTime currentTime = DateTime.Now;
++            PersianCalendar pc = new PersianCalendar();
++
++            var logObj = new
++            {
++                CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
++                CollectedAt_Shamsi =
++                    $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/" +
++                    $"{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
++                LogLevel = logLevel,
++                Message = message,
++                WindowsUsername = _identity.WindowsUsername,
++                WindowsSid = _identity.WindowsSid,
++                MachineName = Environment.MachineName,
++                Category = category
++            };
++
++            if (reportConsole)
++                _logger.LogInformation("{Category}: {Message}", category, message);
++
++            try
++            {
++                var result = _localDb.SaveUserActivity(QueueTargets.AppLogs, logObj);
++                if (result != OutboxSaveResult.Saved)
++                    _logger.LogWarning(
++                        "Health log for {Category} not saved. Result: {Result}",
++                        category, result);
++            }
++            catch (Exception ex)
++            {
++                _logger.LogError(ex, "Failed to enqueue health log for {Category}.", category);
++            }
++        }
++
++        public void Dispose()
++        {
++            if (Interlocked.Exchange(ref _disposed, 1) != 0)
++                return;
++        }
++    }
++}
+diff --git a/Services/PermissionMonitorWorker.cs b/Services/PermissionMonitorWorker.cs
+new file mode 100644
+index 0000000..58d0da2
+--- /dev/null
++++ b/Services/PermissionMonitorWorker.cs
+@@ -0,0 +1,51 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Configuration;
++using Ergonomy.Logging;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Periodically re-evaluates runtime permissions (SQLite/Kafka/ergonomics) and starts/stops
++    /// the associated components. Replaces the StartSqlitePermissionTimer / StartKafkaPermissionTimer
++    /// in MainApplicationContext. The interval is the smaller of the SQLite and Kafka permission
++    /// retry intervals so both gates are re-checked promptly.
++    /// </summary>
++    public sealed class PermissionMonitorWorker : WorkerBase
++    {
++        private readonly ISettingsService _settingsService;
++        private readonly PermissionsEvaluator _permissions;
++
++        public PermissionMonitorWorker(
++            ISettingsService settingsService,
++            PermissionsEvaluator permissions,
++            ILogger<PermissionMonitorWorker> logger)
++            : base(logger)
++        {
++            _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
++            _permissions = permissions ?? throw new ArgumentNullException(nameof(permissions));
++        }
++
++        protected override string Name => nameof(PermissionMonitorWorker);
++
++        protected override TimeSpan GetInterval()
++        {
++            AppSettings s = _settingsService.Current;
++            double sqliteHours = s.PermissionSqliteRetryIntervalHours > 0
++                ? s.PermissionSqliteRetryIntervalHours : 1;
++            double kafkaHours = s.PermissionKafkaRetryIntervalHours > 0
++                ? s.PermissionKafkaRetryIntervalHours : 1;
++
++            double hours = Math.Min(sqliteHours, kafkaHours);
++            return TimeSpan.FromHours(hours);
++        }
++
++        protected override async Task DoWorkAsync(CancellationToken ct)
++        {
++            await Task.Yield();
++            _permissions.EvaluateAll();
++        }
++    }
++}
+diff --git a/Services/PermissionsEvaluator.cs b/Services/PermissionsEvaluator.cs
+new file mode 100644
+index 0000000..e1c12c5
+--- /dev/null
++++ b/Services/PermissionsEvaluator.cs
+@@ -0,0 +1,202 @@
++using System;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Configuration;
++using Ergonomy.Core;
++using Ergonomy.Database;
++using Ergonomy.Logging;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Evaluates the runtime permissions (SQLite write, Kafka write, ergonomics collection) and
++    /// starts/stops the corresponding components. Replaces the EvaluateSqlitePermission /
++    /// EvaluateKafkaPermission / EvaluateErgonomyPermission methods that lived in
++    /// MainApplicationContext. Thread-safe and independent of the UI thread.
++    /// </summary>
++    public sealed class PermissionsEvaluator
++    {
++        private readonly ISettingsService _settingsService;
++        private readonly LocalDatabaseManager _localDb;
++        private readonly SyncEngine _syncEngine;
++        private readonly ErgonomyManager _ergonomyManager;
++        private readonly AdvancedMetricsWorker _advancedMetricsWorker;
++        private readonly MessageLogService _log;
++        private readonly ILogger<PermissionsEvaluator> _logger;
++
++        private readonly object _sync = new();
++        private bool _localCollectionRunning;
++        private bool _syncRunning;
++
++        public PermissionsEvaluator(
++            ISettingsService settingsService,
++            LocalDatabaseManager localDb,
++            SyncEngine syncEngine,
++            ErgonomyManager ergonomyManager,
++            AdvancedMetricsWorker advancedMetricsWorker,
++            MessageLogService log,
++            ILogger<PermissionsEvaluator> logger)
++        {
++            _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
++            _localDb = localDb ?? throw new ArgumentNullException(nameof(localDb));
++            _syncEngine = syncEngine ?? throw new ArgumentNullException(nameof(syncEngine));
++            _ergonomyManager = ergonomyManager ?? throw new ArgumentNullException(nameof(ergonomyManager));
++            _advancedMetricsWorker = advancedMetricsWorker ?? throw new ArgumentNullException(nameof(advancedMetricsWorker));
++            _log = log ?? throw new ArgumentNullException(nameof(log));
++            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
++        }
++
++        public void EvaluateAll()
++        {
++            EvaluateSqlitePermission();
++            EvaluateKafkaPermission();
++            EvaluateErgonomyPermission();
++        }
++
++        private void EvaluateSqlitePermission()
++        {
++            AppSettings s = _settingsService.Current;
++            bool allowSqlite = s.AllowSqliteWrite;
++            double intervalHours = s.PermissionSqliteRetryIntervalHours;
++
++            string msg =
++                $"[SQLite Status] Permission: {allowSqlite} | Checking continuously every {intervalHours} hour(s).";
++            _log.Log("INFO", msg);
++
++            if (allowSqlite)
++            {
++                lock (_sync)
++                {
++                    if (!_localCollectionRunning)
++                    {
++                        StartLocalDataCollection();
++                        _localCollectionRunning = true;
++                    }
++                }
++            }
++            else
++            {
++                lock (_sync)
++                {
++                    if (_localCollectionRunning)
++                    {
++                        StopAllDataCollection();
++                        _localCollectionRunning = false;
++                    }
++                    if (_syncRunning)
++                    {
++                        _syncEngine.Stop();
++                        _syncRunning = false;
++                    }
++                }
++
++                _log.Log("WARNING", "Local Collection (SQLite): Access DENIED. Process is CANCELED/SLEEPING.");
++            }
++        }
++
++        private void EvaluateKafkaPermission()
++        {
++            AppSettings s = _settingsService.Current;
++            bool allowSqlite = s.AllowSqliteWrite;
++            bool allowKafka = s.AllowKafkaWrite;
++            double intervalHours = s.PermissionKafkaRetryIntervalHours;
++
++            string msg =
++                $"[Kafka Sync Status] Permission: {allowKafka} | Checking continuously every {intervalHours} hour(s).";
++            _log.Log("INFO", msg);
++
++            if (allowSqlite && allowKafka)
++            {
++                lock (_sync)
++                {
++                    if (!_syncRunning)
++                    {
++                        _syncEngine.Start();
++                        _syncRunning = true;
++                        _log.Log("INFO", "Sync Engine Started (Kafka Allowed).");
++                    }
++                }
++            }
++            else
++            {
++                lock (_sync)
++                {
++                    if (_syncRunning)
++                    {
++                        _syncEngine.Stop();
++                        _syncRunning = false;
++                    }
++                }
++
++                _log.Log("WARNING", "Data Sync (Kafka): Access DENIED. Sync Process is CANCELED.");
++            }
++        }
++
++        private void EvaluateErgonomyPermission()
++        {
++            AppSettings s = _settingsService.Current;
++            bool allowErgonomy = s.AllowErgonomyCollection;
++            bool wasRunning = _ergonomyManager.IsRunning;
++
++            string msg = $"[Ergonomy Status] Permission: {allowErgonomy}";
++            _log.Log("INFO", msg);
++
++            if (allowErgonomy)
++            {
++                _ergonomyManager.Start();
++                _log.Log(
++                    "INFO",
++                    _ergonomyManager.IsRunning
++                        ? "ErgonomyCollection: manager started successfully (hooks/timers active)."
++                        : "ErgonomyCollection: permission true but manager did NOT start.");
++            }
++            else
++            {
++                _ergonomyManager.Stop("AllowErgonomyCollection is false");
++                _log.Log("WARNING", "Ergonomy Collection: Access DENIED or Disabled. Process is STOPPED.");
++            }
++
++            if (wasRunning != allowErgonomy)
++            {
++                _logger.LogInformation(
++                    LogEvents.PermissionEvaluatedId,
++                    "Settings update changed AllowErgonomyCollection from {Before} to {After}.", wasRunning, allowErgonomy);
++            }
++        }
++
++        public void StartLocalDataCollection()
++        {
++            // Restart the advanced metrics worker so a changed interval takes effect.
++            _advancedMetricsWorker.Stop();
++            _advancedMetricsWorker.Start();
++            lock (_sync) _localCollectionRunning = true;
++            _log.Log("INFO", "Local System Metrics Collection Started.");
++        }
++
++        public void StopAllDataCollection()
++        {
++            _advancedMetricsWorker.Stop();
++            _ergonomyManager.Stop("local data collection stopped");
++            lock (_sync) _localCollectionRunning = false;
++        }
++
++        public void SetLocalCollectionRunning(bool value)
++        {
++            lock (_sync) _localCollectionRunning = value;
++        }
++
++        /// <summary>Stops everything; used for sleep/shutdown paths.</summary>
++        public void StopAll()
++        {
++            lock (_sync)
++            {
++                StopAllDataCollection();
++                _localCollectionRunning = false;
++                if (_syncRunning)
++                {
++                    _syncEngine.Stop();
++                    _syncRunning = false;
++                }
++            }
++        }
++    }
++}
+diff --git a/Services/ServiceRegistrar.cs b/Services/ServiceRegistrar.cs
+new file mode 100644
+index 0000000..fe86c01
+--- /dev/null
++++ b/Services/ServiceRegistrar.cs
+@@ -0,0 +1,136 @@
++using System;
++using System.Net.Http;
++using System.Security.Principal;
++using System.Windows.Forms;
++using Microsoft.Extensions.DependencyInjection;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Configuration;
++using Ergonomy.Core;
++using Ergonomy.Database;
++using Ergonomy.Hooks;
++using Ergonomy.Logging;
++using Ergonomy.Observability;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Composition root. Builds the Microsoft DI container (service provider) and registers the
++    /// application services. MainApplicationContext is resolved last and becomes a thin UI/lifecycle
++    /// shell over these services. A full generic-host run loop is intentionally not used: the
++    /// WinForms STA message loop (Application.Run) must remain the process pump, so only the
++    /// service-provider wiring of the host is reused here.
++    /// </summary>
++    public static class ServiceRegistrar
++    {
++        public static ServiceProvider Build(Control uiAnchor)
++        {
++            var services = new ServiceCollection();
++
++            // Structured logging: keep a lightweight console provider (no Console logging package
++            // needed) so the existing stdout output model is preserved while services use ILogger<T>.
++            services.AddLogging(builder =>
++            {
++                builder.ClearProviders();
++                builder.AddProvider(new ConsoleStructuredLogProvider());
++            });
++
++            services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(15) });
++            services.AddSingleton(uiAnchor); // hidden UI-thread anchor / marshalling control
++
++            // Settings: single source of truth for current + bootstrap settings.
++            services.AddSingleton<ISettingsService, SettingsService>();
++
++            // AppSettings singleton = the settings-in-effect at first resolution. Long-lived
++            // services that must react to refresh use ISettingsService + UpdateSettings /
++            // SettingsChanged; they must NOT hold a stale reference across refreshes.
++            services.AddSingleton(sp => sp.GetRequiredService<ISettingsService>().Current);
++
++            services.AddSingleton<MachineIdentity>(_ => new MachineIdentity(
++                GetWindowsSID(),
++                GetWindowsUsername(),
++                Environment.MachineName));
++
++            services.AddSingleton<LocalDatabaseManager>(sp =>
++                new LocalDatabaseManager(sp.GetRequiredService<AppSettings>().Outbox));
++
++            services.AddSingleton<KafkaConnect>(sp =>
++            {
++                KafkaSettings k = sp.GetRequiredService<AppSettings>().Kafka!;
++                return new KafkaConnect(k.BootstrapServers, k.UserActivityTopic, k.SystemMetricsTopic, k.AppLogsTopic);
++            });
++
++            // Observability (Prometheus scrape endpoint; no new Kafka/SQLite pipeline).
++            var metricsConfig = MetricsConfig.FromEnvironment();
++            services.AddSingleton(metricsConfig);
++            services.AddSingleton<AgentMetrics>();
++            services.AddSingleton<MachineIdentityLabels>(sp => new MachineIdentityLabels(
++                Environment.MachineName,
++                sp.GetRequiredService<MetricsConfig>().Environment,
++                sp.GetRequiredService<MetricsConfig>().AgentId));
++            services.AddSingleton<MetricsEndpoint>();
++
++            // Ergonomics primitives.
++            services.AddSingleton<GlobalInputHook>();
++            services.AddSingleton<ActivityMonitor>(sp =>
++                new ActivityMonitor(sp.GetRequiredService<GlobalInputHook>()));
++            services.AddSingleton<AlarmManager>(sp =>
++                new AlarmManager(sp.GetRequiredService<AppSettings>()));
++            services.AddSingleton<DataLogger>(sp =>
++                new DataLogger(
++                    sp.GetRequiredService<ActivityMonitor>(),
++                    () => sp.GetRequiredService<AlarmManager>().SessionCloseCounter,
++                    sp.GetRequiredService<AppSettings>()));
++
++            services.AddSingleton<ErgonomyManager>(sp =>
++                new ErgonomyManager(
++                    sp.GetRequiredService<AppSettings>(),
++                    sp.GetRequiredService<LocalDatabaseManager>(),
++                    sp.GetRequiredService<MachineIdentity>(),
++                    sp.GetRequiredService<ActivityMonitor>(),
++                    sp.GetRequiredService<AlarmManager>(),
++                    sp.GetRequiredService<DataLogger>(),
++                    uiAnchor));
++
++            // Sync / persistence.
++            services.AddSingleton<SyncEngine>(sp =>
++                new SyncEngine(
++                    sp.GetRequiredService<KafkaConnect>(),
++                    sp.GetRequiredService<LocalDatabaseManager>(),
++                    sp.GetRequiredService<ILogger<SyncEngine>>(),
++                    sp.GetRequiredService<AgentMetrics>(),
++                    sp.GetRequiredService<AppSettings>().SyncEngineIntervalMinutes));
++
++            // Services + workers.
++            services.AddSingleton<MessageLogService>();
++            services.AddSingleton<HealthCheckService>();
++            services.AddSingleton<PermissionsEvaluator>();
++            services.AddSingleton<WakeUpScheduler>();
++            services.AddSingleton<CommandManager>(sp =>
++                new CommandManager(
++                    sp.GetRequiredService<AppSettings>(),
++                    sp.GetRequiredService<MachineIdentity>().WindowsUsername,
++                    sp.GetRequiredService<LocalDatabaseManager>()));
++
++            services.AddSingleton<SettingsRefreshWorker>();
++            services.AddSingleton<HealthMonitorWorker>();
++            services.AddSingleton<PermissionMonitorWorker>();
++            services.AddSingleton<AdvancedMetricsWorker>();
++
++            services.AddTransient<MainApplicationContext>();
++
++            return services.BuildServiceProvider();
++        }
++
++        private static string GetWindowsSID()
++        {
++            try { return WindowsIdentity.GetCurrent()?.User?.Value ?? "UNKNOWN"; }
++            catch { return "UNKNOWN"; }
++        }
++
++        private static string GetWindowsUsername()
++        {
++            try { return WindowsIdentity.GetCurrent().Name; }
++            catch { return Environment.UserName; }
++        }
++    }
++}
+diff --git a/Services/SettingsRefreshWorker.cs b/Services/SettingsRefreshWorker.cs
+new file mode 100644
+index 0000000..7258fca
+--- /dev/null
++++ b/Services/SettingsRefreshWorker.cs
+@@ -0,0 +1,40 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Configuration;
++using Ergonomy.Logging;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Periodically refreshes settings from the Settings API (backed by PostgreSQL).
++    /// Replaces the old StartSettingsUpdateTimer in MainApplicationContext and fires
++    /// ISettingsService.SettingsChanged when the effective settings actually change.
++    /// </summary>
++    public sealed class SettingsRefreshWorker : WorkerBase
++    {
++        private readonly ISettingsService _settingsService;
++
++        public SettingsRefreshWorker(
++            ISettingsService settingsService,
++            ILogger<SettingsRefreshWorker> logger)
++            : base(logger)
++        {
++            _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
++        }
++
++        protected override string Name => nameof(SettingsRefreshWorker);
++
++        protected override TimeSpan GetInterval()
++        {
++            int seconds = _settingsService.Current.SettingsCheckIntervalSeconds;
++            return TimeSpan.FromSeconds(seconds > 0 ? seconds : 60);
++        }
++
++        protected override async Task DoWorkAsync(CancellationToken ct)
++        {
++            await _settingsService.RefreshFromApiAsync(logFailures: false).ConfigureAwait(false);
++        }
++    }
++}
+diff --git a/Services/WakeUpScheduler.cs b/Services/WakeUpScheduler.cs
+new file mode 100644
+index 0000000..c80cfa0
+--- /dev/null
++++ b/Services/WakeUpScheduler.cs
+@@ -0,0 +1,59 @@
++using System;
++using System.Timers;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Logging;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Owns the single wake-up timer used by the critical-failure "sleep and retry" cycle.
++    /// Keeps timer construction out of MainApplicationContext. On expiry it invokes the
++    /// supplied wake callback once, then stops itself.
++    /// </summary>
++    public sealed class WakeUpScheduler : IDisposable
++    {
++        private readonly ILogger<WakeUpScheduler> _logger;
++        private System.Timers.Timer? _timer;
++        private readonly object _sync = new();
++
++        public WakeUpScheduler(ILogger<WakeUpScheduler> logger)
++        {
++            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
++        }
++
++        public void Schedule(TimeSpan delay, Action wake)
++        {
++            lock (_sync)
++            {
++                _timer?.Stop();
++                _timer?.Dispose();
++
++                _timer = new System.Timers.Timer(delay.TotalMilliseconds)
++                {
++                    AutoReset = false
++                };
++                _timer.Elapsed += (s, e) =>
++                {
++                    try { wake(); }
++                    catch (Exception ex) { _logger.LogError(ex, "Wake-up callback failed."); }
++                    finally { Stop(); }
++                };
++                _timer.Start();
++            }
++
++            _logger.LogInformation("Sleep mode scheduled; waking up in {Seconds}s.", delay.TotalSeconds);
++        }
++
++        public void Stop()
++        {
++            lock (_sync)
++            {
++                _timer?.Stop();
++                _timer?.Dispose();
++                _timer = null;
++            }
++        }
++
++        public void Dispose() => Stop();
++    }
++}
+diff --git a/Services/WorkerBase.cs b/Services/WorkerBase.cs
+new file mode 100644
+index 0000000..bb0b09d
+--- /dev/null
++++ b/Services/WorkerBase.cs
+@@ -0,0 +1,154 @@
++using System;
++using System.Threading;
++using System.Threading.Tasks;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Logging;
++
++namespace Ergonomy.Services
++{
++    /// <summary>
++    /// Base for long-running periodic workers. Each worker runs an independent loop on a
++    /// background task, reads its interval dynamically from settings, handles its own exceptions
++    /// (no async void / fire-and-forget), and can be cleanly stopped via a CancellationToken.
++    /// Workers are intentionally independent of the UI thread.
++    /// </summary>
++    public abstract class WorkerBase : IDisposable
++    {
++        private readonly object _sync = new();
++        private CancellationTokenSource? _cts;
++        private Task? _loopTask;
++        private int _loopManagedThreadId;
++        private bool _disposed;
++
++        protected WorkerBase(ILogger logger)
++        {
++            Logger = logger ?? throw new ArgumentNullException(nameof(logger));
++        }
++
++        protected ILogger Logger { get; }
++
++        protected abstract string Name { get; }
++
++        /// <summary>Current loop interval; read from settings so it can change at runtime.</summary>
++        protected abstract TimeSpan GetInterval();
++
++        public bool IsRunning { get; private set; }
++
++        public void Start()
++        {
++            lock (_sync)
++            {
++                if (IsRunning)
++                    return;
++                ThrowIfDisposed();
++                _cts = new CancellationTokenSource();
++                _loopTask = Task.Run(() => RunLoopAsync(_cts.Token), _cts.Token);
++                IsRunning = true;
++            }
++
++            Logger.LogInformation(
++                LogEvents.WorkerStartedId, "{Worker} started.", Name);
++        }
++
++        /// <summary>
++        /// Perform the first unit of work immediately (some workers historically ran once at
++        /// startup before the first timer tick). Override to opt out.
++        /// </summary>
++        protected virtual bool ImmediateFirstRun => false;
++
++        private async Task RunLoopAsync(CancellationToken ct)
++        {
++            _loopManagedThreadId = Environment.CurrentManagedThreadId;
++            try
++            {
++                if (ImmediateFirstRun)
++                    await DoWorkAsync(ct).ConfigureAwait(false);
++
++                while (!ct.IsCancellationRequested)
++                {
++                    TimeSpan interval = GetInterval();
++                    if (interval <= TimeSpan.Zero)
++                        interval = TimeSpan.FromSeconds(1);
++
++                    using var timer = new PeriodicTimer(interval);
++                    try
++                    {
++                        await timer.WaitForNextTickAsync(ct).ConfigureAwait(false);
++                    }
++                    catch (OperationCanceledException)
++                    {
++                        break;
++                    }
++
++                    await DoWorkAsync(ct).ConfigureAwait(false);
++                }
++            }
++            catch (OperationCanceledException)
++            {
++                // expected on shutdown
++            }
++            catch (Exception ex)
++            {
++                Logger.LogError(
++                    LogEvents.WorkerErrorId, ex, "{Worker} loop failed unexpectedly.", Name);
++            }
++            finally
++            {
++                IsRunning = false;
++            }
++        }
++
++        protected abstract Task DoWorkAsync(CancellationToken ct);
++
++        public void Stop()
++        {
++            Task? loop = null;
++            bool selfStop = false;
++            lock (_sync)
++            {
++                if (!IsRunning)
++                {
++                    _cts?.Cancel();
++                    return;
++                }
++                _cts?.Cancel();
++                loop = _loopTask;
++                IsRunning = false;
++
++                // If Stop() is invoked from inside this worker's own loop (e.g. a health check
++                // triggers the sleep lifecycle), waiting on ourselves would deadlock.
++                selfStop = _loopManagedThreadId != 0
++                           && Environment.CurrentManagedThreadId == _loopManagedThreadId;
++            }
++
++            if (!selfStop && loop != null)
++            {
++                try { loop.Wait(TimeSpan.FromSeconds(5)); }
++                catch (AggregateException) { }
++                catch (Exception) { }
++            }
++
++            lock (_sync)
++            {
++                _cts?.Dispose();
++                _cts = null;
++            }
++
++            Logger.LogInformation(LogEvents.WorkerStoppedId, "{Worker} stopped.", Name);
++        }
++
++        private void ThrowIfDisposed()
++        {
++            if (_disposed)
++                throw new ObjectDisposedException(Name);
++        }
++
++        public void Dispose()
++        {
++            if (_disposed)
++                return;
++            _disposed = true;
++            Stop();
++        }
++    }
++}
+diff --git a/SyncEngine.cs b/SyncEngine.cs
+index c57bf23..e7ccb87 100644
+--- a/SyncEngine.cs
++++ b/SyncEngine.cs
+@@ -5,10 +5,18 @@ using System.Text.Json;
+ using System.Text.Json.Serialization;
+ using System.Threading;
+ using System.Threading.Tasks;
+-using Ergonomy.Database;
++using Microsoft.Extensions.Logging;
++using Ergonomy.Logging;
++using Ergonomy.Observability;
+ 
+ namespace Ergonomy.Database
+ {
++    /// <summary>
++    /// Worker that drains the SQLite outbox to Kafka Predictably. It is no longer timer-driven
++    /// inside a monolithic context: it runs a single cancelable loop on a background task using
++    /// <see cref="PeriodicTimer"/>, awaits shutdown, and never uses async void / fire-and-forget.
++    /// A single <see cref="SemaphoreSlim"/> gate prevents overlapping batch processing.
++    /// </summary>
+     public sealed class SyncEngine : IDisposable
+     {
+         private const int DefaultBatchSize = 50;
+@@ -16,111 +24,169 @@ namespace Ergonomy.Database
+ 
+         private readonly LocalDatabaseManager _localDb;
+         private readonly KafkaConnect _kafkaConnect;
+-        private readonly System.Timers.Timer _syncTimer;
++        private readonly ILogger<SyncEngine> _logger;
++        private readonly AgentMetrics _metrics;
+         private readonly SemaphoreSlim _syncGate = new(1, 1);
+-        private readonly double _baseIntervalMs;
++        private readonly object _sync = new();
+ 
+-        // backoff نمایی هنگام قطع Kafka
++        private double _baseIntervalMinutes;
+         private int _consecutiveKafkaFailures;
+         private DateTime _backoffUntilUtc = DateTime.MinValue;
+-
+         private bool _disposed;
++        private CancellationTokenSource? _cts;
++        private Task? _loop;
++
++        public bool IsRunning { get; private set; }
+ 
+         public SyncEngine(
+             KafkaConnect kafkaConnect,
+             LocalDatabaseManager localDb,
++            ILogger<SyncEngine> logger,
++            AgentMetrics metrics,
+             double syncIntervalMinutes = 1)
+         {
+             _localDb = localDb ?? throw new ArgumentNullException(nameof(localDb));
+             _kafkaConnect = kafkaConnect ?? throw new ArgumentNullException(nameof(kafkaConnect));
++            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
++            _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
++            _baseIntervalMinutes = syncIntervalMinutes > 0 ? syncIntervalMinutes : 1;
++        }
+ 
+-            double intervalMs = syncIntervalMinutes > 0
+-                ? syncIntervalMinutes * 60 * 1000
+-                : 60_000;
+-
+-            _baseIntervalMs = intervalMs;
+-
+-            _syncTimer = new System.Timers.Timer(intervalMs)
++        public void Start()
++        {
++            lock (_sync)
+             {
+-                AutoReset = true,
+-                Enabled = false
+-            };
++                ThrowIfDisposed();
++                if (IsRunning)
++                    return;
++
++                _cts = new CancellationTokenSource();
++                _loop = Task.Run(() => RunLoopAsync(_cts.Token), _cts.Token);
++                IsRunning = true;
++            }
+ 
+-            _syncTimer.Elapsed += OnSyncTimerElapsed;
++            _logger.LogInformation(LogEvents.WorkerStartedId, "Sync Engine started (Kafka Allowed).");
+         }
+ 
+-        public void Start()
++        public void Stop(string reason = "requested")
+         {
+-            ThrowIfDisposed();
++            CancellationTokenSource? cts = null;
++            Task? loop = null;
+ 
+-            if (_syncTimer.Enabled)
+-                return;
++            lock (_sync)
++            {
++                if (!IsRunning)
++                {
++                    _cts?.Cancel();
++                    return;
++                }
+ 
+-            _syncTimer.Start();
++                cts = _cts;
++                _cts = null;
++                loop = _loop;
++                _loop = null;
++                IsRunning = false;
++            }
+ 
+-            _ = ProcessQueueAsync();
+-        }
++            try
++            {
++                cts?.Cancel();
++            }
++            catch
++            {
++            }
+ 
+-        public void Stop()
+-        {
+-            if (_disposed)
+-                return;
++            try
++            {
++                loop?.Wait(TimeSpan.FromSeconds(10));
++            }
++            catch (AggregateException)
++            {
++            }
++            catch (Exception)
++            {
++            }
++
++            cts?.Dispose();
+ 
+-            _syncTimer.Stop();
++            _logger.LogInformation(
++                LogEvents.WorkerStoppedId, "Sync Engine stopped (reason: {Reason}).", reason);
+         }
+ 
+         public async Task ForceSyncAsync()
+         {
+             ThrowIfDisposed();
+ 
+-            Console.WriteLine(
+-                $"[{DateTime.Now:HH:mm:ss}] ⚠️ FORCE SYNC triggered.");
++            _logger.LogInformation("FORCE SYNC triggered.");
+ 
+-            // ForceSync عمداً backoff را دور می‌زند.
+-            await ProcessQueueAsync();
++            // ForceSync intentionally bypasses backoff.
++            await ProcessQueueAsync().ConfigureAwait(false);
+         }
+ 
+         public void UpdateSyncInterval(double intervalMinutes)
+         {
+             ThrowIfDisposed();
+ 
+-            if (intervalMinutes <= 0)
+-                intervalMinutes = 1;
++            _baseIntervalMinutes = intervalMinutes > 0 ? intervalMinutes : 1;
+ 
+-            bool wasRunning = _syncTimer.Enabled;
+-
+-            _syncTimer.Stop();
+-            _syncTimer.Interval = intervalMinutes * 60 * 1000;
+-
+-            if (wasRunning)
+-                _syncTimer.Start();
+-
+-            Console.WriteLine(
+-                $"[{DateTime.Now:HH:mm:ss}] 🕒 SyncEngine interval updated to " +
+-                $"{intervalMinutes.ToString(CultureInfo.InvariantCulture)} minute(s).");
++            _logger.LogInformation(
++                "SyncEngine interval updated to {Minutes} minute(s).",
++                _baseIntervalMinutes.ToString(CultureInfo.InvariantCulture));
+         }
+ 
+-        private async void OnSyncTimerElapsed(
+-            object? sender,
+-            System.Timers.ElapsedEventArgs e)
++        private async Task RunLoopAsync(CancellationToken ct)
+         {
+             try
+             {
+-                // backoff فعال است؟ این tick را رد کن.
+-                if (DateTime.UtcNow < _backoffUntilUtc)
++                // First pass immediately (preserves the previous Start() "fire initial sync").
++                try
+                 {
+-                    Console.WriteLine(
+-                        $"[{DateTime.Now:HH:mm:ss}] ⏸️ Sync skipped: backoff active until " +
+-                        $"{_backoffUntilUtc:HH:mm:ss}.");
+-                    return;
++                    await ProcessQueueAsync().ConfigureAwait(false);
+                 }
++                catch (Exception ex)
++                {
++                    _logger.LogError(ex, "Sync initial pass error: {Message}", ex.Message);
++                }
++
++                while (!ct.IsCancellationRequested)
++                {
++                    TimeSpan interval = TimeSpan.FromMinutes(_baseIntervalMinutes <= 0 ? 1 : _baseIntervalMinutes);
++                    using var timer = new PeriodicTimer(interval);
++
++                    try
++                    {
++                        await timer.WaitForNextTickAsync(ct).ConfigureAwait(false);
++                    }
++                    catch (OperationCanceledException)
++                    {
++                        break;
++                    }
++
++                    // Backoff active? skip this tick (predictable; next tick retries).
++                    if (DateTime.UtcNow < _backoffUntilUtc)
++                    {
++                        _logger.LogInformation(
++                            LogEvents.SyncSkippedId,
++                            "Sync skipped: backoff active until {Until}.", _backoffUntilUtc.ToString("HH:mm:ss"));
++                        continue;
++                    }
+ 
+-                await ProcessQueueAsync();
++                    try
++                    {
++                        await ProcessQueueAsync().ConfigureAwait(false);
++                    }
++                    catch (Exception ex)
++                    {
++                        _logger.LogError(ex, "Sync pass error: {Message}", ex.Message);
++                    }
++                }
++            }
++            catch (OperationCanceledException)
++            {
+             }
+             catch (Exception ex)
+             {
+-                Console.WriteLine(
+-                    $"[{DateTime.Now:HH:mm:ss}] ❌ Sync timer error: {ex.Message}");
++                _logger.LogError(ex, "SyncEngine loop failed unexpectedly.");
+             }
+         }
+ 
+@@ -129,20 +195,22 @@ namespace Ergonomy.Database
+             if (_disposed)
+                 return;
+ 
+-            if (!await _syncGate.WaitAsync(0))
++            if (!await _syncGate.WaitAsync(0).ConfigureAwait(false))
+             {
+-                Console.WriteLine(
+-                    $"[{DateTime.Now:HH:mm:ss}] ℹ️ Sync skipped: a previous sync is still running.");
++                _logger.LogInformation(
++                    LogEvents.SyncSkippedId, "Sync skipped: a previous sync is still running.");
+                 return;
+             }
+ 
+             try
+             {
+-                // اگر صف بحرانی است، اول retention اجرا شود تا فشار کم شود.
++                _metrics.SetGauge("ergonomy_outbox_pending_records",
++                    "Number of records currently pending in the SQLite outbox.",
++                    _localDb.PendingCount);
++
+                 if (_localDb.GetCapacityStatus() == CapacityStatus.Critical)
+                 {
+-                    Console.WriteLine(
+-                        $"[{DateTime.Now:HH:mm:ss}] 🧹 Capacity critical; running retention before sync.");
++                    _logger.LogInformation("Capacity critical; running retention before sync.");
+                     _localDb.RunRetention();
+                 }
+ 
+@@ -150,14 +218,15 @@ namespace Ergonomy.Database
+ 
+                 if (records == null || records.Count == 0)
+                 {
+-                    // بدون رکورد یعنی صف خالی است؛ backoff را ریست کن.
+                     _consecutiveKafkaFailures = 0;
+                     _backoffUntilUtc = DateTime.MinValue;
++                    _metrics.SetGauge("ergonomy_sync_backoff_active", "1 if backoff is active.", 0);
+                     return;
+                 }
+ 
+-                Console.WriteLine(
+-                    $"[{DateTime.Now:HH:mm:ss}] 📤 Syncing {records.Count} outbox record(s).");
++                _logger.LogInformation(
++                    LogEvents.SyncBatchStartId, "Syncing {Count} outbox record(s).", records.Count);
++                _metrics.IncrementCounter("ergonomy_sync_batches_total", "Number of outbox batch sync passes.", 1);
+ 
+                 var jsonOptions = new JsonSerializerOptions
+                 {
+@@ -174,14 +243,20 @@ namespace Ergonomy.Database
+ 
+                     try
+                     {
+-                        await SendRecordToKafkaAsync(record, jsonOptions);
++                        await SendRecordToKafkaAsync(record, jsonOptions).ConfigureAwait(false);
+ 
+                         _localDb.DeleteRecord(record.Id);
+ 
+-                        Console.WriteLine(
+-                            $"[{DateTime.Now:yyyy/MM/dd HH:mm:ss}] ✅ " +
+-                            $"Data delivered to Kafka and removed from queue. " +
+-                            $"RecordId: {record.Id} | Target: {record.TargetTable}");
++                        _metrics.IncrementCounter(
++                            "ergonomy_sync_records_sent_total",
++                            "Records successfully delivered to Kafka.",
++                            1,
++                            new Dictionary<string, string> { ["target"] = record.TargetTable });
++
++                        _logger.LogInformation(
++                            LogEvents.SyncBatchCompleteId,
++                            "Data delivered to Kafka and removed from queue. RecordId: {RecordId} | Target: {Target}",
++                            record.Id, record.TargetTable);
+                     }
+                     catch (JsonException ex)
+                     {
+@@ -193,13 +268,11 @@ namespace Ergonomy.Database
+                     }
+                     catch (Exception ex)
+                     {
+-                        // خطای موقتی Kafka — رکورد می‌ماند و backoff فعال می‌شود.
+                         anyTransientFailure = true;
+ 
+-                        Console.WriteLine(
+-                            $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka delivery failed; " +
+-                            $"record remains pending. RecordId: {record.Id} | " +
+-                            $"Target: {record.TargetTable} | Error: {ex.Message}");
++                        _logger.LogWarning(
++                            "Kafka delivery failed; record remains pending. RecordId: {RecordId} | Target: {Target} | Error: {Message}",
++                            record.Id, record.TargetTable, ex.Message);
+                     }
+                 }
+ 
+@@ -207,8 +280,7 @@ namespace Ergonomy.Database
+             }
+             catch (Exception ex)
+             {
+-                Console.WriteLine(
+-                    $"[{DateTime.Now:HH:mm:ss}] ❌ SyncEngine fatal error: {ex.Message}");
++                _logger.LogError(ex, "SyncEngine fatal error: {Message}", ex.Message);
+             }
+             finally
+             {
+@@ -222,19 +294,23 @@ namespace Ergonomy.Database
+             {
+                 _consecutiveKafkaFailures++;
+ 
+-                double backoffMs = _baseIntervalMs * Math.Pow(2, _consecutiveKafkaFailures);
++                double backoffMs = TimeSpan.FromMinutes(_baseIntervalMinutes <= 0 ? 1 : _baseIntervalMinutes).TotalMilliseconds
++                                   * Math.Pow(2, _consecutiveKafkaFailures);
+                 backoffMs = Math.Min(backoffMs, MaxBackoff.TotalMilliseconds);
+ 
+                 _backoffUntilUtc = DateTime.UtcNow.AddMilliseconds(backoffMs);
++                _metrics.SetGauge("ergonomy_sync_backoff_active", "1 if backoff is active.", 1);
+ 
+-                Console.WriteLine(
+-                    $"[{DateTime.Now:HH:mm:ss}] ⏳ Kafka backoff: next attempt in " +
+-                    $"{backoffMs / 1000:0}s (failure #{_consecutiveKafkaFailures}).");
++                _logger.LogWarning(
++                    LogEvents.SyncRetryBackoffId,
++                    "Kafka backoff: next attempt in {Seconds}s (failure #{Failures}).",
++                    Math.Round(backoffMs / 1000), _consecutiveKafkaFailures);
+             }
+             else
+             {
+                 _consecutiveKafkaFailures = 0;
+                 _backoffUntilUtc = DateTime.MinValue;
++                _metrics.SetGauge("ergonomy_sync_backoff_active", "1 if backoff is active.", 0);
+             }
+         }
+ 
+@@ -252,7 +328,7 @@ namespace Ergonomy.Database
+                     if (metrics == null)
+                         throw new JsonException("Advanced system metrics payload was null.");
+ 
+-                    await _kafkaConnect.SendSystemMetricsAsync(record.MessageId, metrics);
++                    await _kafkaConnect.SendSystemMetricsAsync(record.MessageId, metrics).ConfigureAwait(false);
+                     break;
+                 }
+ 
+@@ -264,7 +340,7 @@ namespace Ergonomy.Database
+                     if (activity == null)
+                         throw new JsonException("User activity payload was null.");
+ 
+-                    await _kafkaConnect.SendUserActivityAsync(record.MessageId, activity);
++                    await _kafkaConnect.SendUserActivityAsync(record.MessageId, activity).ConfigureAwait(false);
+                     break;
+                 }
+ 
+@@ -276,7 +352,7 @@ namespace Ergonomy.Database
+                     if (logData == null)
+                         throw new JsonException("App log payload was null.");
+ 
+-                    await _kafkaConnect.SendAppLogAsync(record.MessageId, logData);
++                    await _kafkaConnect.SendAppLogAsync(record.MessageId, logData).ConfigureAwait(false);
+                     break;
+                 }
+ 
+@@ -285,18 +361,20 @@ namespace Ergonomy.Database
+             }
+         }
+ 
+-
+         private void HandlePoisonRecord(Guid recordId, string targetTable, string reason)
+         {
+-            Console.WriteLine(
+-                $"[{DateTime.Now:HH:mm:ss}] ❌ Poison outbox record detected. " +
+-                $"RecordId: {recordId} | Target: {targetTable} | Reason: {reason}");
++            _metrics.IncrementCounter(
++                "ergonomy_sync_poison_records_total",
++                "Poison outbox records removed.",
++                1,
++                new Dictionary<string, string> { ["target"] = targetTable });
+ 
+-            _localDb.DeleteRecord(recordId);
++            _logger.LogWarning(
++                LogEvents.SyncPoisonRecordId,
++                "Poison outbox record removed. RecordId: {RecordId} | Target: {Target} | Reason: {Reason}",
++                recordId, targetTable, reason);
+ 
+-            Console.WriteLine(
+-                $"[{DateTime.Now:HH:mm:ss}] 🗑️ Poison outbox record removed. " +
+-                $"RecordId: {recordId}");
++            _localDb.DeleteRecord(recordId);
+         }
+ 
+         private void ThrowIfDisposed()
+@@ -309,13 +387,9 @@ namespace Ergonomy.Database
+         {
+             if (_disposed)
+                 return;
+-
+             _disposed = true;
+ 
+-            _syncTimer.Stop();
+-            _syncTimer.Elapsed -= OnSyncTimerElapsed;
+-            _syncTimer.Dispose();
+-
++            Stop("disposed");
+             _syncGate.Dispose();
+         }
+     }
+diff --git a/knowledge.txt b/knowledge.txt
+index dae1ee6..dbb3cff 100644
+--- a/knowledge.txt
++++ b/knowledge.txt
+@@ -117,3 +117,117 @@ dotnet build --no-restore -p:EnableWindowsTargeting=true  (Debug)
+ dotnet build -c Release --no-restore -p:EnableWindowsTargeting=true
+ Run: dotnet run --project Ergonomy.csproj  (or published exe). Requires
+ machine env vars (see Environment_set.txt) and Windows interactive session.
++
++====================================================================
++=== REFACTOR LOG (append-only entries) ===
++====================================================================
++
++1405/05/31 - 2:41 pm
++problem:
++MainApplicationContext was a monolith: it owned the settings refresh, API/sqlite/self health
++checks, permission evaluation, advanced-metrics collection, sync orchestration, every timer,
++and service construction inline (890-line file). Object creation and timer wiring were hard to
++test and to reason about.
++solution:
++Split responsibilities into dedicated classes and a DI composition root:
++- Created Services/WorkerBase.cs (PeriodicTimer + CancellationToken + exception handling +
++  dynamic interval + safe self-stop) and the concrete workers: SettingsRefreshWorker,
++  HealthMonitorWorker, PermissionMonitorWorker, AdvancedMetricsWorker.
++- MainApplicationContext is now a thin UI/lifecycle shell (notify icon, exception handlers,
++  alarm marshalling control, on/off command wiring) that only starts/stops workers and brokers
++  SettingsChanged -> UpdateSettings/EvaluateAll. It constructs NO timers.
++- Added Services/ServiceRegistrar.cs composition root and wired Program.cs to build a
++  ServiceProvider on the UI thread.
++caveats:
++- No Generic Host .Run() loop is used; the WinForms STA message loop (Application.Run) must stay
++  the process pump, so only the service-provider wiring of a host is reused. Documents in code.
++
++1405/05/31 - 2:42 pm
++problem:
++Settings loading/refresh logic lived in MainApplicationContext (LoadAppSettings/ApplyDefaultValues/
++UpdateSettingsFromApiAsync/PreserveEnvironmentInfrastructureSettings). No single source of truth.
++solution:
++- Added Configuration/SettingsService.cs (ISettingsService + SettingsService)
++  holding Current/Bootstrap, raising SettingsChanged, refreshing from the Settings API, and
++  preserving API+Kafka infrastructure settings from bootstrap only.
++- Moved defaulting + required-setting validation to Configuration/AppDefaults.cs.
++- EnvironmentSettingsProvider remains the bootstrap env provider (the only place that reads machine
++  env for settings).
++caveats:
++- AppSettings is registered as a singleton = settings-in-effect at first resolution; long-lived
++  services react to refreshes via UpdateSettings/SettingsChanged (do NOT hold stale refs).
++
++1405/05/31 - 2:43 pm
++problem:
++Permission logic (sqlite/kafka/ergonomy) and startup/sleep lifecycle were embedded in
++MainApplicationContext; timers were constructed there (settings/permission/health/advanced/wake).
++solution:
++- Added Services/PermissionsEvaluator.cs to encapsulate EvaluateSqlite/Kafka/ErgonomyPermission
++  and start/stop the SyncEngine, AdvancedMetricsWorker and ErgonomyManager.
++- Added Services/HealthCheckService.cs (API/SQLite/self-performance probes), Services/MessageLogService.cs
++  (app_logs console+outbox), Services/MachineIdentity.cs, Services/WakeUpScheduler.cs (owns the single
++  wake-up timer).
++- Added Services/AdvancedMetricsWorker.cs to move the advanced-metrics collection off the context.
++
++1405/05/31 - 2:44 pm
++problem:
++SyncEngine was timer-driven inside the monolith, used async void in the timer handler and
++fire-and-forget in Start() (_ = ProcessQueueAsync).
++solution:
++- Rewrote SyncEngine as a cancelable worker: a single background loop using PeriodicTimer,
++  CancellationToken, awaited shutdown (Stop waits up to 10s), a SemaphoreSlim gate, no async void,
++  and no fire-and-forget. Kept Start/Stop/UpdateSyncInterval/ForceSyncAsync public API so
++  PermissionsEvaluator/CommandManager wiring is unchanged.
++- Added Prometheus metrics for batch/retry: ergonomy_outbox_pending_records,
++  ergonomy_sync_batches_total, ergonomy_sync_records_sent_total, ergonomy_sync_records_failed_total,
++  ergonomy_sync_poison_records_total, ergonomy_sync_backoff_active.
++caveats: ForceSyncAsync still bypasses backoff by design.
++
++1405/05/31 - 2:45 pm
++problem:
++Ad-hoc Console.WriteLine everywhere; no EventIds, no log scopes, no ILogger<T>.
++solution:
++- Added Microsoft.Extensions.Logging/Abstractions packages; services now take ILogger<T>.
++- Added Logging/LogEvents.cs (stable EventIds) and Logging/ConsoleStructuredLogger.cs (a light
++  ILoggerProvider rendering structured lines to stdout, preserving the console output model).
++- Logging is configured in the composition root via AddLogging + ClearProviders + add provider.
++caveats:
++- Structured log line format differs from the old "[HH:mm:ss] [LEVEL] msg" format (intended change).
++
++1405/05/31 - 2:46 pm
++problem:
++Need Prometheus observability matching the deployment model (central Prometheus scrapes the Agent),
++WITHOUT any new Kafka topics, SQLite tables, or telemetry outbox, and without high-cardinality labels.
++solution:
++- Added Observability/AgentMetrics.cs (thread-safe in-process metric registry; gauge=set,
++  counter=add) and Observability/MetricsEndpoint.cs (HttpListener serving /metrics as Prometheus
++  text). Metrics endpoint binds to wildcard with loopback fallback; port from
++  ERGONOMY_METRICS_PORT (default 9100).
++- Added Observability/MetricsConfig.cs (centralized infra config resolved at the composition root).
++- Only low-cardinality identity labels (machine name, environment, agent id) are injected via
++  agent_info; no usernames/session ids/message ids.
++caveats: wildcard bind needs a URL ACL/firewall rule; loopback fallback if not permitted.
++
++1405/05/31 - 2:47 pm
++problem:
++DatabaseManager had a standalone ConfigurationBuilder reading appsettings.json for a single
++CheckPostgresConnection flag; CommandManager used `dynamic` for settings (bad for DI).
++solution:
++- DatabaseManager: removed IConfiguration/ConfigurationBuilder/appsettings read; the flag is now an
++  explicit constructor parameter (checkPostgresConnection).
++- CommandManager: changed settings field/ctor from `dynamic` to AppSettings.
++caveats: DatabaseManager remains dead code (never constructed in the runtime path).
++
++1405/05/31 - 2:48 pm
++problem:
++Verification of the refactor in this sandbox: no .NET SDK, no NuGet package cache, no outbound
++network (HTTPS/HTTP to nuget/dotnet/debian all fail), and the app is Windows/WinForms so it can't
++run here.
++solution:
++- Performed source-grounded static validation: read every modified file, checked namespace/type
++  wiring, brace/paren balance across all .cs (balanced), checked no timers are constructed inside
++  MainApplicationContext, no direct env access in services except the provider/composition root.
++- Build NOT executed here (impossible); must run on a Windows/.NET 9 host:
++  dotnet build --no-restore -p:EnableWindowsTargeting=true
++  dotnet build -c Release --no-restore -p:EnableWindowsTargeting=true
++caveats: Do NOT claim a successful build; compile/run verification is pending on a real Windows host.
+-- 
+2.39.5

@@ -26,7 +26,7 @@ namespace Ergonomy
         private string _windowsUsername;
         private static readonly HttpClient _httpClient = new HttpClient();
         
-        private dynamic _appSettings; 
+        private AppSettings _appSettings; 
 
         // 🌟 فیلد تصحیح شده برای دیتابیس محلی
         private readonly LocalDatabaseManager _localDbManager;
@@ -38,9 +38,9 @@ namespace Ergonomy
         public Action? OnForceSync { get; set; }
         private readonly PersianCalendar pc = new PersianCalendar();
 
-        public CommandManager(dynamic appSettings, string windowsUsername, LocalDatabaseManager localDbManager)
+        public CommandManager(AppSettings appSettings, string windowsUsername, LocalDatabaseManager localDbManager)
         {
-            _appSettings = appSettings;
+            _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
             _windowsUsername = windowsUsername;
             _localDbManager = localDbManager ?? throw new ArgumentNullException(nameof(localDbManager));
 

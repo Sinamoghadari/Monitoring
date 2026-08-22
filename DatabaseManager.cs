@@ -6,7 +6,6 @@ using System.Drawing;
 using System.Collections.Generic;
 using Ergonomy.Configuration;
 using System.Text.Json;
-using Microsoft.Extensions.Configuration;
 using System.Threading.Tasks;
 using System.Globalization;
 
@@ -16,13 +15,9 @@ namespace Ergonomy.Database
     {
         private readonly LocalDatabaseManager _localDb;
 
-        // توجه: شما در کل پروژه در حال حذف appsettings هستید،
-        // اما فعلاً این کلاس هنوز از appsettings.json می‌خواند.
-        // دست نزنیم تا رفتار فعلی نشکند؛ بعداً باید با Env Vars جایگزین شود.
-        private readonly IConfiguration _configuration = new ConfigurationBuilder()
-            .SetBasePath(AppDomain.CurrentDomain.BaseDirectory)
-            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-            .Build();
+        // No standalone ConfigurationBuilder. The "check postgres connection" flag is now an
+        // explicit constructor parameter (the previous appsettings.json read was removed).
+        private readonly bool _checkPostgresConnection;
 
         private readonly string _host;
         private readonly string _database;
@@ -39,6 +34,7 @@ namespace Ergonomy.Database
             string user,
             string password,
             int port,
+            bool checkPostgresConnection = false,
             LocalDatabaseManager? localDb = null)
         {
             _host = host;
@@ -46,6 +42,7 @@ namespace Ergonomy.Database
             _user = user;
             _password = password;
             _port = port;
+            _checkPostgresConnection = checkPostgresConnection;
 
             _localDb = localDb ?? new LocalDatabaseManager();
         }
@@ -89,10 +86,7 @@ namespace Ergonomy.Database
         public async Task CheckAndLogPostgresConnectionAsync(
             string windowsUsername)
         {
-            bool checkEnabled = _configuration.GetValue<bool>(
-                "AppSettings:CheckPostgresConnection");
-
-            if (!checkEnabled)
+            if (!_checkPostgresConnection)
                 return;
 
             string statusMessage;

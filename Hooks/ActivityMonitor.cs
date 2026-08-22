@@ -93,6 +93,7 @@ namespace Ergonomy.Hooks
         }
 
         private int _samplingInProgress;
+        private bool _disposed;
 
         private void OnSampleTimerElapsed(object? sender, ElapsedEventArgs e)
         {
@@ -174,9 +175,14 @@ namespace Ergonomy.Hooks
 
         public void Dispose()
         {
+            if (_disposed)
+                return;
+            _disposed = true;
+
             Stop();
             _sampleTimer.Elapsed -= OnSampleTimerElapsed;
             _sampleTimer.Dispose();
+            _globalInputHook.Dispose();
         }
     }
 }

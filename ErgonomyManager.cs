@@ -7,6 +7,7 @@ using Ergonomy.Configuration;
 using Ergonomy.Database;
 using Ergonomy.Hooks;
 using Ergonomy.Logging;
+using Ergonomy.Services;
 
 namespace Ergonomy.Core
 {
@@ -15,16 +16,12 @@ namespace Ergonomy.Core
         private AppSettings _appSettings;
         private readonly LocalDatabaseManager _localDb;
         private readonly Control? _uiAnchor;
+        private readonly MachineIdentity _identity;
 
-        private GlobalInputHook? _globalInputHook;
         private ActivityMonitor? _activityMonitor;
         private DataLogger? _dataLogger;
         private AlarmManager? _alarmManager;
         private System.Timers.Timer? _notificationTimer;
-
-        private readonly string _sessionGuid;
-        private readonly string _windowsSid;
-        private readonly string _windowsUsername;
 
         // Serializes lifecycle transitions and prevents overlapping
         // threshold evaluations / duplicate alarm requests.
@@ -39,24 +36,20 @@ namespace Ergonomy.Core
         public ErgonomyManager(
             AppSettings appSettings,
             LocalDatabaseManager localDb,
-            string sessionGuid,
-            string windowsSid,
-            string windowsUsername,
+            MachineIdentity identity,
+            ActivityMonitor activityMonitor,
+            AlarmManager alarmManager,
+            DataLogger dataLogger,
             Control? uiAnchor = null)
         {
             _appSettings = appSettings;
             _localDb = localDb;
-            _sessionGuid = sessionGuid;
-            _windowsSid = windowsSid;
-            _windowsUsername = windowsUsername;
+            _identity = identity ?? throw new ArgumentNullException(nameof(identity));
             _uiAnchor = uiAnchor;
 
-            _globalInputHook = new GlobalInputHook();
-            _activityMonitor = new ActivityMonitor(_globalInputHook);
-            _alarmManager = new AlarmManager(_appSettings);
-            _dataLogger = new DataLogger(_activityMonitor, () => _alarmManager.SessionCloseCounter, _appSettings);
-
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Ergonomy] ErgonomyManager created.");
+            _activityMonitor = activityMonitor ?? throw new ArgumentNullException(nameof(activityMonitor));
+            _alarmManager = alarmManager ?? throw new ArgumentNullException(nameof(alarmManager));
+            _dataLogger = dataLogger ?? throw new ArgumentNullException(nameof(dataLogger));
         }
 
         public void UpdateSettings(AppSettings appSettings)
@@ -229,9 +222,9 @@ namespace Ergonomy.Core
 
             var sessionData = new UserActivityPayload
             {
-                SessionId = _sessionGuid.ToString(),
-                WindowsSid = _windowsSid,
-                WindowsUsername = _windowsUsername,
+                SessionId = _identity.SessionGuid,
+                WindowsSid = _identity.WindowsSid,
+                WindowsUsername = _identity.WindowsUsername,
                 StateType = stateType,
                 KeyboardActiveSeconds = keyboardSeconds,
                 MouseActiveSeconds = mouseSeconds,
@@ -284,7 +277,7 @@ namespace Ergonomy.Core
             _notificationTimer?.Stop();
             _notificationTimer?.Dispose();
             _notificationTimer = null;
-            _globalInputHook?.Dispose();
+            _activityMonitor?.Dispose();
         }
     }
 }

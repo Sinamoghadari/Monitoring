@@ -1,15 +1,49 @@
+using System;
+using System.Threading;
+using System.Windows.Forms;
+using Microsoft.Extensions.DependencyInjection;
+using Ergonomy.Configuration;
+using Ergonomy.Services;
+
 namespace Ergonomy
 {
     internal static class Program
     {
         /// <summary>
         ///  The main entry point for the application.
+        ///  A DI service provider (composition root) is built once on the UI thread and injected
+        ///  into the thin MainApplicationContext shell. The WinForms STA message loop remains the
+        ///  process pump (the generic-host run loop is intentionally not used).
         /// </summary>
         [STAThread]
         static void Main()
         {
             ApplicationConfiguration.Initialize();
-            Application.Run(new MainApplicationContext());
+
+            // Hidden UI anchor / marshalling control, created on the UI thread. It is used to
+            // marshal alarm + notification forms onto the UI thread from worker/timer threads.
+            var uiAnchor = new Control();
+            try
+            {
+                uiAnchor.CreateControl();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ⚠️ [Ergonomy] Could not create UI anchor control: {ex.Message}");
+            }
+
+            // Reset the WinForms SynchronizationContext so the blocking startup Settings-API refresh
+            // (performed inside MainApplicationContext) does not deadlock the UI thread before the
+            // message loop starts. Application.Run installs a fresh WindowsFormsSynchronizationContext.
+            SynchronizationContext.SetSynchronizationContext(null);
+
+            using var provider = ServiceRegistrar.Build(uiAnchor);
+
+            var settingsService = provider.GetRequiredService<ISettingsService>();
+            settingsService.LoadBootstrap();
+
+            using var context = provider.GetRequiredService<MainApplicationContext>();
+            Application.Run(context);
         }
     }
 }

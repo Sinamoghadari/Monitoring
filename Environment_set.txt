@@ -38,6 +38,7 @@ $vars = @{
     "ERGONOMY_KAFKA_BOOTSTRAP_SERVERS"                  = "172.17.214.38:9092"
     "ERGONOMY_KAFKA_USER_ACTIVITY_TOPIC"                = "user_activity_topic"
     "ERGONOMY_KAFKA_SYSTEM_METRICS_TOPIC"               = "advanced_system_metrics_topic"
+    "ERGONOMY_KAFKA_APP_LOGS_TOPIC" 			= "app_logs_topic"
 
     # ------------------------------------------------------
     # Remote API endpoints
