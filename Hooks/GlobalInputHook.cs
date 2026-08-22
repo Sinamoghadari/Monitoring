@@ -73,8 +73,14 @@ namespace Ergonomy.Hooks
                 _hookThread.Start();
             }
 
-            // Synchronously wait for hook thread to complete installation
-            _startCompletedEvent.Wait();
+            // Synchronously wait (with timeout) for hook thread to complete installation
+            if (!_startCompletedEvent.Wait(TimeSpan.FromSeconds(10)))
+            {
+                // Hook thread failed to signal completion; do not report success.
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ❌ [Ergonomy] Input hook installation timed out after 10s.");
+                throw new InvalidOperationException("Timed out while waiting for input hook installation.");
+            }
 
             lock (_stateLock)
             {
@@ -125,6 +131,9 @@ namespace Ergonomy.Hooks
             {
                 _hookThreadId = GetCurrentThreadId();
 
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Input hook thread started. ThreadId={_hookThreadId}");
+
                 // Force creation of message queue for this thread
                 MSG msg;
                 PeekMessage(out msg, IntPtr.Zero, 0, 0, 0);
@@ -133,8 +142,13 @@ namespace Ergonomy.Hooks
                 if (_keyboardHookHandle == IntPtr.Zero)
                 {
                     int errorCode = Marshal.GetLastWin32Error();
-                    throw new InvalidOperationException($"WH_KEYBOARD_LL hook failed with Win32 error code {errorCode}.");
+                    throw new InvalidOperationException(
+                        $"WH_KEYBOARD_LL hook failed with Win32 error code {errorCode} " +
+                        $"({DescribeWin32Error(errorCode)}).");
                 }
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Keyboard hook installed. Handle={_keyboardHookHandle}");
 
                 _mouseHookHandle = SetHook(WH_MOUSE_LL, _mouseCallback);
                 if (_mouseHookHandle == IntPtr.Zero)
@@ -145,8 +159,13 @@ namespace Ergonomy.Hooks
                         UnhookWindowsHookEx(_keyboardHookHandle);
                         _keyboardHookHandle = IntPtr.Zero;
                     }
-                    throw new InvalidOperationException($"WH_MOUSE_LL hook failed with Win32 error code {errorCode}.");
+                    throw new InvalidOperationException(
+                        $"WH_MOUSE_LL hook failed with Win32 error code {errorCode} " +
+                        $"({DescribeWin32Error(errorCode)}).");
                 }
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Mouse hook installed. Handle={_mouseHookHandle}");
 
                 // Reset baseline when starting
                 _hasLastMousePoint = 0;
@@ -154,6 +173,9 @@ namespace Ergonomy.Hooks
 
                 // Signal success to Start() caller
                 _startCompletedEvent.Set();
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Input hook message loop active.");
 
                 // Native Win32 Message Loop
                 int bRet;
@@ -165,15 +187,33 @@ namespace Ergonomy.Hooks
                     TranslateMessage(ref msg);
                     DispatchMessage(ref msg);
                 }
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Input hook message loop exited (WM_QUIT or error).");
             }
             catch (Exception ex)
             {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ❌ [Ergonomy] Hook installation error on thread " +
+                    $"{GetCurrentThreadId()}: {ex.Message}");
                 _startupException = ex;
                 _startCompletedEvent.Set();
             }
             finally
             {
                 CleanupHooksOnHookThread();
+            }
+        }
+
+        private static string DescribeWin32Error(int errorCode)
+        {
+            try
+            {
+                return new System.ComponentModel.Win32Exception(errorCode).Message;
+            }
+            catch
+            {
+                return "Unknown Win32 error";
             }
         }
 

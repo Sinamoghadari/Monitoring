@@ -22,15 +22,27 @@ namespace Ergonomy
 
     public class AlarmManager
     {
+        private readonly object _lock = new object();
         private AppSettings _appSettings;
         private List<Image> _loadedImages;
         private int _currentImageIndex = 0;
         private static readonly HttpClient _httpClient = new HttpClient();
 
-        public bool IsAlarmActive { get; private set; } = false;
-        public int SessionCloseCounter { get; private set; } = 0;
-        public int PrimaryAlarmCount { get; private set; } = 0;
-        public int SecondaryAlarmCount { get; private set; } = 0;
+        private bool _isAlarmActive;
+        private int _sessionCloseCounter;
+        private int _primaryAlarmCount;
+        private int _secondaryAlarmCount;
+
+        public bool IsAlarmActive { get { lock (_lock) return _isAlarmActive; } }
+        public int SessionCloseCounter { get { lock (_lock) return _sessionCloseCounter; } }
+        public int PrimaryAlarmCount { get { lock (_lock) return _primaryAlarmCount; } }
+        public int SecondaryAlarmCount { get { lock (_lock) return _secondaryAlarmCount; } }
+
+        public void UpdateSettings(AppSettings appSettings)
+        {
+            if (appSettings == null) return;
+            lock (_lock) { _appSettings = appSettings; }
+        }
 
         public AlarmManager(AppSettings appSettings)
         {
@@ -51,8 +63,8 @@ namespace Ergonomy
                 var response = await _httpClient.GetStringAsync(apiUrl);
                 var imagesData = JsonSerializer.Deserialize<List<ImageApiResponse>>(response);
 
-                _loadedImages.Clear();
-                
+                var loaded = new List<Image>();
+
                 if (imagesData != null)
                 {
                     foreach (var img in imagesData)
@@ -62,7 +74,7 @@ namespace Ergonomy
                             byte[] imageBytes = Convert.FromBase64String(img.Data);
                             using (var ms = new MemoryStream(imageBytes))
                             {
-                                _loadedImages.Add(new Bitmap(ms)); 
+                                loaded.Add(new Bitmap(ms));
                             }
                         }
                         catch (Exception ex)
@@ -71,7 +83,13 @@ namespace Ergonomy
                         }
                     }
                 }
-                Console.WriteLine($"✅ {_loadedImages.Count} images were loaded from API ({apiUrl})");
+
+                lock (_lock)
+                {
+                    _loadedImages = loaded;
+                }
+
+                Console.WriteLine($"✅ {loaded.Count} images were loaded from API ({apiUrl})");
             }
             catch (Exception ex)
             {
@@ -79,66 +97,130 @@ namespace Ergonomy
             }
         }
 
+        // MUST be called on the WinForms UI thread: it creates and shows a Form.
         public void ShowPrimaryAlarm()
         {
-            IsAlarmActive = true;
             Image? currentImage = null;
+            bool showForm;
 
-            if (_loadedImages?.Count > 0)
+            lock (_lock)
             {
-                currentImage = _loadedImages[_currentImageIndex];
-                _currentImageIndex = (_currentImageIndex + 1) % _loadedImages.Count;
+                if (_isAlarmActive)
+                    return;
+
+                _isAlarmActive = true;
+                _primaryAlarmCount++;
+
+                if (_loadedImages != null && _loadedImages.Count > 0)
+                {
+                    currentImage = _loadedImages[_currentImageIndex];
+                    _currentImageIndex = (_currentImageIndex + 1) % _loadedImages.Count;
+                }
+
+                showForm = _sessionCloseCounter < (_appSettings?.SessionCloseLimit ?? int.MaxValue);
             }
 
-            if (SessionCloseCounter < _appSettings?.SessionCloseLimit)
+            if (!showForm)
             {
-                PrimaryAlarmCount++;
-                
-                var primaryAlarm = new PrimaryAlarmForm(_appSettings, currentImage);
-                primaryAlarm.FormClosedCallback += (isUserClose) => {
-                    if (isUserClose)
+                // Session close limit already reached; primary alarm is not allowed.
+                // Reset the active flag so future notifications are not blocked forever.
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] No alarm shown because: session close limit " +
+                    $"{_appSettings?.SessionCloseLimit} already reached.");
+                lock (_lock) { _isAlarmActive = false; }
+                return;
+            }
+
+            if (currentImage != null)
+            {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Image selected: " +
+                    $"{_loadedImages.Count} image(s) available, using index {_currentImageIndex}.");
+            }
+            else
+            {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] No alarm image available (images may not be " +
+                    $"loaded yet); showing alarm without image.");
+            }
+
+            var primaryAlarm = new PrimaryAlarmForm(_appSettings, currentImage);
+            primaryAlarm.FormClosedCallback += (isUserClose) => OnPrimaryAlarmClosed(isUserClose);
+            primaryAlarm.Show();
+
+            Console.WriteLine(
+                $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Primary alarm shown on UI thread.");
+        }
+
+        private void OnPrimaryAlarmClosed(bool isUserClose)
+        {
+            bool showSecondary = false;
+
+            lock (_lock)
+            {
+                if (isUserClose)
+                {
+                    _sessionCloseCounter++;
+                    if (_sessionCloseCounter >= (_appSettings?.SessionCloseLimit ?? int.MaxValue))
                     {
-                        SessionCloseCounter++;
-                        if (SessionCloseCounter >= _appSettings?.SessionCloseLimit)
-                        {
-                            ShowSecondaryAlarm();
-                        }
-                        else
-                        {
-                            IsAlarmActive = false;
-                        }
+                        _secondaryAlarmCount++;
+                        showSecondary = true;
                     }
                     else
                     {
-                        IsAlarmActive = false;
+                        _isAlarmActive = false;
                     }
-                };
-                primaryAlarm.Show();
+                }
+                else
+                {
+                    _isAlarmActive = false;
+                }
+            }
+
+            if (showSecondary)
+            {
+                // Runs on the UI thread (invoked from FormClosedCallback) so it is
+                // safe to create and show the secondary form here.
+                ShowSecondaryAlarmOnUiThread();
             }
         }
 
-        private void ShowSecondaryAlarm()
+        private void ShowSecondaryAlarmOnUiThread()
         {
-            SecondaryAlarmCount++;
             Image? randomImage = null;
 
-            if (_loadedImages?.Count > 0)
+            lock (_lock)
             {
-                var rand = new Random();
-                randomImage = _loadedImages[rand.Next(_loadedImages.Count)];
+                if (_loadedImages != null && _loadedImages.Count > 0)
+                {
+                    var rand = new Random();
+                    randomImage = _loadedImages[rand.Next(_loadedImages.Count)];
+                }
             }
 
+            if (randomImage != null)
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Secondary alarm image selected.");
+            else
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Secondary alarm shown without image.");
+
             var secondaryAlarm = new SecondaryAlarmForm(_appSettings, randomImage);
-            secondaryAlarm.FormClosed += (s, args) => {
-                SessionCloseCounter = 0;
-                IsAlarmActive = false;
+            secondaryAlarm.FormClosed += (s, args) =>
+            {
+                lock (_lock)
+                {
+                    _sessionCloseCounter = 0;
+                    _isAlarmActive = false;
+                }
             };
             secondaryAlarm.Show();
+
+            Console.WriteLine(
+                $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Secondary alarm shown on UI thread.");
         }
 
         public void StopAlarms()
         {
-            IsAlarmActive = false;
+            lock (_lock) { _isAlarmActive = false; }
         }
     }
 }

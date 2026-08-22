@@ -29,6 +29,11 @@ namespace Ergonomy
         private KafkaConnect? _kafkaConnect;
         private ErgonomyManager? _ergonomyManager;
 
+        // Hidden UI anchor used exclusively to marshal WinForms UI work
+        // (alarm/notification forms) onto the UI thread from worker threads.
+        private readonly Control _uiAnchor = new Control();
+        private bool _settingsSourceIsApi;
+
         private System.Timers.Timer? _healthCheckTimer;
         private System.Timers.Timer? _wakeUpTimer;
         private System.Timers.Timer? _settingsUpdateTimer;
@@ -59,6 +64,25 @@ namespace Ergonomy
                     HandleCriticalFailure(ex.Message);
             };
 
+            // ---- UI thread anchor ----
+            // Keep a hidden Control on the UI thread that we can use to marshal
+            // alarm/notification forms back onto this thread from worker/timer
+            // threads. It also forces the WinForms SyncContext to be installed.
+            try
+            {
+                _uiAnchor.CreateControl();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ⚠️ [Ergonomy] Could not create UI anchor control: {ex.Message}");
+            }
+            // Immediately reset the SyncContext so the blocking startup settings
+            // refresh below resumes its continuation on the thread pool instead of
+            // deadlocking the UI thread (which has no message pump yet). Application.Run
+            // re-installs a fresh WindowsFormsSynchronizationContext afterwards.
+            SynchronizationContext.SetSynchronizationContext(null);
+
             LoadAppSettings();
             
             _windowsSid = GetWindowsSID();
@@ -79,7 +103,7 @@ namespace Ergonomy
             TestKafkaConnectionAtStartup();
 
             _syncEngine = new SyncEngine(_kafkaConnect, _localDb, _appSettings.SyncEngineIntervalMinutes);
-            _ergonomyManager = new ErgonomyManager(_appSettings, _localDb, _sessionGuid, _windowsSid, _windowsUsername);
+            _ergonomyManager = new ErgonomyManager(_appSettings, _localDb, _sessionGuid, _windowsSid, _windowsUsername, _uiAnchor);
 
             _commandManager = new CommandManager(
                 _appSettings,
@@ -224,6 +248,7 @@ namespace Ergonomy
                     return;
 
                 _appSettings = remoteSettings;
+                _settingsSourceIsApi = true;
 
                 ReconfigureRuntimeBasedOnSettings();
 
@@ -246,6 +271,10 @@ namespace Ergonomy
             _syncEngine?.UpdateSyncInterval(_appSettings.SyncEngineIntervalMinutes);
 
             _commandManager?.UpdateSettings(_appSettings);
+
+            _ergonomyManager?.UpdateSettings(_appSettings);
+            if (_ergonomyManager != null)
+                _ergonomyManager.SettingsSourceIsApi = _settingsSourceIsApi;
 
             RestartSettingsUpdateTimer();
             RestartPermissionTimers();
@@ -556,6 +585,7 @@ namespace Ergonomy
         private void EvaluateErgonomyPermission()
         {
             bool allowErgonomy = _appSettings.AllowErgonomyCollection;
+            bool wasRunning = _ergonomyManager?.IsRunning ?? false;
 
             string msg = $"[Ergonomy Status] Permission: {allowErgonomy}";
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] 🔍 {msg}");
@@ -563,12 +593,26 @@ namespace Ergonomy
 
             if (allowErgonomy)
             {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Ergonomy permission is true; ensuring manager is started.");
                 _ergonomyManager?.Start();
+                SaveLogToDatabase(
+                    "INFO",
+                    _ergonomyManager?.IsRunning == true
+                        ? "ErgonomyCollection: manager started successfully (hooks/timers active)."
+                        : "ErgonomyCollection: permission true but manager did NOT start.");
             }
             else
             {
-                _ergonomyManager?.Stop();
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Ergonomy permission is false; stopping manager.");
+                _ergonomyManager?.Stop("AllowErgonomyCollection is false");
                 SaveLogToDatabase("WARNING", "Ergonomy Collection: Access DENIED or Disabled. Process is STOPPED.");
+            }
+
+            if (wasRunning != allowErgonomy)
+            {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Settings update changed AllowErgonomyCollection from " +
+                    $"{wasRunning} to {allowErgonomy}.");
             }
         }
 
@@ -675,7 +719,7 @@ namespace Ergonomy
         private void StopAllDataCollection()
         {
             StopTimer(ref _advancedMetricsTimer);
-            _ergonomyManager?.Stop();
+            _ergonomyManager?.Stop("local data collection stopped");
         }
 
         private async void OnAdvancedMetricsTimerElapsed(object? sender, ElapsedEventArgs e)
@@ -828,10 +872,11 @@ namespace Ergonomy
                 StopTimer(ref _kafkaPermissionTimer);
 
                 _syncEngine?.Stop();
-                _ergonomyManager?.Stop();
+                _ergonomyManager?.Stop("application shutdown");
 
                 _ergonomyManager?.Dispose();
                 _notifyIcon?.Dispose();
+                _uiAnchor.Dispose();
                 _kafkaConnect?.Dispose();
                 _commandManager?.Dispose();
                 _httpClient.Dispose();
