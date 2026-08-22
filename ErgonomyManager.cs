@@ -1,5 +1,7 @@
 using System;
 using System.Globalization;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Ergonomy.Configuration;
 using Ergonomy.Database;
@@ -10,18 +12,27 @@ namespace Ergonomy.Core
 {
     public class ErgonomyManager : IDisposable
     {
-        private readonly AppSettings _appSettings;
+        private AppSettings _appSettings;
         private readonly LocalDatabaseManager _localDb;
+        private readonly Control? _uiAnchor;
 
         private GlobalInputHook? _globalInputHook;
         private ActivityMonitor? _activityMonitor;
         private DataLogger? _dataLogger;
         private AlarmManager? _alarmManager;
-        private System.Windows.Forms.Timer? _notificationTimer;
+        private System.Timers.Timer? _notificationTimer;
 
         private readonly string _sessionGuid;
         private readonly string _windowsSid;
         private readonly string _windowsUsername;
+
+        // Serializes lifecycle transitions and prevents overlapping
+        // threshold evaluations / duplicate alarm requests.
+        private readonly object _lifecycleLock = new object();
+        private int _thresholdEvalGate;
+
+        // Set by the host when settings were refreshed from the API.
+        public bool SettingsSourceIsApi { get; set; }
 
         public bool IsRunning { get; private set; } = false;
 
@@ -30,21 +41,46 @@ namespace Ergonomy.Core
             LocalDatabaseManager localDb,
             string sessionGuid,
             string windowsSid,
-            string windowsUsername)
+            string windowsUsername,
+            Control? uiAnchor = null)
         {
             _appSettings = appSettings;
             _localDb = localDb;
             _sessionGuid = sessionGuid;
             _windowsSid = windowsSid;
             _windowsUsername = windowsUsername;
+            _uiAnchor = uiAnchor;
 
             _globalInputHook = new GlobalInputHook();
             _activityMonitor = new ActivityMonitor(_globalInputHook);
             _alarmManager = new AlarmManager(_appSettings);
             _dataLogger = new DataLogger(_activityMonitor, () => _alarmManager.SessionCloseCounter, _appSettings);
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] [Ergonomy] ErgonomyManager created.");
         }
 
-        private readonly object _lifecycleLock = new object();
+        public void UpdateSettings(AppSettings appSettings)
+        {
+            if (appSettings == null) return;
+
+            lock (_lifecycleLock)
+            {
+                if (ReferenceEquals(_appSettings, appSettings))
+                    return;
+
+                _appSettings = appSettings;
+                _alarmManager?.UpdateSettings(appSettings);
+                _dataLogger?.UpdateSettings(appSettings);
+
+                // Refresh the notification interval in case it changed.
+                if (_notificationTimer != null)
+                {
+                    _notificationTimer.Interval = (_appSettings.NotificationIntervalSeconds > 0
+                        ? _appSettings.NotificationIntervalSeconds
+                        : 5) * 1000;
+                }
+            }
+        }
 
         public void Start()
         {
@@ -52,9 +88,16 @@ namespace Ergonomy.Core
             {
                 if (IsRunning) return;
 
+                LogEffectiveSettings();
+
                 try
                 {
-                    _ = Task.Run(async () => await _alarmManager?.LoadImagesFromApiAsync()!);
+                    // Load alarm images asynchronously (API I/O must not block startup).
+                    _ = Task.Run(async () =>
+                    {
+                        try { if (_alarmManager != null) await _alarmManager.LoadImagesFromApiAsync(); }
+                        catch (Exception ex) { Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ [Ergonomy] Image load error: {ex.Message}"); }
+                    });
                 }
                 catch
                 {
@@ -66,21 +109,31 @@ namespace Ergonomy.Core
 
                 if (_notificationTimer == null)
                 {
-                    _notificationTimer = new System.Windows.Forms.Timer();
-                    _notificationTimer.Interval = (_appSettings.NotificationIntervalSeconds > 0 ? _appSettings.NotificationIntervalSeconds : 5) * 1000;
-                    _notificationTimer.Tick += OnNotificationTimerTick;
+                    _notificationTimer = new System.Timers.Timer(
+                        (_appSettings.NotificationIntervalSeconds > 0 ? _appSettings.NotificationIntervalSeconds : 5) * 1000)
+                    {
+                        AutoReset = true
+                    };
+                    _notificationTimer.Elapsed += OnNotificationTimerElapsed;
                 }
 
                 _notificationTimer.Start();
                 IsRunning = true;
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Manager started. Notification timer started (interval={_appSettings.NotificationIntervalSeconds}s), " +
+                    $"activity threshold={_appSettings.ActivityThresholdSeconds}s.");
             }
         }
 
-        public void Stop()
+        public void Stop(string reason = "requested")
         {
             lock (_lifecycleLock)
             {
                 if (!IsRunning) return;
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Manager stopping... Reason={reason}");
 
                 _notificationTimer?.Stop();
                 _alarmManager?.StopAlarms();
@@ -91,20 +144,81 @@ namespace Ergonomy.Core
                 _activityMonitor?.Stop();
 
                 IsRunning = false;
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Manager stopped because: {reason}. " +
+                    $"Input hooks and timers are stopped.");
             }
         }
 
-        private void OnNotificationTimerTick(object? sender, EventArgs e)
+        private void LogEffectiveSettings()
         {
-            if (_alarmManager == null || _alarmManager.IsAlarmActive || _activityMonitor == null) return;
+            Console.WriteLine(
+                $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Effective settings: " +
+                $"Allow={_appSettings.AllowErgonomyCollection}, " +
+                $"NotificationIntervalSeconds={_appSettings.NotificationIntervalSeconds}, " +
+                $"ActivityThresholdSeconds={_appSettings.ActivityThresholdSeconds}, " +
+                $"Source={(SettingsSourceIsApi ? "API" : "Bootstrap/Environment")}");
+        }
 
-            TimeSpan totalActivityTime = _activityMonitor.TotalKeyboardActiveTime + _activityMonitor.TotalMouseActiveTime;
+        private void OnNotificationTimerElapsed(object? sender, System.Timers.ElapsedEventArgs e)
+        {
+            if (_alarmManager == null || _activityMonitor == null) return;
 
-            if (totalActivityTime.TotalSeconds >= (_appSettings.ActivityThresholdSeconds > 0 ? _appSettings.ActivityThresholdSeconds : 5))
+            if (Interlocked.CompareExchange(ref _thresholdEvalGate, 1, 0) != 0)
+                return;
+
+            try
             {
+                if (_alarmManager.IsAlarmActive) return;
+
+                TimeSpan totalActivityTime = _activityMonitor.TotalKeyboardActiveTime + _activityMonitor.TotalMouseActiveTime;
+
+                double threshold = _appSettings.ActivityThresholdSeconds > 0
+                    ? _appSettings.ActivityThresholdSeconds
+                    : 5;
+
+                if (totalActivityTime.TotalSeconds >= threshold)
+                {
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Threshold reached " +
+                        $"({totalActivityTime.TotalSeconds:0.0}s >= {threshold}s). Posting alarm to UI thread.");
+
+                    if (_uiAnchor != null && _uiAnchor.IsHandleCreated)
+                    {
+                        _uiAnchor.BeginInvoke((Action)HandleThresholdReached);
+                    }
+                    else
+                    {
+                        HandleThresholdReached();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ [Ergonomy] Notification timer error: {ex.Message}");
+            }
+            finally
+            {
+                Interlocked.Exchange(ref _thresholdEvalGate, 0);
+            }
+        }
+
+        // Runs on the WinForms UI thread. Creates and shows the alarm Form.
+        private void HandleThresholdReached()
+        {
+            try
+            {
+                if (_alarmManager == null || _activityMonitor == null) return;
+                if (_alarmManager.IsAlarmActive) return;
+
                 _alarmManager.ShowPrimaryAlarm();
                 LogSessionState("Update");
                 _activityMonitor.ResetTotals();
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ [Ergonomy] Alarm handling error: {ex.Message}");
             }
         }
 
@@ -130,7 +244,22 @@ namespace Ergonomy.Core
                 CollectedAt_Shamsi = ToShamsiDateTimeString(DateTime.Now)
             };
 
-            _localDb.SaveUserActivity(QueueTargets.UserActivity, sessionData);
+            // Persist to the SQLite outbox off the UI thread (I/O must not block UI).
+            Task.Run(() =>
+            {
+                try
+                {
+                    if (_localDb == null) return;
+                    _localDb.SaveUserActivity(QueueTargets.UserActivity, sessionData);
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Queued user_activity payload " +
+                        $"StateType={stateType} Keyboard={keyboardSeconds:0.0}s Mouse={mouseSeconds:0.0}s.");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ [Ergonomy] Failed to persist {stateType} payload: {ex.Message}");
+                }
+            });
         }
 
 
@@ -151,8 +280,10 @@ namespace Ergonomy.Core
 
         public void Dispose()
         {
-            Stop();
+            Stop("manager disposed");
+            _notificationTimer?.Stop();
             _notificationTimer?.Dispose();
+            _notificationTimer = null;
             _globalInputHook?.Dispose();
         }
     }

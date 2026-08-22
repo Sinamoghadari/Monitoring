@@ -42,6 +42,9 @@ namespace Ergonomy.Hooks
             _sampleTimer.Elapsed += OnSampleTimerElapsed;
         }
 
+        private DateTime _lastSampleLogUtc = DateTime.MinValue;
+        private bool _firstActivityLogged;
+
         public void Start()
         {
             lock (_stateLock)
@@ -52,6 +55,9 @@ namespace Ergonomy.Hooks
                 _sampleTimer.Start();
 
                 _isRunning = true;
+
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Activity monitor sampling started. Interval={_sampleTimer.Interval}ms");
             }
         }
 
@@ -103,17 +109,21 @@ namespace Ergonomy.Hooks
 
                 var snapshot = _globalInputHook.ConsumeSnapshot();
 
+                bool anyActivity = false;
+
                 lock (_stateLock)
                 {
                     if (snapshot.HasKeyboardActivity)
                     {
                         _totalKeyboardActiveTime = _totalKeyboardActiveTime.Add(_sampleWindow);
                         _totalKeyboardEvents += snapshot.KeyboardEvents;
+                        anyActivity = true;
                     }
 
                     if (snapshot.HasMouseActivity)
                     {
                         _totalMouseActiveTime = _totalMouseActiveTime.Add(_sampleWindow);
+                        anyActivity = true;
                     }
 
                     _totalMouseMoveEvents += snapshot.MouseMoveEvents;
@@ -128,6 +138,28 @@ namespace Ergonomy.Hooks
                     _totalMouseActivityScore += snapshot.MouseMovementPixels
                                                + (snapshot.MouseClickEvents * 50)
                                                + (snapshot.MouseWheelEvents * 25);
+                }
+
+                // Throttled observability: log on first detected input and then
+                // at most once every 30 seconds (avoids per-mouse-move spam).
+                if (anyActivity && !_firstActivityLogged)
+                {
+                    _firstActivityLogged = true;
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] First input detected. " +
+                        $"keyboardEvents={snapshot.KeyboardEvents}, mouseMoves={snapshot.MouseMoveEvents}, " +
+                        $"mouseClicks={snapshot.MouseClickEvents}, mouseWheel={snapshot.MouseWheelEvents}");
+                }
+                else if (anyActivity && DateTime.UtcNow - _lastSampleLogUtc >= TimeSpan.FromSeconds(30))
+                {
+                    _lastSampleLogUtc = DateTime.UtcNow;
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Sample: " +
+                        $"keyboardEvents={_totalKeyboardEvents}, mouseMoves={_totalMouseMoveEvents}, " +
+                        $"mouseClicks={_totalMouseClickEvents}, mouseWheel={_totalMouseWheelEvents}, " +
+                        $"keyboardActive={_totalKeyboardActiveTime.TotalSeconds:0.0}s, " +
+                        $"mouseActive={_totalMouseActiveTime.TotalSeconds:0.0}s, " +
+                        $"totalActive={(_totalKeyboardActiveTime + _totalMouseActiveTime).TotalSeconds:0.0}s");
                 }
             }
             catch (Exception ex)

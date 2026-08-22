@@ -14,16 +14,32 @@ namespace Ergonomy.Logging
         private System.Timers.Timer _logTimer;
         private ActivityMonitor _activityMonitor;
         private Func<int> _getTotalCloseCounter;
+        private AppSettings _settings;
         private bool _isRunning = false;
 
         public DataLogger(ActivityMonitor activityMonitor, Func<int> getTotalCloseCounter, AppSettings settings)
         {
             _activityMonitor = activityMonitor;
             _getTotalCloseCounter = getTotalCloseCounter;
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
-            double intervalHours = settings.LoggingIntervalHours > 0 ? settings.LoggingIntervalHours : 1;
-            _logTimer = new System.Timers.Timer(intervalHours * 60 * 60 * 1000);
+            _logTimer = new System.Timers.Timer(GetIntervalMs(_settings));
             _logTimer.Elapsed += OnLogTimerElapsed;
+        }
+
+        private static double GetIntervalMs(AppSettings settings)
+        {
+            double intervalHours = settings.LoggingIntervalHours > 0 ? settings.LoggingIntervalHours : 1;
+            return intervalHours * 60 * 60 * 1000;
+        }
+
+        public void UpdateSettings(AppSettings settings)
+        {
+            if (settings == null) return;
+            _settings = settings;
+
+            if (_logTimer != null)
+                _logTimer.Interval = GetIntervalMs(settings);
         }
 
         public void Start()

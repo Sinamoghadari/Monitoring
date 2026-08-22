@@ -1,0 +1,119 @@
+====================================================================
+Ergonomy — agent knowledge (concise)
+====================================================================
+
+PURPOSE
+.NET 9 WinForms Windows agent for SISCO. Collects local/advanced system
+metrics and ergonomics (keyboard/mouse) input activity; shows ergonomics
+alarms + API-loaded images; persists records to a SQLite Outbox; syncs to
+Kafka; downstream consumers ingest into ClickHouse. Settings come from a
+Settings API (backed by PostgreSQL); machine env vars are the bootstrap.
+
+CONFIGURATION FLOW
+Machine env vars -> EnvironmentSettingsProvider.Load() -> AppSettings (bootstrap)
+-> Settings API refresh (UpdateSettingsFromApiAsync) -> replace _appSettings.
+PreserveEnvironmentInfrastructureSettings keeps API.* and Kafka.* from env
+(the API cannot override topics/endpoints). Every refresh calls
+ReconfigureRuntimeBasedOnSettings -> EvaluateErgonomyPermission.
+
+DATA FLOW
+UserActivity payload / app_logs / advanced metrics -> SaveUserActivity
+(SQLite sync_queue outbox) -> SyncEngine -> KafkaConnect -> Kafka topics
+-> ClickHouse tables/materialized views.
+
+ACTIVE ERGONOMICS SOURCE FILES
+Hooks/GlobalInputHook.cs   low-level WH_KEYBOARD_LL / WH_MOUSE_LL hooks on a
+                           dedicated background thread "Ergonomy-InputHook";
+                           atomic Interlocked counters; native GetMessage loop.
+Hooks/ActivityMonitor.cs   1s sampling; accumulates keyboard/mouse active time.
+ErgonomyManager.cs         lifecycle Start/Stop; notification timer; payload.
+AlarmManager.cs            alarm counters/image selection/SessionCloseLimit.
+UI/PrimaryAlarmForm.cs     primary alarm form (auto-close timer).
+UI/SecondaryAlarmForm.cs   secondary alarm form (unclosable -> auto-close).
+MainApplicationContext.cs  host; permission evaluation; timers.
+
+RUNTIME FEATURE GATE
+MainApplicationContext.EvaluateErgonomyPermission() reads
+AppSettings.AllowErgonomyCollection; if true -> _ergonomyManager.Start(),
+else -> Stop(). "[Ergonomy Status] Permission: True" only reflects the
+settings value; manager/hook/timer start is separate (see logs).
+
+NOTIFICATION/ALARM STATE MACHINE
+1s sample timer accumulates active seconds. Notification timer fires every
+NotificationIntervalSeconds (5s). If TotalKeyboard+TotalMouseActiveTime >=
+ActivityThresholdSeconds (5s) -> ShowPrimaryAlarm (increments PrimaryAlarmCount,
+shows PrimaryAlarmForm). User-close increments SessionCloseCounter; when it
+reaches SessionCloseLimit (3) -> SecondaryAlarmForm (increments
+SecondaryAlarmCount); secondary close resets SessionCloseCounter=0 and
+IsAlarmActive=false. Auto-close resets IsAlarmActive=false.
+
+DEDICATED HOOK THREAD: YES (GlobalInputHook). Callbacks only do atomic
+increments + CallNextHookEx; NO I/O/UI/Kafka/SQLite/Task per event.
+
+PAYLOAD SEMANTICS
+UserActivityPayload fields (SyncModels.cs) map to ActivityMonitor as:
+KeyboardActiveSeconds=TotalKeyboardActiveTime.TotalSeconds,
+MouseActiveSeconds=TotalMouseActiveTime.TotalSeconds,
+TotalActiveSeconds=sum(keyboard,mouse). StateType "Start" is emitted at
+session start and MAY be zero (no activity yet). Later "Update" payloads
+(emitted when threshold reached) must carry real accumulated values.
+ResetTotals() is called only AFTER the alarm request + Update payload is
+captured. Field names in payload == names in ActivityMonitor (verified).
+
+TOPIC NAME RESOLUTION
+Kafka topics always come from env (PreserveEnvironmentInfrastructureSettings
+copies env Kafka into refreshed settings). ERGONOMY_KAFKA_APP_LOGS_TOPIC is
+read as AppLogsTopic; if the machine env var is absent the default is the
+string "app_logs". Prompt claims "app_logs_topic": the runtime log showing
+"app_logs" means that machine env var was NOT set -> default used. Not a code
+defect; it is precedence fallback.
+
+ROOT CAUSE (current primary issue)
+ERGONOMY_ALLOW_ERGONOMY_COLLECTION=true previously caused severe cursor lag;
+previous patch moved hooks to a dedicated thread (lag fixed). New regression:
+app starts, permission True, but no alarm/Update payload. Root cause:
+MainApplicationContext runs UpdateSettingsFromApiAsync(...).GetAwaiter()
+.GetResult() during construction BEFORE the WinForms message loop and with no
+SynchronizationContext (proven by the fact that the blocking call does NOT
+deadlock). So the async continuation (and therefore ErgonomyManager.Start)
+executes on a THREADPOOL thread. ErgonomyManager used a
+System.Windows.Forms.Timer for notifications, created on that threadpool
+thread; a WinForms Timer never ticks without a UI message pump -> threshold is
+never evaluated -> no alarm/image/Update state.
+
+FIX APPLIED (this branch)
+- ErgonomyManager now uses a thread-safe System.Timers.Timer for notification
+  (ticks regardless of thread) and marshals every alarm/UI form to the UI
+  thread via a hidden UI anchor Control (MainApplicationContext._uiAnchor)
+  using Control.BeginInvoke -> HandleThresholdReached on the UI thread.
+- MainApplicationContext creates the anchor control in the constructor and
+  resets the WinForms SyncContext to null so the blocking startup settings
+  refresh does not deadlock; Application.Run reinstalls a fresh context.
+- Added ErgonomyManager.UpdateSettings + AlarmManager.UpdateSettings +
+  DataLogger.UpdateSettings to fix a stale _appSettings reference after API
+  refresh (previously the manager kept the bootstrap settings object).
+- Added lifecycle/observability logs and throttled activity sampling.
+- AlarmManager is now thread-safe (lock on counters/state); logs image-selected
+  or no-image fallback.
+- Enabled/disabled (AllowErgonomyCollection true<->false) now cleanly
+  Start()/Stop() hooks, timers and alarms.
+
+KNOWN RISKS / UNRESOLVED
+- API settings update can replace _appSettings in host; ErgonomyManager and
+  AlarmManager held a stale reference => added UpdateSettings() to refresh.
+- Images are loaded asynchronously; if an alarm fires before load, a no-image
+  fallback is used and logged (no crash).
+- Repo Environment_set.txt sample sets ERGONOMY_ALLOW_ERGONOMY_COLLECTION=false
+  and omits ERGONOMY_KAFKA_APP_LOGS_TOPIC, while the production machine had
+  true + app_logs default. The deployed settings differ from the repo sample;
+  it is a documentation/deployment artifact, not compiled code.
+- MessageAlarmForm / CommandManager scheduled-shutdown paths are unrelated
+  dead/legacy code; not touched.
+- Live runtime verification only possible on a real Windows interactive
+  desktop (see report); this sandbox cannot run/build .NET.
+
+BUILD/RUN
+dotnet build --no-restore -p:EnableWindowsTargeting=true  (Debug)
+dotnet build -c Release --no-restore -p:EnableWindowsTargeting=true
+Run: dotnet run --project Ergonomy.csproj  (or published exe). Requires
+machine env vars (see Environment_set.txt) and Windows interactive session.
