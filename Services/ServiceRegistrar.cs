@@ -50,8 +50,9 @@ namespace Ergonomy.Services
                 GetWindowsUsername(),
                 Environment.MachineName));
 
+            services.AddSingleton<SqliteOutboxConnectionProvider>();
             services.AddSingleton<LocalDatabaseManager>(sp =>
-                new LocalDatabaseManager(sp.GetRequiredService<AppSettings>().Outbox));
+                new LocalDatabaseManager(sp.GetRequiredService<AppSettings>().Outbox, sp.GetRequiredService<SqliteOutboxConnectionProvider>()));
 
             services.AddSingleton<KafkaConnect>(sp =>
             {
@@ -109,7 +110,9 @@ namespace Ergonomy.Services
                 new CommandManager(
                     sp.GetRequiredService<AppSettings>(),
                     sp.GetRequiredService<MachineIdentity>().WindowsUsername,
-                    sp.GetRequiredService<LocalDatabaseManager>()));
+                    sp.GetRequiredService<LocalDatabaseManager>(),
+                    sp.GetRequiredService<ISettingsService>(),
+                    sp.GetRequiredService<ILogger<CommandManager>>()));
 
             services.AddSingleton<SettingsRefreshWorker>();
             services.AddSingleton<HealthMonitorWorker>();

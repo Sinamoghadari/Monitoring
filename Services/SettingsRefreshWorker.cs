@@ -26,6 +26,8 @@ namespace Ergonomy.Services
 
         protected override string Name => nameof(SettingsRefreshWorker);
 
+        protected override bool ImmediateFirstRun => true;
+
         protected override TimeSpan GetInterval()
         {
             int seconds = _settingsService.Current.SettingsCheckIntervalSeconds;
@@ -34,7 +36,7 @@ namespace Ergonomy.Services
 
         protected override async Task DoWorkAsync(CancellationToken ct)
         {
-            await _settingsService.RefreshFromApiAsync(logFailures: false).ConfigureAwait(false);
+            await _settingsService.RefreshFromApiAsync(logFailures: false, cancellationToken: ct).ConfigureAwait(false);
         }
     }
 }

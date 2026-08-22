@@ -30,7 +30,7 @@ namespace Ergonomy.Configuration
         /// replaces <see cref="Current"/> and raises <see cref="SettingsChanged"/>.
         /// Infrastructure (API endpoints + Kafka topics) is always preserved from bootstrap.
         /// </summary>
-        Task<bool> RefreshFromApiAsync(bool logFailures = false);
+        Task<bool> RefreshFromApiAsync(bool logFailures = false, CancellationToken cancellationToken = default);
     }
 
     public sealed class SettingsService : ISettingsService, IDisposable
@@ -88,23 +88,24 @@ namespace Ergonomy.Configuration
                 _current.EnabledMetrics?.Count ?? 0);
         }
 
-        private void TryValidate(AppSettings settings)
+        private bool TryValidate(AppSettings settings)
         {
             try
             {
                 AppDefaults.ValidateRequired(settings);
+                return true;
             }
             catch (SettingsValidationException ex)
             {
-                _logger.LogWarning(
-                    LogEvents.SettingsValidationFailedId,
-                    "Required settings validation failed: {Message}", ex.Message);
+                _logger.LogWarning(LogEvents.SettingsValidationFailedId, ex,
+                    "Required settings validation failed. Reason={Reason}", "required-setting-missing-or-invalid");
+                return false;
             }
         }
 
-        public async Task<bool> RefreshFromApiAsync(bool logFailures = false)
+        public async Task<bool> RefreshFromApiAsync(bool logFailures = false, CancellationToken cancellationToken = default)
         {
-            await _refreshLock.WaitAsync();
+            await _refreshLock.WaitAsync(cancellationToken);
             try
             {
                 string? apiUrl = _current.API?.Settings;
@@ -115,7 +116,7 @@ namespace Ergonomy.Configuration
                     return false;
                 }
 
-                using HttpResponseMessage response = await _httpClient.GetAsync(apiUrl);
+                using HttpResponseMessage response = await _httpClient.GetAsync(apiUrl, cancellationToken);
                 if (!response.IsSuccessStatusCode)
                 {
                     if (logFailures)
@@ -141,7 +142,8 @@ namespace Ergonomy.Configuration
                 // only from the machine environment (bootstrap); the API cannot override them.
                 PreserveEnvironmentInfrastructureSettings(remoteSettings);
 
-                TryValidate(remoteSettings);
+                if (!TryValidate(remoteSettings))
+                    return false;
 
                 AppSettings currentSnapshot;
                 lock (_sync) currentSnapshot = _current;
@@ -158,17 +160,20 @@ namespace Ergonomy.Configuration
                     _sourceIsApi = true;
                 }
 
-                _logger.LogInformation("Settings updated from API successfully.");
+                _logger.LogInformation(LogEvents.SettingsRefreshedId, "Settings updated from API successfully.");
                 SettingsChanged?.Invoke(remoteSettings);
                 return true;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
                 if (logFailures)
                 {
-                    _logger.LogWarning(
-                        "Offline Mode or API Error! Using Environment settings. Msg: {Message}",
-                        ex.Message);
+                    _logger.LogWarning(LogEvents.SettingsRefreshFailedId, ex,
+                        "Settings refresh failed; retaining the existing effective settings.");
                 }
                 else
                 {
@@ -188,6 +193,9 @@ namespace Ergonomy.Configuration
             lock (_sync) bootstrap = _bootstrap;
             remoteSettings.API = bootstrap.API;
             remoteSettings.Kafka = bootstrap.Kafka;
+            // Security switches are machine-authoritative. API settings cannot enable them.
+            remoteSettings.RemoteCommandsEnabled = bootstrap.RemoteCommandsEnabled;
+            remoteSettings.SystemPowerCommandsEnabled = bootstrap.SystemPowerCommandsEnabled;
         }
 
         private static string NormalizeSettings(AppSettings settings)

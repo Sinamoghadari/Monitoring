@@ -62,25 +62,19 @@ namespace Ergonomy.Services
             try
             {
                 if (ImmediateFirstRun)
-                    await DoWorkAsync(ct).ConfigureAwait(false);
+                    await RunIterationSafelyAsync(ct).ConfigureAwait(false);
 
                 while (!ct.IsCancellationRequested)
                 {
                     TimeSpan interval = GetInterval();
-                    if (interval <= TimeSpan.Zero)
-                        interval = TimeSpan.FromSeconds(1);
-
+                    if (interval <= TimeSpan.Zero) interval = TimeSpan.FromSeconds(1);
                     using var timer = new PeriodicTimer(interval);
                     try
                     {
-                        await timer.WaitForNextTickAsync(ct).ConfigureAwait(false);
+                        if (!await timer.WaitForNextTickAsync(ct).ConfigureAwait(false)) break;
+                        await RunIterationSafelyAsync(ct).ConfigureAwait(false);
                     }
-                    catch (OperationCanceledException)
-                    {
-                        break;
-                    }
-
-                    await DoWorkAsync(ct).ConfigureAwait(false);
+                    catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
                 }
             }
             catch (OperationCanceledException)
@@ -95,6 +89,24 @@ namespace Ergonomy.Services
             finally
             {
                 IsRunning = false;
+            }
+        }
+
+
+        private async Task RunIterationSafelyAsync(CancellationToken ct)
+        {
+            try
+            {
+                await DoWorkAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(LogEvents.WorkerErrorId, ex, "{Worker} iteration failed; retrying after bounded delay.", Name);
+                await Task.Delay(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
             }
         }
 

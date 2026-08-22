@@ -86,6 +86,14 @@ namespace Ergonomy.Configuration
                     "ERGONOMY_ALLOW_ERGONOMY_COLLECTION",
                     true),
 
+                RemoteCommandsEnabled = GetBool(
+                    "ERGONOMY_REMOTE_COMMANDS_ENABLED",
+                    false),
+
+                SystemPowerCommandsEnabled = GetBool(
+                    "ERGONOMY_SYSTEM_POWER_COMMANDS_ENABLED",
+                    false),
+
                 SettingsCheckIntervalSeconds = GetInt(
                     "ERGONOMY_SETTINGS_CHECK_INTERVAL_SECONDS",
                     30),

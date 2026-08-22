@@ -165,7 +165,7 @@ namespace Ergonomy.Hooks
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ ActivityMonitor sample error: {ex.Message}");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ ActivityMonitor sample error.");
             }
             finally
             {

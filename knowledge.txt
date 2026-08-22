@@ -231,3 +231,33 @@ solution:
   dotnet build --no-restore -p:EnableWindowsTargeting=true
   dotnet build -c Release --no-restore -p:EnableWindowsTargeting=true
 caveats: Do NOT claim a successful build; compile/run verification is pending on a real Windows host.
+
+1405/05/31 - 3:30 pm
+problem:
+Final verification found missing machine-authoritative remote-command and system-power kill switches,
+SQLite health checks resolving a different database path, incomplete SyncEngine cancellation propagation,
+worker loops that could stop after one failed iteration, untracked metrics requests, and blocking settings
+refresh calls in the WinForms lifecycle.
+solution:
+- Added safe-default AppSettings security flags loaded only from machine environment and preserved during API refresh.
+- CommandManager now checks remote policy at poll, delayed, and execution boundaries; scheduled power actions
+  check the independent power policy immediately adjacent to the only power invocation and denial logging omits payloads.
+- Added SqliteOutboxConnectionProvider and injected it into LocalDatabaseManager and HealthCheckService.
+- Propagated SyncEngine cancellation through queue processing and Kafka send calls; cancellation preserves pending records.
+- Made WorkerBase log iteration failures, wait a bounded delay, and continue; made settings refresh cancellation-aware.
+- Reworked metrics request tracking/draining and removed UI-thread blocking settings refresh calls.
+- Sanitized selected Kafka, SQLite, database, hook, alarm, and data logger exception/endpoint output.
+files:
+CommandManager.cs; Configuration/AppSettings.cs; Configuration/EnvironmentSettingsProvider.cs;
+Configuration/SettingsService.cs; SqliteOutboxConnectionProvider.cs; LocalDatabaseManager.cs;
+Services/HealthCheckService.cs; Services/ServiceRegistrar.cs; Services/WorkerBase.cs;
+Services/SettingsRefreshWorker.cs; SyncEngine.cs; Observability/MetricsEndpoint.cs; Logging/LogEvents.cs;
+MainApplicationContext.cs; KafkaConnect.cs; DatabaseManager.cs; Hooks/ActivityMonitor.cs;
+Hooks/GlobalInputHook.cs; Logging/DataLogger.cs; AlarmManager.cs.
+verification result:
+Static source checks confirm no new CREATE TABLE statement or Kafka topic declaration was added, disabled
+policies default false and API preservation copies bootstrap policy, and SyncEngine passes its token to Kafka.
+Build and runtime tests remain blocked because dotnet is unavailable in this environment.
+caveats:
+No destructive command, Kafka publish, or live API/database/metrics test was performed. Remaining legacy
+Console.WriteLine calls should be migrated to ILogger in a separately build-verified change.

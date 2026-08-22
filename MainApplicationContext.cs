@@ -115,17 +115,7 @@ namespace Ergonomy
 
             _settingsService.SettingsChanged += OnSettingsChanged;
 
-            // Initial Settings-API refresh (bootstrap is already loaded by Program.Main).
-            // Runs on the UI thread with the SyncContext reset, so the blocking refresh does not
-            // deadlock and the continuation executes on the thread pool (matching original flow).
-            try
-            {
-                _settingsService.RefreshFromApiAsync(logFailures: true).GetAwaiter().GetResult();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning("Initial settings refresh failed. Using Environment settings. Msg: {Message}", ex.Message);
-            }
+            // SettingsRefreshWorker performs the initial API refresh off the UI thread.
 
             // Initial permission evaluation (starts local/sync/ergonomics as permitted).
             _permissions.EvaluateAll();
@@ -138,9 +128,6 @@ namespace Ergonomy
 
             // Internal Prometheus scrape endpoint (no new Kafka/SQLite pipeline).
             StartMetricsEndpoint();
-
-            // Kafka startup delivery probe (non-blocking).
-            TestKafkaConnectionAtStartup();
 
             _logger.LogInformation("MainApplicationContext started. Workers: settings, health, permission, advanced-metrics.");
         }
@@ -185,51 +172,11 @@ namespace Ergonomy
             _logger.LogInformation("Waking up and re-evaluating connections...");
 
             _healthMonitorWorker.Start();
-            try
-            {
-                _settingsService.RefreshFromApiAsync(logFailures: true).GetAwaiter().GetResult();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning("Wake-up settings refresh failed: {Message}", ex.Message);
-            }
+            // Refresh resumes through SettingsRefreshWorker; never block the UI lifecycle.
             _permissions.EvaluateAll();
             _settingsRefreshWorker.Start();
             _permissionMonitorWorker.Start();
             _commandManager.Start();
-        }
-
-        private void TestKafkaConnectionAtStartup()
-        {
-            DateTime currentTime = DateTime.Now;
-            PersianCalendar pc = new PersianCalendar();
-
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    var startupLog = new
-                    {
-                        CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                        CollectedAt_Shamsi =
-                            $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/" +
-                            $"{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
-                        LogLevel = "INFO",
-                        Message = "Application Started and Kafka delivery probe succeeded.",
-                        WindowsUsername = _identity.WindowsUsername,
-                        WindowsSid = _identity.WindowsSid,
-                        MachineName = Environment.MachineName,
-                        Category = "KafkaStartupProbe"
-                    };
-
-                    await _kafkaConnect.SendAppLogAsync(Guid.NewGuid().ToString("N"), startupLog);
-                    _logger.LogInformation("[KAFKA OK] Startup delivery probe succeeded.");
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning("Startup delivery probe failed: {Message}", ex.Message);
-                }
-            });
         }
 
         protected override void Dispose(bool disposing)
@@ -240,7 +187,7 @@ namespace Ergonomy
 
                 _settingsService.SettingsChanged -= OnSettingsChanged;
 
-                _messageLog.Log("INFO", "Application shutting down.");
+                _logger.LogInformation(LogEvents.GracefulShutdownId, "Application shutting down.");
 
                 _settingsRefreshWorker.Stop();
                 _healthMonitorWorker.Stop();

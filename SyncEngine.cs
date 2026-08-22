@@ -120,7 +120,7 @@ namespace Ergonomy.Database
             _logger.LogInformation("FORCE SYNC triggered.");
 
             // ForceSync intentionally bypasses backoff.
-            await ProcessQueueAsync().ConfigureAwait(false);
+            await ProcessQueueAsync(CancellationToken.None).ConfigureAwait(false);
         }
 
         public void UpdateSyncInterval(double intervalMinutes)
@@ -141,11 +141,11 @@ namespace Ergonomy.Database
                 // First pass immediately (preserves the previous Start() "fire initial sync").
                 try
                 {
-                    await ProcessQueueAsync().ConfigureAwait(false);
+                    await ProcessQueueAsync(ct).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Sync initial pass error: {Message}", ex.Message);
+                    _logger.LogError(ex, "Sync initial pass error.");
                 }
 
                 while (!ct.IsCancellationRequested)
@@ -173,11 +173,11 @@ namespace Ergonomy.Database
 
                     try
                     {
-                        await ProcessQueueAsync().ConfigureAwait(false);
+                        await ProcessQueueAsync(ct).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Sync pass error: {Message}", ex.Message);
+                        _logger.LogError(ex, "Sync pass error.");
                     }
                 }
             }
@@ -190,10 +190,12 @@ namespace Ergonomy.Database
             }
         }
 
-        private async Task ProcessQueueAsync()
+        private async Task ProcessQueueAsync(CancellationToken cancellationToken)
         {
             if (_disposed)
                 return;
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (!await _syncGate.WaitAsync(0).ConfigureAwait(false))
             {
@@ -243,7 +245,7 @@ namespace Ergonomy.Database
 
                     try
                     {
-                        await SendRecordToKafkaAsync(record, jsonOptions).ConfigureAwait(false);
+                        await SendRecordToKafkaAsync(record, jsonOptions, cancellationToken).ConfigureAwait(false);
 
                         _localDb.DeleteRecord(record.Id);
 
@@ -255,32 +257,39 @@ namespace Ergonomy.Database
 
                         _logger.LogInformation(
                             LogEvents.SyncBatchCompleteId,
-                            "Data delivered to Kafka and removed from queue. RecordId: {RecordId} | Target: {Target}",
-                            record.Id, record.TargetTable);
+                            "Data delivered to Kafka and removed from queue. Target={Target}", record.TargetTable);
                     }
                     catch (JsonException ex)
                     {
-                        HandlePoisonRecord(record.Id, record.TargetTable, $"Invalid JSON payload: {ex.Message}");
+                        HandlePoisonRecord(record.Id, record.TargetTable, "invalid-json");
                     }
                     catch (NotSupportedException ex)
                     {
-                        HandlePoisonRecord(record.Id, record.TargetTable, ex.Message);
+                        HandlePoisonRecord(record.Id, record.TargetTable, "unsupported-payload");
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        // Preserve the record; it was not deleted before the send completed.
+                        throw;
                     }
                     catch (Exception ex)
                     {
                         anyTransientFailure = true;
 
-                        _logger.LogWarning(
-                            "Kafka delivery failed; record remains pending. RecordId: {RecordId} | Target: {Target} | Error: {Message}",
-                            record.Id, record.TargetTable, ex.Message);
+                        _logger.LogWarning(LogEvents.KafkaSendFailureId, ex,
+                            "Kafka delivery failed; record remains pending. Target={Target}", record.TargetTable);
                     }
                 }
 
                 ApplyBackoff(anyTransientFailure);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "SyncEngine fatal error: {Message}", ex.Message);
+                _logger.LogError(ex, "SyncEngine fatal error.");
             }
             finally
             {
@@ -316,7 +325,8 @@ namespace Ergonomy.Database
 
         private async Task SendRecordToKafkaAsync(
             SyncRecord record,
-            JsonSerializerOptions jsonOptions)
+            JsonSerializerOptions jsonOptions,
+            CancellationToken cancellationToken)
         {
             switch (record.TargetTable)
             {
@@ -328,7 +338,7 @@ namespace Ergonomy.Database
                     if (metrics == null)
                         throw new JsonException("Advanced system metrics payload was null.");
 
-                    await _kafkaConnect.SendSystemMetricsAsync(record.MessageId, metrics).ConfigureAwait(false);
+                    await _kafkaConnect.SendSystemMetricsAsync(record.MessageId, metrics, cancellationToken).ConfigureAwait(false);
                     break;
                 }
 
@@ -340,7 +350,7 @@ namespace Ergonomy.Database
                     if (activity == null)
                         throw new JsonException("User activity payload was null.");
 
-                    await _kafkaConnect.SendUserActivityAsync(record.MessageId, activity).ConfigureAwait(false);
+                    await _kafkaConnect.SendUserActivityAsync(record.MessageId, activity, cancellationToken).ConfigureAwait(false);
                     break;
                 }
 
@@ -352,7 +362,7 @@ namespace Ergonomy.Database
                     if (logData == null)
                         throw new JsonException("App log payload was null.");
 
-                    await _kafkaConnect.SendAppLogAsync(record.MessageId, logData).ConfigureAwait(false);
+                    await _kafkaConnect.SendAppLogAsync(record.MessageId, logData, cancellationToken).ConfigureAwait(false);
                     break;
                 }
 
@@ -371,8 +381,8 @@ namespace Ergonomy.Database
 
             _logger.LogWarning(
                 LogEvents.SyncPoisonRecordId,
-                "Poison outbox record removed. RecordId: {RecordId} | Target: {Target} | Reason: {Reason}",
-                recordId, targetTable, reason);
+                "Poison outbox record removed. Target={Target}, ReasonCategory={ReasonCategory}",
+                targetTable, "invalid-payload");
 
             _localDb.DeleteRecord(recordId);
         }

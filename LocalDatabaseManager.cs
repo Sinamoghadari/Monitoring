@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
@@ -79,11 +78,11 @@ namespace Ergonomy.Database
         private bool _disposed;
 
         public LocalDatabaseManager()
-            : this(new OutboxSettings())
+            : this(new OutboxSettings(), new SqliteOutboxConnectionProvider())
         {
         }
 
-        public LocalDatabaseManager(OutboxSettings settings)
+        public LocalDatabaseManager(OutboxSettings settings, SqliteOutboxConnectionProvider connectionProvider)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
@@ -94,21 +93,9 @@ namespace Ergonomy.Database
             _warningThreshold = _settings.WarningThreshold;
             _criticalThreshold = _settings.CriticalThreshold;
 
-            string dataDirectory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                "Ergonomy");
-
-            Directory.CreateDirectory(dataDirectory);
-
-            _dbPath = Path.Combine(dataDirectory, "ergonomy_local.db");
-
-            _connectionString = new SqliteConnectionStringBuilder
-            {
-                DataSource = _dbPath,
-                Mode = SqliteOpenMode.ReadWriteCreate,
-                Cache = SqliteCacheMode.Shared,
-                Pooling = true
-            }.ToString();
+            if (connectionProvider == null) throw new ArgumentNullException(nameof(connectionProvider));
+            _dbPath = connectionProvider.DatabasePath;
+            _connectionString = connectionProvider.ConnectionString;
 
             InitializeDatabase();
             ReconcileCount();
@@ -125,7 +112,7 @@ namespace Ergonomy.Database
             }
 
             Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss}] SQLite outbox initialized: {_dbPath}");
+                $"[{DateTime.Now:HH:mm:ss}] SQLite outbox initialized.");
         }
 
         private void OnRetentionTimerElapsed(object? sender, System.Timers.ElapsedEventArgs e)
@@ -137,7 +124,7 @@ namespace Ergonomy.Database
             catch (Exception ex)
             {
                 Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] Retention timer error: {ex.Message}");
+                    $"[{DateTime.Now:HH:mm:ss}] Retention timer error.");
             }
         }
 
@@ -285,6 +272,7 @@ namespace Ergonomy.Database
         }
 
         public long PendingCount => Interlocked.Read(ref _pendingCount);
+        public string DatabasePath => _dbPath;
         public long DroppedLowPriorityCount => Interlocked.Read(ref _droppedLowPriorityCount);
         public long DeletedByAgeCount => Interlocked.Read(ref _deletedByAgeCount);
         public long DeletedByCapacityCount => Interlocked.Read(ref _deletedByCapacityCount);
@@ -387,7 +375,7 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] SQLite outbox write failed. " +
-                    $"Target: {targetTableName} | Error: {ex.Message}");
+                    $"Target: {targetTableName} | Error.");
 
                 return OutboxSaveResult.Failed;
             }
@@ -447,7 +435,7 @@ namespace Ergonomy.Database
             catch (Exception ex)
             {
                 Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] SQLite outbox read failed: {ex.Message}");
+                    $"[{DateTime.Now:HH:mm:ss}] SQLite outbox read failed.");
             }
 
             return records;
@@ -476,7 +464,7 @@ namespace Ergonomy.Database
 
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] SQLite outbox delete affected " +
-                    $"{affectedRows} rows. RecordId: {id}");
+                    $"{affectedRows} rows.");
 
                 return false;
             }
@@ -484,7 +472,7 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] SQLite outbox delete failed. " +
-                    $"RecordId: {id} | Error: {ex.Message}");
+                    $"Record deletion failed.");
 
                 return false;
             }
@@ -550,7 +538,7 @@ namespace Ergonomy.Database
             catch (Exception ex)
             {
                 Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] Retention (age) failed: {ex.Message}");
+                    $"[{DateTime.Now:HH:mm:ss}] Retention (age) failed.");
                 return 0;
             }
         }
@@ -615,7 +603,7 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] Retention (capacity) failed for " +
-                    $"'{targetTable}': {ex.Message}");
+                    $"'{targetTable}'.");
                 return 0;
             }
         }
@@ -636,7 +624,7 @@ namespace Ergonomy.Database
             catch (Exception ex)
             {
                 Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] Count reconcile failed: {ex.Message}");
+                    $"[{DateTime.Now:HH:mm:ss}] Count reconcile failed.");
             }
         }
 

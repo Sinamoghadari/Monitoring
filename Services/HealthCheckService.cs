@@ -18,6 +18,7 @@ namespace Ergonomy.Services
         private readonly ISettingsService _settingsService;
         private readonly MessageLogService _log;
         private readonly ILogger<HealthCheckService> _logger;
+        private readonly SqliteOutboxConnectionProvider _outboxConnection;
 
         /// <summary>Invoked when SQLite becomes inaccessible; wired by the lifecycle shell.</summary>
         public Action<string>? OnSqliteCriticalFailure { get; set; }
@@ -25,11 +26,13 @@ namespace Ergonomy.Services
         public HealthCheckService(
             ISettingsService settingsService,
             MessageLogService log,
-            ILogger<HealthCheckService> logger)
+            ILogger<HealthCheckService> logger,
+            SqliteOutboxConnectionProvider outboxConnection)
         {
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _log = log ?? throw new ArgumentNullException(nameof(log));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _outboxConnection = outboxConnection ?? throw new ArgumentNullException(nameof(outboxConnection));
         }
 
         public async Task RunAllAsync()
@@ -60,16 +63,16 @@ namespace Ergonomy.Services
             }
             catch (Exception ex)
             {
-                _log.LogHealth("ERROR", $"API Health Check Error: {ex.Message}", "ApiHealth");
+                _log.LogHealth("ERROR", $"API Health Check Error.", "ApiHealth");
             }
         }
 
+        public string OutboxDatabasePathForDiagnostics => _outboxConnection.DatabasePath;
+
         private Task CheckSqliteHealthAsync()
         {
-            string sqliteDbPath = Environment.GetEnvironmentVariable(
-                "ERGONOMY_SQLITE_CONNECTION_STRING",
-                EnvironmentVariableTarget.Machine)
-                ?? "Data Source=localbuffer.db";
+            // Use exactly the same connection configuration as LocalDatabaseManager.
+            string sqliteDbPath = _outboxConnection.ConnectionString;
 
             string statusMessage;
             string logLevel;
@@ -87,12 +90,11 @@ namespace Ergonomy.Services
             }
             catch (Exception ex)
             {
-                statusMessage = $"SQLite Error (Possible lock or corruption): {ex.Message}";
+                statusMessage = $"SQLite Error (Possible lock or corruption).";
                 logLevel = "ERROR";
-                _logger.LogError(
+                _logger.LogError(ex,
                     LogEvents.HealthFailedId,
-                    "SQLite is inaccessible. Data collection cannot continue: {Message}",
-                    ex.Message);
+                    "SQLite is inaccessible. Data collection cannot continue.");
                 OnSqliteCriticalFailure?.Invoke("SQLite is inaccessible. Data collection cannot continue.");
             }
 
@@ -115,7 +117,7 @@ namespace Ergonomy.Services
             }
             catch (Exception ex)
             {
-                _log.LogHealth("ERROR", $"Failed to check self performance: {ex.Message}", "AgentPerformance");
+                _log.LogHealth("ERROR", $"Failed to check self performance.", "AgentPerformance");
             }
 
             return Task.CompletedTask;

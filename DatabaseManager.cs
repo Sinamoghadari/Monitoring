@@ -72,7 +72,7 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"⚠️ Failed to load settings from DB: {ex.Message}");
+                Console.WriteLine($"⚠️ Failed to load settings from DB.");
             }
 
             return null;
@@ -102,7 +102,7 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                statusMessage = $"PostgreSQL Connection Failed: {ex.Message}";
+                statusMessage = $"PostgreSQL Connection Failed.";
                 logLevel = "ERROR";
             }
 
@@ -169,7 +169,7 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error reading image names from DB: {ex.Message}");
+                Console.WriteLine($"Error reading image names from DB.");
             }
 
             return names;
@@ -209,7 +209,7 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error loading image {imageName} from DB: {ex.Message}");
+                Console.WriteLine($"Error loading image {imageName} from DB.");
             }
 
             return null;
@@ -261,7 +261,7 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DB] Error getting pending commands: {ex.Message}");
+                Console.WriteLine($"[DB] Error getting pending commands.");
             }
 
             return commands;
@@ -285,7 +285,7 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DB] Error: {ex.Message}");
+                Console.WriteLine($"[DB] Error.");
             }
         }
 
@@ -307,7 +307,7 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DB] Error: {ex.Message}");
+                Console.WriteLine($"[DB] Error.");
             }
         }
     }

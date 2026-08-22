@@ -67,7 +67,7 @@ namespace Ergonomy.Logging
                     sb.Append(" [eid=").Append(eventId.Id).Append(']');
                 sb.Append(' ').Append(message);
                 if (exception != null)
-                    sb.Append(" | EX: ").Append(exception.Message);
+                    sb.Append(" | EX: ").Append(exception.GetType().Name);
                 return sb.ToString();
             }
         }

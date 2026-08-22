@@ -79,7 +79,7 @@ namespace Ergonomy
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"❌ Error decoding image {img.Name}: {ex.Message}");
+                            Console.WriteLine($"❌ Error decoding image {img.Name}.");
                         }
                     }
                 }
@@ -89,11 +89,11 @@ namespace Ergonomy
                     _loadedImages = loaded;
                 }
 
-                Console.WriteLine($"✅ {loaded.Count} images were loaded from API ({apiUrl})");
+                Console.WriteLine($"✅ {loaded.Count} images were loaded from API ");
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"❌ Failed to load images from API: {ex.Message}");
+                Console.WriteLine($"❌ Failed to load images from API.");
             }
         }
 

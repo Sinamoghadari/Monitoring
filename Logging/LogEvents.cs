@@ -28,6 +28,13 @@ namespace Ergonomy.Logging
         public const int SyncPoisonRecord = 5030;
         public const int SyncSkipped = 5040;
 
+        public const int RemoteCommandAllowed = 6000;
+        public const int RemoteCommandDenied = 6010;
+        public const int SystemPowerCommandDenied = 6020;
+        public const int RemoteCommandFailure = 6030;
+        public const int KafkaSendFailure = 6040;
+        public const int GracefulShutdown = 7000;
+
         public static readonly EventId WorkerStartedId = new(WorkerStarted, "WorkerStarted");
         public static readonly EventId WorkerStoppedId = new(WorkerStopped, "WorkerStopped");
         public static readonly EventId WorkerErrorId = new(WorkerError, "WorkerError");
@@ -42,5 +49,11 @@ namespace Ergonomy.Logging
         public static readonly EventId SyncRetryBackoffId = new(SyncRetryBackoff, "SyncRetryBackoff");
         public static readonly EventId SyncPoisonRecordId = new(SyncPoisonRecord, "SyncPoisonRecord");
         public static readonly EventId SyncSkippedId = new(SyncSkipped, "SyncSkipped");
+        public static readonly EventId RemoteCommandAllowedId = new(RemoteCommandAllowed, "RemoteCommandAllowed");
+        public static readonly EventId RemoteCommandDeniedId = new(RemoteCommandDenied, "RemoteCommandDenied");
+        public static readonly EventId SystemPowerCommandDeniedId = new(SystemPowerCommandDenied, "SystemPowerCommandDenied");
+        public static readonly EventId RemoteCommandFailureId = new(RemoteCommandFailure, "RemoteCommandFailure");
+        public static readonly EventId KafkaSendFailureId = new(KafkaSendFailure, "KafkaSendFailure");
+        public static readonly EventId GracefulShutdownId = new(GracefulShutdown, "GracefulShutdown");
     }
 }

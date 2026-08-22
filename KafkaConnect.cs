@@ -57,16 +57,11 @@ namespace Ergonomy.Database
                 {
                     Console.WriteLine(
                         $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka client error: " +
-                        $"{error.Code} | {error.Reason}");
+                        $"{error.Code}");
                 })
                 .Build();
 
-            Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss}] 🔌 Kafka Producer initialized. " +
-                $"BootstrapServers: {bootstrapServers.Trim()} | " +
-                $"UserActivityTopic: {_userActivityTopic} | " +
-                $"SystemMetricsTopic: {_systemMetricsTopic} | " +
-                $"AppLogsTopic: {_appLogsTopic}");
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Kafka producer initialized.");
         }
 
         // در KafkaConnect.cs
@@ -140,16 +135,13 @@ namespace Ergonomy.Database
                     },
                     cancellationToken);
 
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] 🚀 Kafka message sent: " +
-                    $"{result.TopicPartitionOffset}");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Kafka message sent.");
             }
             catch (ProduceException<string, string> ex)
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka delivery failed. " +
-                    $"Topic: {topic} | Code: {ex.Error.Code} | " +
-                    $"Reason: {ex.Error.Reason}");
+                    $"Kafka delivery failure. Code: {ex.Error.Code}");
 
                 throw;
             }
@@ -157,7 +149,7 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka send was cancelled. " +
-                    $"Topic: {topic}");
+                    $"Kafka send was cancelled.");
 
                 throw;
             }
@@ -165,7 +157,7 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ❌ Unexpected Kafka send error. " +
-                    $"Topic: {topic} | Message: {ex.Message}");
+                    $"Kafka send failed.");
 
                 throw;
             }
@@ -206,8 +198,7 @@ namespace Ergonomy.Database
             catch (Exception ex)
             {
                 Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka producer flush failed: " +
-                    $"{ex.Message}");
+                    $"[{DateTime.Now:HH:mm:ss}] Kafka producer flush failed.");
             }
             finally
             {

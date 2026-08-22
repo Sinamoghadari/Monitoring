@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json.Serialization;
 
 namespace Ergonomy.Configuration
 {
@@ -13,6 +14,12 @@ namespace Ergonomy.Configuration
     public class AppSettings
     {
         public bool AllowErgonomyCollection { get; set; } = true;
+
+        // Machine-authoritative security controls. Safe defaults are disabled.
+        [JsonPropertyName("ERGONOMY_REMOTE_COMMANDS_ENABLED")]
+        public bool RemoteCommandsEnabled { get; set; } = false;
+        [JsonPropertyName("ERGONOMY_SYSTEM_POWER_COMMANDS_ENABLED")]
+        public bool SystemPowerCommandsEnabled { get; set; } = false;
 
         // --- تنظیمات آلارم و لاگیک برنامه ---
         public int NotificationIntervalSeconds { get; set; }
