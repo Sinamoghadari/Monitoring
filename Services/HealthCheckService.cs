@@ -93,8 +93,7 @@ namespace Ergonomy.Services
             {
                 statusMessage = $"SQLite Error (Possible lock or corruption).";
                 logLevel = "ERROR";
-                _logger.LogError(ex,
-                    LogEvents.HealthFailedId,
+                _logger.LogError(LogEvents.HealthFailedId, ex,
                     "SQLite is inaccessible. Data collection cannot continue.");
                 OnSqliteCriticalFailure?.Invoke("SQLite is inaccessible. Data collection cannot continue.");
             }

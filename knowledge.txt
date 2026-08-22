@@ -290,3 +290,16 @@ verification result:
 - Source references now resolve unambiguously; complete local build remains unavailable without dotnet.
 caveats:
 - The Windows/.NET build must be rerun to discover any additional compiler errors.
+
+
+1405/05/31 - 3:42 pm
+problem:
+Windows compilation identified the HealthCheckService ILogger LogError overload arguments in the wrong order.
+solution:
+- Corrected the call to LogError(EventId, Exception, message).
+files:
+Services/HealthCheckService.cs.
+verification result:
+- Corrected against the ILogger extension-method signature; local build remains unavailable without dotnet.
+caveats:
+- Re-run the Windows build for complete compiler verification.
