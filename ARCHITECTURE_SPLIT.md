@@ -1,6 +1,6 @@
 # Ergonomy — Two-Process Architecture Split
 
-Status: **in progress (step 1 of 3 — skeleton + IPC layer landed).**
+Status: **in progress (step 1 of 3 — skeleton + IPC layer + Generic Host / Windows Service lifetime landed).**
 
 ## Why two processes
 
@@ -97,8 +97,11 @@ Images are **never** transferred over the pipe: the Service downloads them and s
   on thread-pool threads and are marshalled to the UI thread through a hidden anchor `Control`
   (`TaskApplicationContext.MarshalToUi`) — the same lesson as the single-process fix: a WinForms
   timer or form touched from a pool thread silently never runs.
-* `Ergonomy.Service` has no message pump; it is shutdown-signal driven (Ctrl+C / SIGTERM /
-  `ProcessExit`) so it can run under the SCM wrapper, a scheduled task, or interactively.
+* `Ergonomy.Service` runs on the .NET Generic Host with `UseWindowsService`. Under the SCM,
+  `WindowsServiceLifetime` handles start/stop/shutdown control codes; launched interactively,
+  `ConsoleLifetime` takes over and Ctrl+C fires the same `ApplicationStopping` token. The Named
+  Pipe server is started by `IpcHostedService.StartAsync` and stopped by `StopAsync` — no
+  custom message pump or signal handler is needed.
 * Sends never block a caller: `NamedPipeIpcClient.TrySendAsync` returns `false` when disconnected
   instead of waiting, and each connection serialises writes through a semaphore.
 
@@ -107,8 +110,9 @@ Images are **never** transferred over the pipe: the Service downloads them and s
 **Step 1 — done (this change).** Three projects created and added to the solution; shared
 contracts (`AppSettings`, `OutboxSettings`, `SyncRecord`/`UserActivityPayload`, `LogEvents`,
 `ConsoleStructuredLogger`) moved into `Ergonomy.Core`; full Named Pipe transport, contracts,
-ACL, server/client and both entry points implemented; the legacy project keeps building against
-`Ergonomy.Core`.
+ACL, server/client and both entry points implemented; `Ergonomy.Service` wired to Generic Host
+with `UseWindowsService` (SCM + interactive console dual-mode); the legacy project keeps
+building against `Ergonomy.Core`.
 
 **Step 2 — move the desktop half.** `Hooks/GlobalInputHook.cs`, `Hooks/ActivityMonitor.cs`,
 `AlarmManager.cs`, `UI/*` and the alarm-side of `ErgonomyManager.cs` move into `Ergonomy.Task`;
@@ -125,17 +129,87 @@ Deployment (after step 3): `Ergonomy.Service` installed as a Windows service (Lo
 auto-start, restart-on-failure); `Ergonomy.Task` started by a Task Scheduler logon trigger for
 `INTERACTIVE`, single-instance per session via the `Local\Ergonomy.Task.SingleInstance.v1` mutex.
 
+## Windows Service deployment (Ergonomy.Service)
+
+`Ergonomy.Service` uses `Microsoft.Extensions.Hosting.WindowsServices` with
+`UseWindowsService`. The same binary works in two modes:
+
+| Mode | How to launch | Lifetime | Logging |
+|---|---|---|---|
+| **SCM** | `sc.exe start Ergonomy.Service` | `WindowsServiceLifetime` — handles SCM control codes | EventLog (auto) + any configured providers |
+| **Interactive** | `Ergonomy.Service.exe` or `Ergonomy.Service.exe --console` | `ConsoleLifetime` — Ctrl+C / SIGTERM stops | Console + `ConsoleStructuredLogProvider` |
+
+The mode is detected automatically: `Environment.UserInteractive == false` or the parent process
+is `services.exe` → SCM mode. Pass `--console` to force interactive mode even when the binary
+is installed as a service (useful for local debugging).
+
+### sc.exe commands (run from an elevated command prompt)
+
+```bat
+:: ---- Install ----
+:: Create the service (LocalSystem, auto-start, restart on failure).
+sc.exe create Ergonomy.Service ^
+    binPath= "C:\Program Files\Ergonomy\Ergonomy.Service.exe" ^
+    start= auto ^
+    DisplayName= "Ergonomy Agent Service" ^
+    obj= LocalSystem
+
+:: Describe the service.
+sc.exe description Ergonomy.Service ^
+    "Machine-bound agent: SQLite outbox, Kafka sync, advanced metrics, settings refresh, health checks. Hosts the Named Pipe server for the interactive Task process."
+
+:: Configure restart-on-failure: restart after 10s, 30s, 60s; reset the failure counter after 1 day.
+sc.exe failure Ergonomy.Service reset= 86400 actions= restart/10000/restart/30000/restart/60000
+
+:: Grant the service account the right to log on as a service (usually already set for LocalSystem).
+:: (Not required for LocalSystem; shown here for a custom gMSA account if needed.)
+:: ntrights.exe +r SeServiceLogonRight -u "NT AUTHORITY\LocalService"
+
+:: Start the service.
+sc.exe start Ergonomy.Service
+
+:: Verify status.
+sc.exe query Ergonomy.Service
+
+:: ---- Stop ----
+sc.exe stop Ergonomy.Service
+
+:: ---- Remove ----
+:: Must be stopped first.
+sc.exe delete Ergonomy.Service
+```
+
+### Updating the service binary
+
+```bat
+sc.exe stop Ergonomy.Service
+:: Copy the new build output over the existing files.
+xcopy /E /Y "C:\build\Ergonomy.Service\*" "C:\Program Files\Ergonomy\"
+sc.exe start Ergonomy.Service
+```
+
+### Interactive debugging
+
+```bat
+:: Run the installed binary by hand (same code path, ConsoleLifetime, Ctrl+C to stop).
+"C:\Program Files\Ergonomy\Ergonomy.Service.exe" --console
+
+:: Or run from the build output during development.
+dotnet run --project Ergonomy.Service -- --console
+```
+
 ## Build
 
-No .NET SDK / NuGet feed is available in the review sandbox, so **this change was not compiled
-here**. On a Windows/.NET 9 host:
+On a Windows/.NET 9 host:
 
 ```
 dotnet restore Ergonomy.sln
 dotnet build Ergonomy.sln -c Release -p:EnableWindowsTargeting=true
 ```
 
-`Ergonomy.Core`, `Ergonomy.Service` and `Ergonomy.Task` add **no new NuGet dependency**: they use
-only `Microsoft.Extensions.DependencyInjection/Logging(.Abstractions) 9.0.0`, which the legacy
-project already restores. `NamedPipeServerStreamAcl` ships in the shared framework for
-`net9.0-windows` (assembly `System.IO.Pipes.AccessControl.dll`) — no package reference required.
+`Ergonomy.Core` and `Ergonomy.Task` add **no new NuGet dependency** beyond
+`Microsoft.Extensions.DependencyInjection/Logging(.Abstractions) 9.0.0`. `Ergonomy.Service`
+adds `Microsoft.Extensions.Hosting.WindowsServices 9.0.0` (which transitively brings
+`Microsoft.Extensions.Hosting` and the EventLog provider). `NamedPipeServerStreamAcl` ships in
+the shared framework for `net9.0-windows` (assembly `System.IO.Pipes.AccessControl.dll`) — no
+package reference required.
