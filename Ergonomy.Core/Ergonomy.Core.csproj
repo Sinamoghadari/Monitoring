@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Ergonomy.Core - shared contract + IPC library for the two-process architecture.
+
+    This assembly is referenced by BOTH processes (Ergonomy.Service and Ergonomy.Task) and,
+    during the migration, by the legacy single-process Ergonomy.csproj as well. It therefore
+    must stay free of WinForms, Kafka, SQLite and any other side-effecting dependency:
+    contracts, DTOs and the Named Pipe transport only.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <OutputType>Library</OutputType>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Ergonomy</RootNamespace>
+    <AssemblyName>Ergonomy.Core</AssemblyName>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Already used (and restored) by the legacy project: no new package download is required. -->
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
+  </ItemGroup>
+
+</Project>

@@ -303,3 +303,66 @@ verification result:
 - Corrected against the ILogger extension-method signature; local build remains unavailable without dotnet.
 caveats:
 - Re-run the Windows build for complete compiler verification.
+
+
+1405/06/01 - 12:00 pm
+problem:
+The agent is a single interactive WinForms process: desktop-bound work (low-level input hooks,
+alarm forms) and machine-bound work (SQLite outbox, Kafka sync, advanced metrics, remote
+commands) share one process, so telemetry dies with the logon session, privileged work runs
+next to a user-owned message pump, and a hung UI thread stalls delivery. A two-process split
+was required, with the two processes talking over local IPC only - no new TCP/UDP listening
+port may be introduced (the pre-existing Prometheus HttpListener stays with the service half).
+solution:
+- Created three projects and added them to Ergonomy.sln:
+  Ergonomy.Core (library, shared contracts + Named Pipe transport),
+  Ergonomy.Service (exe, session 0, hosts the pipe SERVER),
+  Ergonomy.Task (WinExe, interactive session, hosts the pipe CLIENT).
+- Moved the clearly shared code into Ergonomy.Core with unchanged namespaces so the legacy
+  project keeps compiling through a ProjectReference: Configuration/AppSettings.cs,
+  OutboxSettings.cs, SyncModels.cs, Logging/ConsoleStructuredLogger.cs, Logging/LogEvents.cs.
+- Ergonomy.csproj now removes Ergonomy.Core/**, Ergonomy.Service/** and Ergonomy.Task/** from
+  the SDK default globs; without that, files in sub-folders of the project directory would be
+  compiled into BOTH the legacy assembly and the new ones (duplicate type errors).
+- Implemented the IPC layer in Ergonomy.Core/Ipc: one duplex pipe \\.\pipe\Ergonomy.Agent.v1,
+  byte mode with an explicit 4-byte little-endian length prefix (max 256 KB per frame),
+  UTF-8 JSON envelope carrying ProtocolVersion, server accept loop with per-connection pumps,
+  client with 1s->30s exponential reconnect backoff, per-connection write semaphore.
+- ACL is applied at creation via NamedPipeServerStreamAcl.Create (SetAccessControl on a
+  service-owned pipe throws UnauthorizedAccessException on .NET): LocalSystem + Administrators
+  FullControl, Authenticated Users ReadWrite|Synchronize WITHOUT CreateNewInstance (so a
+  non-admin process cannot spoof the server end), explicit Deny for Anonymous and NETWORK.
+- Ergonomy.Task keeps the WinForms STA loop as the process pump and marshals every pipe
+  callback to the UI thread through a hidden anchor Control (same lesson as the alarm fix:
+  UI work started on a thread-pool thread silently never runs). Ergonomy.Service has no pump
+  and is shutdown-signal driven, so it can run under the SCM, a scheduled task, or a console.
+- Project name Ergonomy.Task keeps RootNamespace Ergonomy.TaskAgent on purpose: a namespace
+  literally named Ergonomy.Task makes the identifier Task ambiguous with
+  System.Threading.Tasks.Task in every file of that project.
+- Documented the design, message catalogue and the remaining migration steps in
+  ARCHITECTURE_SPLIT.md.
+files:
+Ergonomy.sln; Ergonomy.csproj; ARCHITECTURE_SPLIT.md;
+Ergonomy.Core/Ergonomy.Core.csproj; Ergonomy.Core/Configuration/AppSettings.cs;
+Ergonomy.Core/Configuration/OutboxSettings.cs; Ergonomy.Core/Contracts/SyncModels.cs;
+Ergonomy.Core/Logging/ConsoleStructuredLogger.cs; Ergonomy.Core/Logging/LogEvents.cs;
+Ergonomy.Core/Ipc/IpcConstants.cs; Ergonomy.Core/Ipc/IpcMessage.cs;
+Ergonomy.Core/Ipc/IpcContracts.cs; Ergonomy.Core/Ipc/IpcFraming.cs;
+Ergonomy.Core/Ipc/IpcSecurityFactory.cs; Ergonomy.Core/Ipc/IpcConnection.cs;
+Ergonomy.Core/Ipc/NamedPipeIpcServer.cs; Ergonomy.Core/Ipc/NamedPipeIpcClient.cs;
+Ergonomy.Service/Ergonomy.Service.csproj; Ergonomy.Service/Program.cs;
+Ergonomy.Service/Ipc/ServiceIpcHost.cs; Ergonomy.Task/Ergonomy.Task.csproj;
+Ergonomy.Task/Program.cs; Ergonomy.Task/TaskApplicationContext.cs.
+verification result:
+- No dotnet SDK / NuGet feed in the sandbox, so nothing was compiled here. Static checks done:
+  brace/paren balance on every new file, namespace and type-reference review, and a grep proving
+  the new code opens no TcpListener/UdpClient/HttpListener/Socket (named pipes only).
+- No new NuGet dependency: only Microsoft.Extensions.DependencyInjection/Logging(.Abstractions)
+  9.0.0, already restored by the legacy project. NamedPipeServerStreamAcl ships in the
+  net9.0-windows shared framework (System.IO.Pipes.AccessControl.dll), no package needed.
+caveats:
+- Run dotnet build Ergonomy.sln -c Release -p:EnableWindowsTargeting=true on the Windows host;
+  the pipe ACL must additionally be smoke-tested with the Service running as LocalSystem and the
+  Task process running as a standard (non-admin) interactive user.
+- Steps 2 and 3 of the migration (moving hooks/UI into Ergonomy.Task and the persistence/metrics
+  workers into Ergonomy.Service, then deleting Ergonomy.csproj) are still pending.
