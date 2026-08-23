@@ -1,287 +1,183 @@
 using System;
 using System.Collections.Generic;
-using System.Text.Json;
-using System.Threading.Tasks;
-using System.Windows.Forms;
+using System.Globalization;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
 using SysTimer = System.Timers.Timer;
-using System.Globalization;
-using Ergonomy.Database; // 🌟 اضافه شده جهت شناسایی LocalDatabaseManager و QueueTargets
+using ElapsedEventArgs = System.Timers.ElapsedEventArgs;
+using System.Windows.Forms;
+using Microsoft.Extensions.Logging;
 using Ergonomy.Configuration;
+using Ergonomy.Database;
+using Ergonomy.Logging;
 
-namespace Ergonomy 
+namespace Ergonomy
 {
-    // کلاس کمکی برای نگهداری ساختار دستورات دریافتی از API
-    public class RemoteCommand
-    {
-        public int Id { get; set; }
-        public string Command { get; set; } = string.Empty;
-    }
+    public class RemoteCommand { public int Id { get; set; } public string Command { get; set; } = string.Empty; }
 
-    public class CommandManager : IDisposable
+    /// <summary>Polls the command API. Machine-authoritative policy is checked at every execution boundary.</summary>
+    public sealed class CommandManager : IDisposable
     {
-        private SysTimer _scheduleTimer;
-        private string _lastExecutedSchedule = "";
-        private string _windowsUsername;
-        private static readonly HttpClient _httpClient = new HttpClient();
-        
-        private dynamic _appSettings; 
-
-        // 🌟 فیلد تصحیح شده برای دیتابیس محلی
+        private readonly SysTimer _scheduleTimer;
+        private readonly object _pollSync = new();
+        private Task? _pollTask;
+        private readonly string _windowsUsername;
         private readonly LocalDatabaseManager _localDbManager;
+        private readonly ISettingsService _settingsService;
+        private readonly ILogger<CommandManager> _logger;
+        private readonly HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(15) };
+        private readonly SemaphoreSlim _pollGate = new(1, 1);
+        private AppSettings _appSettings;
+        private string _lastExecutedSchedule = "";
+        private bool _disposed;
 
-        // Callbacks
         public Action<string, string>? OnLogRequired { get; set; }
         public Action? OnStopCollection { get; set; }
         public Action? OnStartCollection { get; set; }
         public Action? OnForceSync { get; set; }
-        private readonly PersianCalendar pc = new PersianCalendar();
 
-        public CommandManager(dynamic appSettings, string windowsUsername, LocalDatabaseManager localDbManager)
+        public CommandManager(AppSettings appSettings, string windowsUsername, LocalDatabaseManager localDbManager,
+            ISettingsService settingsService, ILogger<CommandManager> logger)
         {
-            _appSettings = appSettings;
+            _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
             _windowsUsername = windowsUsername;
             _localDbManager = localDbManager ?? throw new ArgumentNullException(nameof(localDbManager));
-
-            double intervalSec = _appSettings?.CommandCheckIntervalSeconds ?? 30;
-            if (intervalSec <= 0) intervalSec = 30;
-
-            _scheduleTimer = new SysTimer();
-            _scheduleTimer.Interval = intervalSec * 1000; 
-            _scheduleTimer.Elapsed += (s, e) => CheckScheduledTasks();
+            _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _scheduleTimer = new SysTimer(GetIntervalMilliseconds(_appSettings.CommandCheckIntervalSeconds));
+            _scheduleTimer.AutoReset = true;
+            _scheduleTimer.Elapsed += OnTimerElapsed;
         }
 
-        private void LogMessage(string level, string message)
-        {
-            // ۱. ارسال لاگ به کنسول یا UI (رفتار قبلی)
-            OnLogRequired?.Invoke(level, message);
-
-            DateTime currentTime = DateTime.Now;
-
-            // ۲. ساخت آبجکت لاگ برای ارسال به کافکا
-            var logData = new
-            {
-                CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                CollectedAt_Shamsi = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
-                Level = level,
-                Message = message,
-                ComputerName = Environment.MachineName,
-                WindowsUsername = _windowsUsername
-            };
-
-            // ۳. ذخیره در صف محلی SQLite با استفاده از کلید ثابت و استاندارد لایه دیتابیس
-            _localDbManager.SaveUserActivity(QueueTargets.AppLogs, logData);
-        }
-
+        private static double GetIntervalMilliseconds(double seconds) => (seconds > 0 ? seconds : 30) * 1000;
         public void Start() => _scheduleTimer.Start();
         public void Stop() => _scheduleTimer.Stop();
 
-        public void UpdateTimerInterval(double newIntervalSeconds)
+        private void OnTimerElapsed(object? sender, ElapsedEventArgs e)
         {
-            if (newIntervalSeconds > 0 && _scheduleTimer != null)
+            // The timer callback only begins one tracked async operation; overlap is prevented by _pollGate.
+            lock (_pollSync) _pollTask = PollOnceAsync();
+        }
+
+        private async Task PollOnceAsync()
+        {
+            if (!await _pollGate.WaitAsync(0).ConfigureAwait(false)) return;
+            try
             {
-                _scheduleTimer.Interval = newIntervalSeconds * 1000;
+                CheckScheduledTasks();
+                await CheckAndExecuteCommandsFromApi().ConfigureAwait(false);
             }
+            catch (Exception ex)
+            {
+                _logger.LogError(LogEvents.RemoteCommandFailureId, ex, "Remote command poll failed. Operation={Operation}", "poll");
+            }
+            finally { _pollGate.Release(); }
         }
 
         private void CheckScheduledTasks()
         {
-            if (_appSettings == null) return;
-
-            string currentSystemTime = DateTime.Now.ToString("yyyy-MM-dd HH:mm");
-
-            if (!string.IsNullOrWhiteSpace((string)_appSettings.ScheduledRestartTime) && 
-                currentSystemTime == (string)_appSettings.ScheduledRestartTime && 
-                _lastExecutedSchedule != currentSystemTime)
+            AppSettings settings = _settingsService.Current;
+            string now = DateTime.Now.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture);
+            if (!string.IsNullOrWhiteSpace(settings.ScheduledRestartTime) && now == settings.ScheduledRestartTime && _lastExecutedSchedule != now)
             {
-                _lastExecutedSchedule = currentSystemTime;
-                LogMessage("WARNING", $"Executing SCHEDULED RESTART exactly at {currentSystemTime}");
-                System.Diagnostics.Process.Start("shutdown", "/r /t 5");
+                _lastExecutedSchedule = now;
+                ExecuteSystemPower("scheduled-restart", "/r /t 5");
             }
-
-            if (!string.IsNullOrWhiteSpace((string)_appSettings.ScheduledShutdownTime) && 
-                currentSystemTime == (string)_appSettings.ScheduledShutdownTime && 
-                _lastExecutedSchedule != currentSystemTime)
+            if (!string.IsNullOrWhiteSpace(settings.ScheduledShutdownTime) && now == settings.ScheduledShutdownTime && _lastExecutedSchedule != now)
             {
-                _lastExecutedSchedule = currentSystemTime;
-                LogMessage("WARNING", $"Executing SCHEDULED SHUTDOWN exactly at {currentSystemTime}");
-                System.Diagnostics.Process.Start("shutdown", "/s /t 5");
+                _lastExecutedSchedule = now;
+                ExecuteSystemPower("scheduled-shutdown", "/s /t 5");
             }
-
-            Task.Run(async () => await CheckAndExecuteCommandsFromApi(Environment.MachineName, _windowsUsername));
         }
 
-        private async Task CheckAndExecuteCommandsFromApi(string computerName, string windowsUsername) 
+        private async Task CheckAndExecuteCommandsFromApi()
         {
-            string? baseUrl = _appSettings?.API?.Commands;
-            
-            if (string.IsNullOrWhiteSpace(baseUrl))
-            {
-                LogMessage(
-                    "ERROR",
-                    "Commands API URL is not configured. " +
-                    "Set ERGONOMY_API_COMMANDS as a Machine Environment Variable.");
-
-                return;
-            }
-
-
-            baseUrl = baseUrl.TrimEnd('/'); 
-            string apiUrl = $"{baseUrl}?computer={computerName}&user={windowsUsername}";
-
+            // Do not poll or log command content when remote commands are disabled.
+            if (!IsRemoteEnabled()) { DenyRemote("remote", "RemoteCommandsEnabled is false"); return; }
+            string? baseUrl = _settingsService.Current.API?.Commands;
+            if (string.IsNullOrWhiteSpace(baseUrl)) return;
             try
             {
-                HttpResponseMessage response = await _httpClient.GetAsync(apiUrl);
+                using HttpResponseMessage response = await _httpClient.GetAsync(baseUrl.TrimEnd('/') + "?computer=" + Uri.EscapeDataString(Environment.MachineName) + "&user=" + Uri.EscapeDataString(_windowsUsername)).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode) return;
-
-                string jsonString = await response.Content.ReadAsStringAsync();
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                var pendingCommands = JsonSerializer.Deserialize<List<RemoteCommand>>(jsonString, options);
-
-                if (pendingCommands == null || pendingCommands.Count == 0) return;
-
-                foreach (var cmd in pendingCommands)
-                {
-                    LogMessage("INFO", $"Received remote command batch (ID: {cmd.Id}): '{cmd.Command}'. Preparing to execute.");
-                    
-                    string jsonCommandToExecute = cmd.Command;
-
-                    _ = Task.Run(async () => 
-                    {
-                        await Task.Delay(20000); 
-                        bool success = false; 
-
-                        try
-                        {
-                            using (JsonDocument doc = JsonDocument.Parse(jsonCommandToExecute))
-                            {
-                                if (doc.RootElement.ValueKind == JsonValueKind.Array)
-                                {
-                                    foreach (JsonElement element in doc.RootElement.EnumerateArray())
-                                    {
-                                        if (element.ValueKind == JsonValueKind.String)
-                                            ProcessCommand(element.GetString());
-                                    }
-                                }
-                                else if (doc.RootElement.ValueKind == JsonValueKind.Object)
-                                {
-                                    foreach (JsonProperty prop in doc.RootElement.EnumerateObject())
-                                    {
-                                        string key = prop.Name.ToLower();
-                                        string value = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString()! : prop.Value.GetRawText();
-
-                                        if (key == "msg" || key == "message")
-                                            ProcessCommand($"msg:{value}");
-                                        else if (key == "command" || key == "action")
-                                            ProcessCommand(value);
-                                        else
-                                            ProcessCommand(key); 
-                                    }
-                                }
-                            }
-                            success = true; 
-                        }
-                        catch (JsonException)
-                        {
-                            try
-                            {
-                                LogMessage("WARNING", $"Command ID {cmd.Id} is not valid JSON. Executing as a raw string.");
-                                ProcessCommand(jsonCommandToExecute);
-                                success = true; 
-                            }
-                            catch (Exception ex)
-                            {
-                                LogMessage("ERROR", $"Error processing command ID {cmd.Id} as raw string: {ex.Message}");
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            LogMessage("ERROR", $"Error processing command ID {cmd.Id}: {ex.Message}");
-                        }
-
-                        if (success)
-                        {
-                            string markExecutedUrl = $"{baseUrl}/{cmd.Id}/execute";
-                            var postResponse = await _httpClient.PostAsync(markExecutedUrl, new StringContent("{}", Encoding.UTF8, "application/json"));
-                            
-                            if (postResponse.IsSuccessStatusCode)
-                                LogMessage("INFO", $"Command ID {cmd.Id} successfully processed and marked as executed via API.");
-                            else
-                                LogMessage("WARNING", $"Command ID {cmd.Id} failed to be marked as executed in API.");
-                        }
-                    });
-                }
+                var pending = JsonSerializer.Deserialize<List<RemoteCommand>>(await response.Content.ReadAsStringAsync().ConfigureAwait(false), new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                if (pending == null) return;
+                foreach (RemoteCommand command in pending)
+                    await ExecuteDelayedAsync(command, baseUrl.TrimEnd('/')).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                LogMessage("ERROR", $"Error fetching commands from API: {ex.Message}");
+                _logger.LogWarning(LogEvents.RemoteCommandFailureId, ex, "Remote command retrieval failed. Operation={Operation}", "retrieve");
             }
         }
 
-        private void ProcessCommand(string? command)
+        private async Task ExecuteDelayedAsync(RemoteCommand command, string baseUrl)
         {
-            if (string.IsNullOrWhiteSpace(command)) return;
-
-            string lowerCmd = command.ToLower().Trim();
-
-            if (lowerCmd.StartsWith("msg:"))
+            await Task.Delay(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
+            // Re-check after delay and immediately before every command action.
+            if (!IsRemoteEnabled()) { DenyRemote("remote", "RemoteCommandsEnabled is false"); return; }
+            bool processed = ProcessCommand(command.Command);
+            if (!processed) return;
+            try
             {
-                string message = command.Substring(4).Trim();
-                LogMessage("INFO", $"Displaying custom message: {message}");
-
-                System.Threading.Thread thread = new System.Threading.Thread(() =>
-                {
-                    var msgForm = new Ergonomy.UI.MessageAlarmForm(message);
-                    Application.Run(msgForm);
-                });
-                thread.SetApartmentState(System.Threading.ApartmentState.STA);
-                thread.Start();
-                return;
+                using var response = await _httpClient.PostAsync(baseUrl + "/" + command.Id + "/execute", new StringContent("{}", Encoding.UTF8, "application/json")).ConfigureAwait(false);
+                _logger.LogInformation(LogEvents.RemoteCommandAllowedId, "Remote command processed. Category={Category}, Marked={Marked}", "supported", response.IsSuccessStatusCode);
             }
-
-            switch (lowerCmd)
-            {
-                case "stop":
-                    OnStopCollection?.Invoke();
-                    LogMessage("INFO", "Application tracking PAUSED via remote command.");
-                    break;
-                case "start":
-                    OnStartCollection?.Invoke();
-                    LogMessage("INFO", "Application tracking RESUMED via remote command.");
-                    break;
-                // case "os_restart":
-                //     LogMessage("WARNING", "Windows is RESTARTING via remote command.");
-                //     OnForceSync?.Invoke();
-                //     System.Diagnostics.Process.Start("shutdown", "/r /t 5");
-                //     break;
-                // case "os_shutdown":
-                //     LogMessage("WARNING", "Windows is SHUTTING DOWN via remote command.");
-                //     OnForceSync?.Invoke();
-                //     System.Diagnostics.Process.Start("shutdown", "/s /t 5");
-                //     break;
-            }
+            catch (Exception ex) { _logger.LogWarning(LogEvents.RemoteCommandFailureId, ex, "Remote command acknowledgement failed. Operation={Operation}", "acknowledge"); }
         }
-        public void UpdateSettings(AppSettings appSettings)
+
+        private bool ProcessCommand(string? command)
         {
-            if (appSettings == null)
-                throw new ArgumentNullException(nameof(appSettings));
-
-            _appSettings = appSettings;
-
-            double intervalSeconds = _appSettings.CommandCheckIntervalSeconds;
-
-            if (intervalSeconds <= 0)
-                intervalSeconds = 30;
-
-            UpdateTimerInterval(intervalSeconds);
+            if (!IsRemoteEnabled()) { DenyRemote("remote", "RemoteCommandsEnabled is false"); return false; }
+            if (string.IsNullOrWhiteSpace(command)) return false;
+            string lower = command.Trim().ToLowerInvariant();
+            if (lower.StartsWith("msg:"))
+            {
+                // The content is intentionally not logged. It is UI data, not operational telemetry.
+                string message = command[4..].Trim();
+                var thread = new Thread(() => Application.Run(new Ergonomy.UI.MessageAlarmForm(message)));
+                thread.SetApartmentState(ApartmentState.STA); thread.Start();
+                _logger.LogInformation(LogEvents.RemoteCommandAllowedId, "Remote command allowed. Category={Category}", "message");
+                return true;
+            }
+            switch (lower)
+            {
+                case "stop": OnStopCollection?.Invoke(); _logger.LogInformation(LogEvents.RemoteCommandAllowedId, "Remote command allowed. Category={Category}", "collection-stop"); return true;
+                case "start": OnStartCollection?.Invoke(); _logger.LogInformation(LogEvents.RemoteCommandAllowedId, "Remote command allowed. Category={Category}", "collection-start"); return true;
+                default: DenyRemote("unsupported", "Command category is not allowlisted"); return false;
+            }
         }
 
+        private bool IsRemoteEnabled() => _settingsService.Current.RemoteCommandsEnabled;
+        private bool IsSystemPowerEnabled() => _settingsService.Current.SystemPowerCommandsEnabled;
+        private void DenyRemote(string category, string reason) => _logger.LogWarning(LogEvents.RemoteCommandDeniedId,
+            "Remote command denied. Category={Category}, Reason={Reason}, RemoteCommandsEnabled={Enabled}", category, reason, IsRemoteEnabled());
+        private void ExecuteSystemPower(string category, string arguments)
+        {
+            // This check is deliberately adjacent to the only power-process invocation.
+            if (!IsSystemPowerEnabled()) { DenySystemPower(category, "SystemPowerCommandsEnabled is false"); return; }
+            _logger.LogWarning(LogEvents.RemoteCommandAllowedId, "System power command allowed. Category={Category}", category);
+            System.Diagnostics.Process.Start("shutdown", arguments);
+        }
+        private void DenySystemPower(string category, string reason) => _logger.LogWarning(LogEvents.SystemPowerCommandDeniedId,
+            "System power command denied. Category={Category}, Reason={Reason}, SystemPowerCommandsEnabled={Enabled}", category, reason, IsSystemPowerEnabled());
 
+        public void UpdateSettings(AppSettings settings)
+        {
+            _appSettings = settings ?? throw new ArgumentNullException(nameof(settings));
+            _scheduleTimer.Interval = GetIntervalMilliseconds(settings.CommandCheckIntervalSeconds);
+        }
         public void Dispose()
         {
-            _scheduleTimer?.Stop();
-            _scheduleTimer?.Dispose();
+            if (_disposed) return;
+            _disposed = true;
+            _scheduleTimer.Stop();
+            Task? poll; lock (_pollSync) poll = _pollTask;
+            try { poll?.Wait(TimeSpan.FromSeconds(25)); } catch { }
+            _scheduleTimer.Dispose(); _httpClient.Dispose(); _pollGate.Dispose();
         }
     }
 }

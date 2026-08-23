@@ -111,7 +111,7 @@ namespace Ergonomy.Logging
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Error logging data: " + ex.Message);
+                Console.WriteLine("Error logging data.");
             }
         }
 

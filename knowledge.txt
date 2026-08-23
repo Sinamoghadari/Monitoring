@@ -117,3 +117,189 @@ dotnet build --no-restore -p:EnableWindowsTargeting=true  (Debug)
 dotnet build -c Release --no-restore -p:EnableWindowsTargeting=true
 Run: dotnet run --project Ergonomy.csproj  (or published exe). Requires
 machine env vars (see Environment_set.txt) and Windows interactive session.
+
+====================================================================
+=== REFACTOR LOG (append-only entries) ===
+====================================================================
+
+1405/05/31 - 2:41 pm
+problem:
+MainApplicationContext was a monolith: it owned the settings refresh, API/sqlite/self health
+checks, permission evaluation, advanced-metrics collection, sync orchestration, every timer,
+and service construction inline (890-line file). Object creation and timer wiring were hard to
+test and to reason about.
+solution:
+Split responsibilities into dedicated classes and a DI composition root:
+- Created Services/WorkerBase.cs (PeriodicTimer + CancellationToken + exception handling +
+  dynamic interval + safe self-stop) and the concrete workers: SettingsRefreshWorker,
+  HealthMonitorWorker, PermissionMonitorWorker, AdvancedMetricsWorker.
+- MainApplicationContext is now a thin UI/lifecycle shell (notify icon, exception handlers,
+  alarm marshalling control, on/off command wiring) that only starts/stops workers and brokers
+  SettingsChanged -> UpdateSettings/EvaluateAll. It constructs NO timers.
+- Added Services/ServiceRegistrar.cs composition root and wired Program.cs to build a
+  ServiceProvider on the UI thread.
+caveats:
+- No Generic Host .Run() loop is used; the WinForms STA message loop (Application.Run) must stay
+  the process pump, so only the service-provider wiring of a host is reused. Documents in code.
+
+1405/05/31 - 2:42 pm
+problem:
+Settings loading/refresh logic lived in MainApplicationContext (LoadAppSettings/ApplyDefaultValues/
+UpdateSettingsFromApiAsync/PreserveEnvironmentInfrastructureSettings). No single source of truth.
+solution:
+- Added Configuration/SettingsService.cs (ISettingsService + SettingsService)
+  holding Current/Bootstrap, raising SettingsChanged, refreshing from the Settings API, and
+  preserving API+Kafka infrastructure settings from bootstrap only.
+- Moved defaulting + required-setting validation to Configuration/AppDefaults.cs.
+- EnvironmentSettingsProvider remains the bootstrap env provider (the only place that reads machine
+  env for settings).
+caveats:
+- AppSettings is registered as a singleton = settings-in-effect at first resolution; long-lived
+  services react to refreshes via UpdateSettings/SettingsChanged (do NOT hold stale refs).
+
+1405/05/31 - 2:43 pm
+problem:
+Permission logic (sqlite/kafka/ergonomy) and startup/sleep lifecycle were embedded in
+MainApplicationContext; timers were constructed there (settings/permission/health/advanced/wake).
+solution:
+- Added Services/PermissionsEvaluator.cs to encapsulate EvaluateSqlite/Kafka/ErgonomyPermission
+  and start/stop the SyncEngine, AdvancedMetricsWorker and ErgonomyManager.
+- Added Services/HealthCheckService.cs (API/SQLite/self-performance probes), Services/MessageLogService.cs
+  (app_logs console+outbox), Services/MachineIdentity.cs, Services/WakeUpScheduler.cs (owns the single
+  wake-up timer).
+- Added Services/AdvancedMetricsWorker.cs to move the advanced-metrics collection off the context.
+
+1405/05/31 - 2:44 pm
+problem:
+SyncEngine was timer-driven inside the monolith, used async void in the timer handler and
+fire-and-forget in Start() (_ = ProcessQueueAsync).
+solution:
+- Rewrote SyncEngine as a cancelable worker: a single background loop using PeriodicTimer,
+  CancellationToken, awaited shutdown (Stop waits up to 10s), a SemaphoreSlim gate, no async void,
+  and no fire-and-forget. Kept Start/Stop/UpdateSyncInterval/ForceSyncAsync public API so
+  PermissionsEvaluator/CommandManager wiring is unchanged.
+- Added Prometheus metrics for batch/retry: ergonomy_outbox_pending_records,
+  ergonomy_sync_batches_total, ergonomy_sync_records_sent_total, ergonomy_sync_records_failed_total,
+  ergonomy_sync_poison_records_total, ergonomy_sync_backoff_active.
+caveats: ForceSyncAsync still bypasses backoff by design.
+
+1405/05/31 - 2:45 pm
+problem:
+Ad-hoc Console.WriteLine everywhere; no EventIds, no log scopes, no ILogger<T>.
+solution:
+- Added Microsoft.Extensions.Logging/Abstractions packages; services now take ILogger<T>.
+- Added Logging/LogEvents.cs (stable EventIds) and Logging/ConsoleStructuredLogger.cs (a light
+  ILoggerProvider rendering structured lines to stdout, preserving the console output model).
+- Logging is configured in the composition root via AddLogging + ClearProviders + add provider.
+caveats:
+- Structured log line format differs from the old "[HH:mm:ss] [LEVEL] msg" format (intended change).
+
+1405/05/31 - 2:46 pm
+problem:
+Need Prometheus observability matching the deployment model (central Prometheus scrapes the Agent),
+WITHOUT any new Kafka topics, SQLite tables, or telemetry outbox, and without high-cardinality labels.
+solution:
+- Added Observability/AgentMetrics.cs (thread-safe in-process metric registry; gauge=set,
+  counter=add) and Observability/MetricsEndpoint.cs (HttpListener serving /metrics as Prometheus
+  text). Metrics endpoint binds to wildcard with loopback fallback; port from
+  ERGONOMY_METRICS_PORT (default 9100).
+- Added Observability/MetricsConfig.cs (centralized infra config resolved at the composition root).
+- Only low-cardinality identity labels (machine name, environment, agent id) are injected via
+  agent_info; no usernames/session ids/message ids.
+caveats: wildcard bind needs a URL ACL/firewall rule; loopback fallback if not permitted.
+
+1405/05/31 - 2:47 pm
+problem:
+DatabaseManager had a standalone ConfigurationBuilder reading appsettings.json for a single
+CheckPostgresConnection flag; CommandManager used `dynamic` for settings (bad for DI).
+solution:
+- DatabaseManager: removed IConfiguration/ConfigurationBuilder/appsettings read; the flag is now an
+  explicit constructor parameter (checkPostgresConnection).
+- CommandManager: changed settings field/ctor from `dynamic` to AppSettings.
+caveats: DatabaseManager remains dead code (never constructed in the runtime path).
+
+1405/05/31 - 2:48 pm
+problem:
+Verification of the refactor in this sandbox: no .NET SDK, no NuGet package cache, no outbound
+network (HTTPS/HTTP to nuget/dotnet/debian all fail), and the app is Windows/WinForms so it can't
+run here.
+solution:
+- Performed source-grounded static validation: read every modified file, checked namespace/type
+  wiring, brace/paren balance across all .cs (balanced), checked no timers are constructed inside
+  MainApplicationContext, no direct env access in services except the provider/composition root.
+- Build NOT executed here (impossible); must run on a Windows/.NET 9 host:
+  dotnet build --no-restore -p:EnableWindowsTargeting=true
+  dotnet build -c Release --no-restore -p:EnableWindowsTargeting=true
+caveats: Do NOT claim a successful build; compile/run verification is pending on a real Windows host.
+
+1405/05/31 - 3:30 pm
+problem:
+Final verification found missing machine-authoritative remote-command and system-power kill switches,
+SQLite health checks resolving a different database path, incomplete SyncEngine cancellation propagation,
+worker loops that could stop after one failed iteration, untracked metrics requests, and blocking settings
+refresh calls in the WinForms lifecycle.
+solution:
+- Added safe-default AppSettings security flags loaded only from machine environment and preserved during API refresh.
+- CommandManager now checks remote policy at poll, delayed, and execution boundaries; scheduled power actions
+  check the independent power policy immediately adjacent to the only power invocation and denial logging omits payloads.
+- Added SqliteOutboxConnectionProvider and injected it into LocalDatabaseManager and HealthCheckService.
+- Propagated SyncEngine cancellation through queue processing and Kafka send calls; cancellation preserves pending records.
+- Made WorkerBase log iteration failures, wait a bounded delay, and continue; made settings refresh cancellation-aware.
+- Reworked metrics request tracking/draining and removed UI-thread blocking settings refresh calls.
+- Sanitized selected Kafka, SQLite, database, hook, alarm, and data logger exception/endpoint output.
+files:
+CommandManager.cs; Configuration/AppSettings.cs; Configuration/EnvironmentSettingsProvider.cs;
+Configuration/SettingsService.cs; SqliteOutboxConnectionProvider.cs; LocalDatabaseManager.cs;
+Services/HealthCheckService.cs; Services/ServiceRegistrar.cs; Services/WorkerBase.cs;
+Services/SettingsRefreshWorker.cs; SyncEngine.cs; Observability/MetricsEndpoint.cs; Logging/LogEvents.cs;
+MainApplicationContext.cs; KafkaConnect.cs; DatabaseManager.cs; Hooks/ActivityMonitor.cs;
+Hooks/GlobalInputHook.cs; Logging/DataLogger.cs; AlarmManager.cs.
+verification result:
+Static source checks confirm no new CREATE TABLE statement or Kafka topic declaration was added, disabled
+policies default false and API preservation copies bootstrap policy, and SyncEngine passes its token to Kafka.
+Build and runtime tests remain blocked because dotnet is unavailable in this environment.
+caveats:
+No destructive command, Kafka publish, or live API/database/metrics test was performed. Remaining legacy
+Console.WriteLine calls should be migrated to ILogger in a separately build-verified change.
+
+
+1405/05/31 - 3:35 pm
+problem:
+Windows build reported CS0246 in Services/HealthCheckService.cs because SqliteOutboxConnectionProvider
+is declared in Ergonomy.Database and the service did not import that namespace.
+solution:
+- Added using Ergonomy.Database to Services/HealthCheckService.cs.
+files:
+Services/HealthCheckService.cs.
+verification result:
+- Source namespace resolution is corrected; local compilation remains unavailable because dotnet is not installed.
+caveats:
+- A Windows/.NET build is still required to verify the complete project.
+
+
+1405/05/31 - 3:40 pm
+problem:
+Windows compilation exposed a missing HealthFailedId EventId and MetricsConfig.Environment shadowing
+System.Environment inside the static factory.
+solution:
+- Added LogEvents.HealthFailedId.
+- Qualified environment access in MetricsConfig.FromEnvironment as System.Environment.
+files:
+Logging/LogEvents.cs; Observability/MetricsConfig.cs.
+verification result:
+- Source references now resolve unambiguously; complete local build remains unavailable without dotnet.
+caveats:
+- The Windows/.NET build must be rerun to discover any additional compiler errors.
+
+
+1405/05/31 - 3:42 pm
+problem:
+Windows compilation identified the HealthCheckService ILogger LogError overload arguments in the wrong order.
+solution:
+- Corrected the call to LogError(EventId, Exception, message).
+files:
+Services/HealthCheckService.cs.
+verification result:
+- Corrected against the ILogger extension-method signature; local build remains unavailable without dotnet.
+caveats:
+- Re-run the Windows build for complete compiler verification.

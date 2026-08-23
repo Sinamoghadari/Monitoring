@@ -88,7 +88,7 @@ namespace Ergonomy.Hooks
                 {
                     Exception ex = _startupException;
                     _startupException = null;
-                    throw new InvalidOperationException($"Failed to install Win32 input hooks: {ex.Message}", ex);
+                    throw new InvalidOperationException($"Failed to install Win32 input hooks.", ex);
                 }
             }
         }
@@ -195,7 +195,7 @@ namespace Ergonomy.Hooks
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ❌ [Ergonomy] Hook installation error on thread " +
-                    $"{GetCurrentThreadId()}: {ex.Message}");
+                    $"{GetCurrentThreadId()}.");
                 _startupException = ex;
                 _startCompletedEvent.Set();
             }

@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("Ergonomy")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+24469d31c1f498f9cec3e1c406a76bee1f95c06c")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+90b3bc9491cd3497c4fad95f94580f11d6906426")]
 [assembly: System.Reflection.AssemblyProductAttribute("Ergonomy")]
 [assembly: System.Reflection.AssemblyTitleAttribute("Ergonomy")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

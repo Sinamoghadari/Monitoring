@@ -93,6 +93,7 @@ namespace Ergonomy.Hooks
         }
 
         private int _samplingInProgress;
+        private bool _disposed;
 
         private void OnSampleTimerElapsed(object? sender, ElapsedEventArgs e)
         {
@@ -164,7 +165,7 @@ namespace Ergonomy.Hooks
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ ActivityMonitor sample error: {ex.Message}");
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ ActivityMonitor sample error.");
             }
             finally
             {
@@ -174,9 +175,14 @@ namespace Ergonomy.Hooks
 
         public void Dispose()
         {
+            if (_disposed)
+                return;
+            _disposed = true;
+
             Stop();
             _sampleTimer.Elapsed -= OnSampleTimerElapsed;
             _sampleTimer.Dispose();
+            _globalInputHook.Dispose();
         }
     }
 }

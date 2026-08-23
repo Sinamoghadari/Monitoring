@@ -5,10 +5,18 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
-using Ergonomy.Database;
+using Microsoft.Extensions.Logging;
+using Ergonomy.Logging;
+using Ergonomy.Observability;
 
 namespace Ergonomy.Database
 {
+    /// <summary>
+    /// Worker that drains the SQLite outbox to Kafka Predictably. It is no longer timer-driven
+    /// inside a monolithic context: it runs a single cancelable loop on a background task using
+    /// <see cref="PeriodicTimer"/>, awaits shutdown, and never uses async void / fire-and-forget.
+    /// A single <see cref="SemaphoreSlim"/> gate prevents overlapping batch processing.
+    /// </summary>
     public sealed class SyncEngine : IDisposable
     {
         private const int DefaultBatchSize = 50;
@@ -16,133 +24,195 @@ namespace Ergonomy.Database
 
         private readonly LocalDatabaseManager _localDb;
         private readonly KafkaConnect _kafkaConnect;
-        private readonly System.Timers.Timer _syncTimer;
+        private readonly ILogger<SyncEngine> _logger;
+        private readonly AgentMetrics _metrics;
         private readonly SemaphoreSlim _syncGate = new(1, 1);
-        private readonly double _baseIntervalMs;
+        private readonly object _sync = new();
 
-        // backoff نمایی هنگام قطع Kafka
+        private double _baseIntervalMinutes;
         private int _consecutiveKafkaFailures;
         private DateTime _backoffUntilUtc = DateTime.MinValue;
-
         private bool _disposed;
+        private CancellationTokenSource? _cts;
+        private Task? _loop;
+
+        public bool IsRunning { get; private set; }
 
         public SyncEngine(
             KafkaConnect kafkaConnect,
             LocalDatabaseManager localDb,
+            ILogger<SyncEngine> logger,
+            AgentMetrics metrics,
             double syncIntervalMinutes = 1)
         {
             _localDb = localDb ?? throw new ArgumentNullException(nameof(localDb));
             _kafkaConnect = kafkaConnect ?? throw new ArgumentNullException(nameof(kafkaConnect));
-
-            double intervalMs = syncIntervalMinutes > 0
-                ? syncIntervalMinutes * 60 * 1000
-                : 60_000;
-
-            _baseIntervalMs = intervalMs;
-
-            _syncTimer = new System.Timers.Timer(intervalMs)
-            {
-                AutoReset = true,
-                Enabled = false
-            };
-
-            _syncTimer.Elapsed += OnSyncTimerElapsed;
+            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
+            _baseIntervalMinutes = syncIntervalMinutes > 0 ? syncIntervalMinutes : 1;
         }
 
         public void Start()
         {
-            ThrowIfDisposed();
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                if (IsRunning)
+                    return;
 
-            if (_syncTimer.Enabled)
-                return;
+                _cts = new CancellationTokenSource();
+                _loop = Task.Run(() => RunLoopAsync(_cts.Token), _cts.Token);
+                IsRunning = true;
+            }
 
-            _syncTimer.Start();
-
-            _ = ProcessQueueAsync();
+            _logger.LogInformation(LogEvents.WorkerStartedId, "Sync Engine started (Kafka Allowed).");
         }
 
-        public void Stop()
+        public void Stop(string reason = "requested")
         {
-            if (_disposed)
-                return;
+            CancellationTokenSource? cts = null;
+            Task? loop = null;
 
-            _syncTimer.Stop();
+            lock (_sync)
+            {
+                if (!IsRunning)
+                {
+                    _cts?.Cancel();
+                    return;
+                }
+
+                cts = _cts;
+                _cts = null;
+                loop = _loop;
+                _loop = null;
+                IsRunning = false;
+            }
+
+            try
+            {
+                cts?.Cancel();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                loop?.Wait(TimeSpan.FromSeconds(10));
+            }
+            catch (AggregateException)
+            {
+            }
+            catch (Exception)
+            {
+            }
+
+            cts?.Dispose();
+
+            _logger.LogInformation(
+                LogEvents.WorkerStoppedId, "Sync Engine stopped (reason: {Reason}).", reason);
         }
 
         public async Task ForceSyncAsync()
         {
             ThrowIfDisposed();
 
-            Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss}] ⚠️ FORCE SYNC triggered.");
+            _logger.LogInformation("FORCE SYNC triggered.");
 
-            // ForceSync عمداً backoff را دور می‌زند.
-            await ProcessQueueAsync();
+            // ForceSync intentionally bypasses backoff.
+            await ProcessQueueAsync(CancellationToken.None).ConfigureAwait(false);
         }
 
         public void UpdateSyncInterval(double intervalMinutes)
         {
             ThrowIfDisposed();
 
-            if (intervalMinutes <= 0)
-                intervalMinutes = 1;
+            _baseIntervalMinutes = intervalMinutes > 0 ? intervalMinutes : 1;
 
-            bool wasRunning = _syncTimer.Enabled;
-
-            _syncTimer.Stop();
-            _syncTimer.Interval = intervalMinutes * 60 * 1000;
-
-            if (wasRunning)
-                _syncTimer.Start();
-
-            Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss}] 🕒 SyncEngine interval updated to " +
-                $"{intervalMinutes.ToString(CultureInfo.InvariantCulture)} minute(s).");
+            _logger.LogInformation(
+                "SyncEngine interval updated to {Minutes} minute(s).",
+                _baseIntervalMinutes.ToString(CultureInfo.InvariantCulture));
         }
 
-        private async void OnSyncTimerElapsed(
-            object? sender,
-            System.Timers.ElapsedEventArgs e)
+        private async Task RunLoopAsync(CancellationToken ct)
         {
             try
             {
-                // backoff فعال است؟ این tick را رد کن.
-                if (DateTime.UtcNow < _backoffUntilUtc)
+                // First pass immediately (preserves the previous Start() "fire initial sync").
+                try
                 {
-                    Console.WriteLine(
-                        $"[{DateTime.Now:HH:mm:ss}] ⏸️ Sync skipped: backoff active until " +
-                        $"{_backoffUntilUtc:HH:mm:ss}.");
-                    return;
+                    await ProcessQueueAsync(ct).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Sync initial pass error.");
                 }
 
-                await ProcessQueueAsync();
+                while (!ct.IsCancellationRequested)
+                {
+                    TimeSpan interval = TimeSpan.FromMinutes(_baseIntervalMinutes <= 0 ? 1 : _baseIntervalMinutes);
+                    using var timer = new PeriodicTimer(interval);
+
+                    try
+                    {
+                        await timer.WaitForNextTickAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        break;
+                    }
+
+                    // Backoff active? skip this tick (predictable; next tick retries).
+                    if (DateTime.UtcNow < _backoffUntilUtc)
+                    {
+                        _logger.LogInformation(
+                            LogEvents.SyncSkippedId,
+                            "Sync skipped: backoff active until {Until}.", _backoffUntilUtc.ToString("HH:mm:ss"));
+                        continue;
+                    }
+
+                    try
+                    {
+                        await ProcessQueueAsync(ct).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Sync pass error.");
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
             }
             catch (Exception ex)
             {
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] ❌ Sync timer error: {ex.Message}");
+                _logger.LogError(ex, "SyncEngine loop failed unexpectedly.");
             }
         }
 
-        private async Task ProcessQueueAsync()
+        private async Task ProcessQueueAsync(CancellationToken cancellationToken)
         {
             if (_disposed)
                 return;
 
-            if (!await _syncGate.WaitAsync(0))
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!await _syncGate.WaitAsync(0).ConfigureAwait(false))
             {
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] ℹ️ Sync skipped: a previous sync is still running.");
+                _logger.LogInformation(
+                    LogEvents.SyncSkippedId, "Sync skipped: a previous sync is still running.");
                 return;
             }
 
             try
             {
-                // اگر صف بحرانی است، اول retention اجرا شود تا فشار کم شود.
+                _metrics.SetGauge("ergonomy_outbox_pending_records",
+                    "Number of records currently pending in the SQLite outbox.",
+                    _localDb.PendingCount);
+
                 if (_localDb.GetCapacityStatus() == CapacityStatus.Critical)
                 {
-                    Console.WriteLine(
-                        $"[{DateTime.Now:HH:mm:ss}] 🧹 Capacity critical; running retention before sync.");
+                    _logger.LogInformation("Capacity critical; running retention before sync.");
                     _localDb.RunRetention();
                 }
 
@@ -150,14 +220,15 @@ namespace Ergonomy.Database
 
                 if (records == null || records.Count == 0)
                 {
-                    // بدون رکورد یعنی صف خالی است؛ backoff را ریست کن.
                     _consecutiveKafkaFailures = 0;
                     _backoffUntilUtc = DateTime.MinValue;
+                    _metrics.SetGauge("ergonomy_sync_backoff_active", "1 if backoff is active.", 0);
                     return;
                 }
 
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] 📤 Syncing {records.Count} outbox record(s).");
+                _logger.LogInformation(
+                    LogEvents.SyncBatchStartId, "Syncing {Count} outbox record(s).", records.Count);
+                _metrics.IncrementCounter("ergonomy_sync_batches_total", "Number of outbox batch sync passes.", 1);
 
                 var jsonOptions = new JsonSerializerOptions
                 {
@@ -174,41 +245,51 @@ namespace Ergonomy.Database
 
                     try
                     {
-                        await SendRecordToKafkaAsync(record, jsonOptions);
+                        await SendRecordToKafkaAsync(record, jsonOptions, cancellationToken).ConfigureAwait(false);
 
                         _localDb.DeleteRecord(record.Id);
 
-                        Console.WriteLine(
-                            $"[{DateTime.Now:yyyy/MM/dd HH:mm:ss}] ✅ " +
-                            $"Data delivered to Kafka and removed from queue. " +
-                            $"RecordId: {record.Id} | Target: {record.TargetTable}");
+                        _metrics.IncrementCounter(
+                            "ergonomy_sync_records_sent_total",
+                            "Records successfully delivered to Kafka.",
+                            1,
+                            new Dictionary<string, string> { ["target"] = record.TargetTable });
+
+                        _logger.LogInformation(
+                            LogEvents.SyncBatchCompleteId,
+                            "Data delivered to Kafka and removed from queue. Target={Target}", record.TargetTable);
                     }
                     catch (JsonException ex)
                     {
-                        HandlePoisonRecord(record.Id, record.TargetTable, $"Invalid JSON payload: {ex.Message}");
+                        HandlePoisonRecord(record.Id, record.TargetTable, "invalid-json");
                     }
                     catch (NotSupportedException ex)
                     {
-                        HandlePoisonRecord(record.Id, record.TargetTable, ex.Message);
+                        HandlePoisonRecord(record.Id, record.TargetTable, "unsupported-payload");
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        // Preserve the record; it was not deleted before the send completed.
+                        throw;
                     }
                     catch (Exception ex)
                     {
-                        // خطای موقتی Kafka — رکورد می‌ماند و backoff فعال می‌شود.
                         anyTransientFailure = true;
 
-                        Console.WriteLine(
-                            $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka delivery failed; " +
-                            $"record remains pending. RecordId: {record.Id} | " +
-                            $"Target: {record.TargetTable} | Error: {ex.Message}");
+                        _logger.LogWarning(LogEvents.KafkaSendFailureId, ex,
+                            "Kafka delivery failed; record remains pending. Target={Target}", record.TargetTable);
                     }
                 }
 
                 ApplyBackoff(anyTransientFailure);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] ❌ SyncEngine fatal error: {ex.Message}");
+                _logger.LogError(ex, "SyncEngine fatal error.");
             }
             finally
             {
@@ -222,25 +303,30 @@ namespace Ergonomy.Database
             {
                 _consecutiveKafkaFailures++;
 
-                double backoffMs = _baseIntervalMs * Math.Pow(2, _consecutiveKafkaFailures);
+                double backoffMs = TimeSpan.FromMinutes(_baseIntervalMinutes <= 0 ? 1 : _baseIntervalMinutes).TotalMilliseconds
+                                   * Math.Pow(2, _consecutiveKafkaFailures);
                 backoffMs = Math.Min(backoffMs, MaxBackoff.TotalMilliseconds);
 
                 _backoffUntilUtc = DateTime.UtcNow.AddMilliseconds(backoffMs);
+                _metrics.SetGauge("ergonomy_sync_backoff_active", "1 if backoff is active.", 1);
 
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] ⏳ Kafka backoff: next attempt in " +
-                    $"{backoffMs / 1000:0}s (failure #{_consecutiveKafkaFailures}).");
+                _logger.LogWarning(
+                    LogEvents.SyncRetryBackoffId,
+                    "Kafka backoff: next attempt in {Seconds}s (failure #{Failures}).",
+                    Math.Round(backoffMs / 1000), _consecutiveKafkaFailures);
             }
             else
             {
                 _consecutiveKafkaFailures = 0;
                 _backoffUntilUtc = DateTime.MinValue;
+                _metrics.SetGauge("ergonomy_sync_backoff_active", "1 if backoff is active.", 0);
             }
         }
 
         private async Task SendRecordToKafkaAsync(
             SyncRecord record,
-            JsonSerializerOptions jsonOptions)
+            JsonSerializerOptions jsonOptions,
+            CancellationToken cancellationToken)
         {
             switch (record.TargetTable)
             {
@@ -252,7 +338,7 @@ namespace Ergonomy.Database
                     if (metrics == null)
                         throw new JsonException("Advanced system metrics payload was null.");
 
-                    await _kafkaConnect.SendSystemMetricsAsync(record.MessageId, metrics);
+                    await _kafkaConnect.SendSystemMetricsAsync(record.MessageId, metrics, cancellationToken).ConfigureAwait(false);
                     break;
                 }
 
@@ -264,7 +350,7 @@ namespace Ergonomy.Database
                     if (activity == null)
                         throw new JsonException("User activity payload was null.");
 
-                    await _kafkaConnect.SendUserActivityAsync(record.MessageId, activity);
+                    await _kafkaConnect.SendUserActivityAsync(record.MessageId, activity, cancellationToken).ConfigureAwait(false);
                     break;
                 }
 
@@ -276,7 +362,7 @@ namespace Ergonomy.Database
                     if (logData == null)
                         throw new JsonException("App log payload was null.");
 
-                    await _kafkaConnect.SendAppLogAsync(record.MessageId, logData);
+                    await _kafkaConnect.SendAppLogAsync(record.MessageId, logData, cancellationToken).ConfigureAwait(false);
                     break;
                 }
 
@@ -285,18 +371,20 @@ namespace Ergonomy.Database
             }
         }
 
-
         private void HandlePoisonRecord(Guid recordId, string targetTable, string reason)
         {
-            Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss}] ❌ Poison outbox record detected. " +
-                $"RecordId: {recordId} | Target: {targetTable} | Reason: {reason}");
+            _metrics.IncrementCounter(
+                "ergonomy_sync_poison_records_total",
+                "Poison outbox records removed.",
+                1,
+                new Dictionary<string, string> { ["target"] = targetTable });
+
+            _logger.LogWarning(
+                LogEvents.SyncPoisonRecordId,
+                "Poison outbox record removed. Target={Target}, ReasonCategory={ReasonCategory}",
+                targetTable, "invalid-payload");
 
             _localDb.DeleteRecord(recordId);
-
-            Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss}] 🗑️ Poison outbox record removed. " +
-                $"RecordId: {recordId}");
         }
 
         private void ThrowIfDisposed()
@@ -309,13 +397,9 @@ namespace Ergonomy.Database
         {
             if (_disposed)
                 return;
-
             _disposed = true;
 
-            _syncTimer.Stop();
-            _syncTimer.Elapsed -= OnSyncTimerElapsed;
-            _syncTimer.Dispose();
-
+            Stop("disposed");
             _syncGate.Dispose();
         }
     }

@@ -205,3 +205,41 @@ This is preserved; my fix does **not** move any work into the hook callback.
 11. Change API settings `AllowErgonomyCollection` true→false → confirm hooks/timers
     stop (`Manager stopped because: AllowErgonomyCollection is false`); then
     false→true → confirm it resumes **without** restarting the app.
+
+## Architecture Refactor (second task)
+
+### What changed
+MainApplicationContext is now a thin UI/lifecycle shell. Object creation moved to a DI
+composition root; timers moved to workers; settings/sync/logging/observability extracted.
+
+### Files modified
+- `MainApplicationContext.cs` — reduced to a shell (no timers, no settings/sync/metrics logic).
+- `Program.cs` — builds the DI ServiceProvider, loads bootstrap, runs the app context.
+- `Ergonomy.csproj` — added Microsoft.Extensions.DependencyInjection/Logging/Logging.Abstractions.
+- `SyncEngine.cs` — converted to a cancelable PeriodicTimer worker; added Prometheus metrics.
+- `CommandManager.cs` — `dynamic` -> typed `AppSettings`.
+- `DatabaseManager.cs` — removed standalone ConfigurationBuilder / appsettings read.
+- `ErgonomyManager.cs` — deps injected (MachineIdentity, ActivityMonitor, AlarmManager, DataLogger).
+- `Hooks/ActivityMonitor.cs` — owns/disposes the hook; disposal guard.
+
+### New files
+- `Configuration/AppDefaults.cs`, `Configuration/SettingsService.cs`
+- `Services/`: `ServiceRegistrar.cs`, `WorkerBase.cs`, `SettingsRefreshWorker.cs`,
+  `HealthMonitorWorker.cs`, `PermissionMonitorWorker.cs`, `AdvancedMetricsWorker.cs`,
+  `PermissionsEvaluator.cs`, `HealthCheckService.cs`, `MessageLogService.cs`,
+  `MachineIdentity.cs`, `WakeUpScheduler.cs`
+- `Logging/`: `ConsoleStructuredLogger.cs`, `LogEvents.cs`
+- `Observability/`: `AgentMetrics.cs`, `MetricsEndpoint.cs`, `MetricsConfig.cs`
+
+### Remaining risks
+- Build/compile was NOT run (no .NET SDK / NuGet / network in this sandbox). Full compile + runtime
+  verification required on a Windows/.NET 9 host. Commands in knowledge.txt.
+- DI uses a ServiceProvider composition root instead of a Generic Host `.Run()` loop, so that the
+  WinForms STA message loop (Application.Run) remains the process pump. This is a deliberate,
+  documented deviation from "Add a Generic Host"; migrating to Host.Run would change the process
+  lifecycle and require the app to run as a console/windowed host.
+- Structured log output format changed (intended). Single PermissionMonitorWorker replaces the two
+  separate sqlite/kafka permission timers (uses the smaller interval; idempotent).
+- Metrics endpoint bind requires a URL ACL/firewall rule for wildcard; falls back to loopback.
+- Remaining direct env access: HealthCheckService reads ERGONOMY_SQLITE_CONNECTION_STRING (legacy
+  health probe) — not centralized; MetricsConfig/EnvironmentSettingsProvider are the providers.

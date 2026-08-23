@@ -1,0 +1,673 @@
+-----------------------------------------------------------------------------------------
+مشکل : 
+1 - برنامه هنگام اجرای بخش ارگونومی لگ شدید میخورد
+2 - بخش ارگونومی اجازه اجرا داشت ولی متغیرها در کافکا صفر بودند
+
+راه حل :
+اصل ماجرا سه مفهوم بسیار مهم دارد:
+
+کار بسیار سبک را در مسیر حساس انجام بده.
+هر UI فقط باید از thread خودش تغییر کند.
+Timerها به محیط اجرایی خودشان وابسته‌اند؛ هر Timer همه‌جا کار نمی‌کند.
+تصویر کلی برنامه
+برنامه‌ی تو سه وظیفه دارد:
+
+text
+1) رفتار کاربر را ببیند
+   keyboard / mouse
+
+2) تصمیم بگیرد
+   آیا کاربر به حد فعالیت مشخص رسیده است؟
+
+3) به کاربر هشدار نشان دهد
+   popup + image + alarm
+و هم‌زمان داده را به این مسیر می‌فرستد:
+
+text
+Windows Agent
+→ SQLite Outbox
+→ Kafka
+→ ClickHouse
+مشکل این بود که هر سه وظیفه با thread و timer درست اجرا نمی‌شدند.
+
+ابتدا: Thread چیست؟
+در Python معمولاً برنامه را این‌طور تصور می‌کنیم:
+
+python
+print("شروع")
+do_work()
+print("پایان")
+همه‌چیز به‌ترتیب روی یک مسیر اجرا می‌شود.
+
+اما در برنامه‌های Desktop مثل WinForms، چند مسیر اجرای هم‌زمان داریم:
+
+text
+UI Thread
+Hook Thread
+Background / ThreadPool Thread
+Kafka / Database Worker
+Timer Thread
+مثل یک شرکت:
+
+
+Thread	مثال ملموس
+UI Thread	مسئول پاسخ‌گویی پشت پیشخوان
+Hook Thread	نگهبانی که ورود و خروج افراد را می‌شمارد
+Background Worker	کارمند پشت‌صحنه برای نوشتن گزارش‌ها
+Kafka/SQLite Worker	مسئول ارسال نامه‌ها و ثبت اسناد
+Timer	ساعت زنگ‌دار که هر چند ثانیه یک کار را یادآوری می‌کند
+اگر مسئول نگهبانی را مجبور کنی هم‌زمان نامه بنویسد، Excel بسازد یا گزارش سنگین تهیه کند، دیگر ورودی را به‌موقع کنترل نمی‌کند. در کامپیوتر، نتیجه همان mouse lag است.
+
+درس اول: Hot Path را بسیار سبک نگه دار
+Hot Path چیست؟
+Hot Path یعنی کدی که خیلی زیاد اجرا می‌شود.
+
+در این پروژه، هر بار که mouse حرکت می‌کند، Windows یک event می‌فرستد:
+
+text
+Mouse moved
+Mouse moved
+Mouse moved
+Mouse moved
+...
+ممکن است این رویداد در یک ثانیه ده‌ها یا صدها بار رخ دهد.
+
+تشبیه ساده
+فرض کن یک در ورودی کارخانه داری.
+
+هر نفر که وارد می‌شود، نگهبان باید فقط یک علامت بزند:
+
+text
+یک نفر وارد شد → شمارنده +1
+کار درست:
+
+python
+people_count += 1
+کار اشتباه:
+
+python
+people_count += 1
+
+# برای هر نفر:
+write_to_database()
+send_to_kafka()
+create_excel()
+call_api()
+write_large_log_file()
+اگر نگهبان برای هر فرد این کارها را بکند، صف پشت در ساخته می‌شود.
+
+در ویندوز این صف معادل است با:
+
+text
+Cursor lag
+Mouse stutter
+UI freeze
+کند شدن ظاهری سیستم
+حتی ممکن است CPU در Task Manager خیلی بالا نرود، چون مشکل لزوماً «محاسبه‌ی سنگین» نیست؛ مشکل این است که Windows منتظر برگشت callback مربوط به ورودی مانده است.
+
+قبل از اصلاح چه مشکلی وجود داشت؟
+برنامه برای هر حرکت mouse، اطلاعات Win32 را به ساختار C# تبدیل می‌کرد. این کار در C# با چیزی مثل زیر انجام می‌شود:
+
+csharp
+Marshal.PtrToStructure<MSLLHOOKSTRUCT>(lParam)
+خود این دستور شاید در نگاه اول بزرگ نباشد، اما وقتی صدها یا هزاران بار در ثانیه اجرا شود و در حساس‌ترین نقطه‌ی زنجیره‌ی ورودی ویندوز قرار داشته باشد، می‌تواند باعث lag شود.
+
+به این وضعیت در Python شبیه است که در callback یک event بسیار پرتکرار، هر بار یک serialization یا I/O انجام دهی:
+
+python
+def on_mouse_move(x, y):
+    json.dumps({"x": x, "y": y})
+    database.commit()
+اصلاح چه بود؟
+الان callback مربوط به mouse/keyboard فقط این‌گونه عمل می‌کند:
+
+text
+Keyboard event آمد
+→ یک شمارنده افزایش بده
+→ سریع برگرد
+
+Mouse event آمد
+→ تعداد حرکت را افزایش بده
+→ مختصات لازم را بسیار سریع ثبت کن
+→ سریع برگرد
+مفهومی معادل Python:
+
+python
+keyboard_events += 1
+mouse_events += 1
+اما چون چند thread ممکن است هم‌زمان به شمارنده دسترسی داشته باشند، از عملیات atomic استفاده شده است؛ در C# معمولاً:
+
+csharp
+Interlocked.Increment(ref counter)
+مفهومی شبیه این است:
+
+python
+# فقط از نظر ایده؛ GIL راه‌حل عمومی thread-safety نیست.
+with lock:
+    counter += 1
+ولی Interlocked.Increment معمولاً از lock سبک‌تر و برای یک شمارنده بسیار سریع‌تر است.
+
+درس قابل استفاده در پروژه‌های Python
+هر جا چنین eventهای پرتکراری داری:
+
+mouse move
+packet received
+Kafka message received
+file watcher
+WebSocket message
+Prometheus scrape metric update
+IoT sensor event
+log ingestion
+FastAPI request middleware پرحجم
+باید callback را سبک نگه داری:
+
+python
+def hot_callback(event):
+    counter.increment()       # خوب
+    queue.put_nowait(event)   # معمولاً خوب، با ظرفیت محدود
+و نه:
+
+python
+def hot_callback(event):
+    write_to_postgres(event)   # بد
+    kafka_producer.flush()     # بد
+    call_external_api(event)   # بد
+    create_excel(event)        # بسیار بد
+الگوی درست:
+
+text
+Hot Path
+→ فقط ثبت سریع یا enqueue
+→ Worker جدا
+→ I/O / DB / Kafka / API
+درس دوم: چرا Permission=True بود ولی Alarm نمایش داده نمی‌شد؟
+این بخش بسیار مهم‌تر و عمومی‌تر است.
+
+Permission=True فقط یعنی «اجازه وجود دارد»
+لاگ:
+
+text
+[Ergonomy Status] Permission: True
+در حقیقت فقط می‌گوید:
+
+python
+allow_ergonomy_collection = True
+یعنی تنظیمات می‌گویند قابلیت مجاز است.
+
+اما این به معنی موفق بودن کل زنجیره نیست.
+
+مثلاً در Python:
+
+python
+settings.enable_notifications = True
+این هیچ تضمینی نمی‌دهد که:
+
+scheduler واقعاً شروع شده؛
+task اجرا می‌شود؛
+popup ساخته می‌شود؛
+UI thread وجود دارد؛
+image آماده است؛
+داده درست جمع شده است.
+همان اتفاق در این پروژه افتاده بود.
+
+مشکل اصلی: Timer اشتباه روی Thread اشتباه
+Message Loop چیست؟
+برنامه‌های Desktop مثل WinForms یک چرخه‌ی دائمی دارند که به آن Message Loop می‌گویند.
+
+به زبان ساده، این حلقه دائم گوش می‌دهد:
+
+text
+آیا mouse حرکت کرد؟
+آیا کاربر روی دکمه کلیک کرد؟
+آیا پنجره باید repaint شود؟
+آیا timer باید tick بزند؟
+آیا popup باید باز شود؟
+آیا برنامه باید بسته شود؟
+تصویر مفهومی:
+
+python
+while app_is_running:
+    event = get_next_ui_event()
+    handle(event)
+در WinForms، این حلقه معمولاً توسط چیزی شبیه زیر راه می‌افتد:
+
+csharp
+Application.Run(...)
+و عمدتاً فقط در UI Thread وجود دارد.
+
+WinForms Timer چه ویژگی‌ای دارد؟
+System.Windows.Forms.Timer یک Timer عمومی مثل threading.Timer در Python نیست.
+
+این Timer برای برنامه‌های گرافیکی ساخته شده و به Message Loop وابسته است.
+
+یعنی مفهوم آن تقریباً چنین است:
+
+text
+هر 5 ثانیه یک پیام به UI Message Loop بفرست
+اما اگر روی threadی ساخته شود که UI Message Loop ندارد، هیچ‌کس پیام را پردازش نمی‌کند.
+
+مثل این است که برای یک کارمند که اصلاً پشت میز و تلفن ندارد، Reminder بگذاری:
+
+text
+هر 5 دقیقه تلفن زنگ بزند
+ولی آن فرد نه تلفن دارد، نه پشت میزش است.
+
+نتیجه:
+
+text
+Timer هیچ‌وقت tick نمی‌زند.
+دقیقاً چه اتفاقی افتاده بود؟
+توالی اتفاق‌ها تقریباً این بود:
+
+text
+برنامه شروع می‌شود
+↓
+قبل از راه افتادن کامل UI
+↓
+تنظیمات از API خوانده می‌شود
+↓
+بخشی از کد async ادامه پیدا می‌کند
+↓
+ادامه‌ی کد روی ThreadPool اجرا می‌شود
+↓
+ErgonomyManager روی همان ThreadPool شروع می‌شود
+↓
+WinForms Timer روی ThreadPool ساخته می‌شود
+↓
+آن ThreadPool Message Loop ندارد
+↓
+Timer tick نمی‌زند
+↓
+Threshold هیچ‌وقت بررسی نمی‌شود
+↓
+Alarm نمایش داده نمی‌شود
+↓
+پیام Update به Kafka تولید نمی‌شود
+پس برنامه از نظر تنظیمات فعال بود، ولی «ساعت بررسی فعالیت» عملاً کار نمی‌کرد.
+
+راه‌حل: انتخاب Timer مناسب
+ایجنت System.Windows.Forms.Timer را برای notification کنار گذاشت و از:
+
+csharp
+System.Timers.Timer
+استفاده کرد.
+
+این Timer به UI Message Loop وابسته نیست؛ روی threadهای background اجرا می‌شود.
+
+معادل ذهنی در Python:
+
+python
+import threading
+
+def check_threshold():
+    ...
+
+timer = threading.Timer(5, check_threshold)
+timer.start()
+یا در asyncio:
+
+python
+async def notification_loop():
+    while True:
+        await asyncio.sleep(5)
+        check_threshold()
+پس الان هر ۵ ثانیه، timer واقعاً بررسی می‌کند:
+
+text
+آیا فعالیت کاربر به 5 ثانیه رسیده است؟
+اگر رسیده باشد، alarm باید نمایش داده شود.
+
+درس سوم: چرا نمی‌توان popup را مستقیم از Timer Background باز کرد؟
+اینجا یک قانون بسیار مهم UI داریم:
+
+هر UI باید فقط از thread مالک خودش تغییر کند.
+
+در WinForms، UI Thread مالک formها، buttonها، imageها و windowهاست.
+
+Timer جدید روی thread پس‌زمینه اجرا می‌شود که عالی است، چون به UI وابسته نیست. اما همان thread نباید مستقیم popup باز کند.
+
+تشبیه ملموس
+فرض کن UI Thread کارمند پشت باجه است و فقط او حق دارد با مشتری صحبت کند.
+
+Background Worker مثل انباردار است.
+
+انباردار می‌تواند تصمیم بگیرد که «وقت هشدار رسیده»، اما نباید خودش پشت باجه برود و با مشتری تعامل کند.
+
+کار درست:
+
+text
+انباردار:
+    «به مسئول باجه اطلاع بده alarm را نشان بده.»
+
+مسئول باجه:
+    popup را نمایش می‌دهد.
+معادل Python GUI
+در Tkinter، چنین کاری اشتباه است:
+
+python
+def background_job():
+    label.config(text="Alarm!")  # ناامن
+در Tkinter باید چیزی مانند این اجرا شود:
+
+python
+root.after(0, lambda: label.config(text="Alarm!"))
+در PyQt هم از signal/slot استفاده می‌شود.
+
+در WinForms، معادل آن این است:
+
+csharp
+_uiAnchor.BeginInvoke(() =>
+{
+    ShowAlarm();
+});
+یعنی:
+
+text
+Background timer
+→ درخواست نمایش alarm
+→ UI queue
+→ UI Thread
+→ نمایش Form
+UI Anchor چیست؟
+ایجنت یک Control پنهان ساخته که روی UI Thread ایجاد شده است.
+
+این Control نقش یک «پل امن» را دارد:
+
+text
+Background Thread
+    ↓
+UI Anchor
+    ↓
+BeginInvoke
+    ↓
+WinForms UI Thread
+    ↓
+نمایش Alarm Form
+این کار درست است چون:
+
+Timer می‌تواند روی background اجرا شود؛
+Alarm فقط روی UI Thread ساخته می‌شود؛
+برنامه crash یا freeze نمی‌کند؛
+ownership فرم‌ها درست می‌ماند.
+درس چهارم: مشکل تنظیمات قدیمی یا Stale Reference
+این بخش در Python هم زیاد رخ می‌دهد.
+
+مشکل چه بود؟
+ابتدا برنامه تنظیمات Environment Variable را می‌خواند:
+
+python
+bootstrap_settings = {
+    "allow_ergonomy_collection": False
+}
+بعد API تنظیمات جدید می‌دهد:
+
+python
+api_settings = {
+    "allow_ergonomy_collection": True
+}
+برنامه‌ی میزبان تنظیمات جدید را جایگزین می‌کند:
+
+python
+self.app_settings = api_settings
+اما ErgonomyManager قبلاً به object اول اشاره کرده بود:
+
+python
+manager.settings = bootstrap_settings
+در نتیجه وضعیت چنین می‌شود:
+
+text
+MainApplicationContext:
+    settings = api_settings
+    AllowErgonomyCollection = true
+
+ErgonomyManager:
+    settings = bootstrap_settings
+    AllowErgonomyCollection = false
+یعنی در log می‌بینی:
+
+text
+Permission: True
+اما بخشی از برنامه هنوز با تنظیمات قدیمی کار می‌کند.
+
+تشبیه ساده
+فرض کن نسخه‌ی جدید دستورالعمل شرکت چاپ شده است.
+
+مدیر اصلی نسخه‌ی جدید را دارد، اما بخش ارگونومی هنوز با نسخه‌ی قدیمی روی میز خودش کار می‌کند.
+
+ظاهر سیستم درست است، اما یک زیرسیستم تصمیم اشتباه می‌گیرد.
+
+راه‌حل
+ایجنت متدهایی مانند این اضافه کرد:
+
+text
+ErgonomyManager.UpdateSettings(...)
+AlarmManager.UpdateSettings(...)
+DataLogger.UpdateSettings(...)
+اکنون هر بار API تنظیمات جدید می‌دهد:
+
+text
+API Settings Update
+↓
+MainApplicationContext تنظیمات جدید را می‌گیرد
+↓
+ErgonomyManager.UpdateSettings(new_settings)
+AlarmManager.UpdateSettings(new_settings)
+DataLogger.UpdateSettings(new_settings)
+↓
+همه با یک نسخه از تنظیمات کار می‌کنند
+درس عمومی برای Python
+در FastAPI، workerها، consumerهای Kafka یا background serviceها، چنین کدی خطرناک است:
+
+python
+class Worker:
+    def __init__(self, settings):
+        self.settings = settings
+
+settings = load_settings()
+
+worker = Worker(settings)
+
+# بعداً:
+settings = load_settings_from_api()
+worker.settings همچنان به object قدیمی اشاره می‌کند.
+
+راه‌های درست:
+
+روش اول: Settings را in-place تغییر بده
+python
+settings.allow_ergonomy_collection = True
+در این حالت همه همان object مشترک را می‌بینند.
+
+روش دوم: متد update صریح داشته باش
+python
+worker.update_settings(new_settings)
+که همان روش فعلی پروژه‌ی تو است.
+
+روش سوم: یک Settings Provider مرکزی داشته باش
+python
+class SettingsProvider:
+    def get_current(self):
+        return self._current_settings
+و همه در زمان نیاز تنظیمات فعلی را از Provider بگیرند.
+
+برای پروژه‌های بزرگ، روش سوم معمولاً تمیزتر است؛ ولی باید به thread-safety و atomic replace هم دقت کنی.
+
+درس پنجم: چرا SQLite/Kafka از مسیر Hook جدا شدند؟
+Hook فقط باید بگوید:
+
+text
+کاربر یک key زد.
+کاربر mouse را حرکت داد.
+اما ذخیره و ارسال داده کارهای کندتری هستند:
+
+text
+Serialize JSON
+↓
+Write SQLite
+↓
+Retry if database locked
+↓
+Send Kafka
+↓
+Network delay
+↓
+Kafka acknowledgment
+اگر این‌ها در مسیر Hook باشند، lag اجتناب‌ناپذیر می‌شود.
+
+الگوی فعلی درست:
+
+text
+Input Hook
+↓
+Atomic Counters
+↓
+Activity Monitor
+↓
+Ergonomy Manager
+↓
+SQLite Outbox
+↓
+Sync Engine
+↓
+Kafka
+↓
+ClickHouse
+این همان معماری معروف زیر است:
+
+text
+Fast producer
+→ buffer / queue
+→ controlled consumer
+→ slow external system
+در Python مشابه:
+
+python
+from queue import Queue
+
+events = Queue(maxsize=1000)
+
+def on_input_event(event):
+    events.put_nowait(event)   # سریع
+
+def worker():
+    while True:
+        event = events.get()
+        save_to_database(event)
+        publish_to_kafka(event)
+در پروژه‌ی تو، SQLite Outbox دقیقاً نقش buffer پایدار را دارد.
+
+حتی اگر Kafka قطع شود:
+
+text
+Agent
+→ SQLite Outbox باقی می‌ماند
+→ Kafka بعداً وصل می‌شود
+→ SyncEngine پیام‌ها را ارسال می‌کند
+این برای سیستم production بسیار مهم است.
+
+یک نکته درباره پیام Start با مقدار صفر
+وقتی برنامه تازه اجرا شده است، این طبیعی است:
+
+json
+{
+  "StateType": "Start",
+  "KeyboardActiveSeconds": 0,
+  "MouseActiveSeconds": 0,
+  "TotalActiveSeconds": 0
+}
+چون هنوز کاربر کاری نکرده است.
+
+مثل اینکه در شروع یک مسابقه بگویی:
+
+text
+زمان دویدن ورزشکار: صفر ثانیه
+اشکال نیست.
+
+چیزی که باید بعداً ببینی، پیام Update است:
+
+json
+{
+  "StateType": "Update",
+  "KeyboardActiveSeconds": 5,
+  "MouseActiveSeconds": 6,
+  "TotalActiveSeconds": 11
+}
+این پیام باید بعد از رسیدن فعالیت به threshold ساخته شود.
+
+خلاصه‌ی درس‌هایی که در پروژه‌های آینده استفاده می‌کنی
+1. Hot Path را مقدس بدان
+اگر کد صدها یا هزاران بار در ثانیه فراخوانی می‌شود:
+
+text
+فقط شمارش کن، timestamp بزن یا enqueue کن.
+نه:
+
+text
+DB، Kafka، HTTP، فایل، JSON سنگین، Excel، logging پرتکرار.
+2. نوع Timer را با محیط اجرا انتخاب کن
+
+محیط	انتخاب مناسب
+WinForms UI Thread	System.Windows.Forms.Timer
+Background service / worker	System.Timers.Timer یا PeriodicTimer
+Python sync	threading.Timer یا scheduler کنترل‌شده
+Python asyncio	asyncio.sleep() در loop
+FastAPI / worker service	background scheduler مستقل، Celery/RQ/APS یا asyncio task کنترل‌شده
+قاعده:
+
+Timerی که به event loop یا message loop وابسته است، فقط وقتی کار می‌کند که همان loop واقعاً در آن thread فعال باشد.
+
+3. UI فقط روی UI Thread
+قاعده‌ی عمومی:
+
+text
+Background Worker تصمیم می‌گیرد.
+UI Thread نمایش می‌دهد.
+در Python GUI، WinForms، WPF، Qt، Flutter، Android و iOS همین اصل برقرار است.
+
+4. تنظیمات Dynamic باید به تمام Componentها برسد
+وقتی تنظیمات از API refresh می‌شوند، مطمئن شو:
+
+text
+همه‌ی Workerها و Managerها تنظیمات جدید را می‌بینند.
+وگرنه برنامه دچار حالت خطرناک زیر می‌شود:
+
+text
+Dashboard / log می‌گوید setting=true
+اما worker هنوز با setting=false اجرا می‌شود.
+5. معماری Outbox برای کارهای شبکه‌ای حیاتی است
+برای ارسال داده‌ی مهم:
+
+text
+Business Event
+→ Local Durable Store
+→ Background Sender
+→ Kafka/API
+بهتر از این است:
+
+text
+Business Event
+→ مستقیم Kafka
+چون شبکه، broker یا سرویس مقصد ممکن است موقتاً قطع باشند.
+
+مدل ذهنی نهایی پروژه تو
+text
+[Mouse/Keyboard]
+        ↓
+[Hook: فقط ثبت سریع]
+        ↓
+[Atomic Counters]
+        ↓
+[ActivityMonitor: هر 1 ثانیه تجمیع]
+        ↓
+[Notification Timer: هر 5 ثانیه بررسی threshold]
+        ↓
+[UI Thread: نمایش Alarm + Image]
+        ↓
+[SQLite Outbox]
+        ↓
+[Kafka]
+        ↓
+[ClickHouse]
+
+-----------------------------------------------------------------------------------------
+
