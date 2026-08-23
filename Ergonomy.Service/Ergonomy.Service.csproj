@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Ergonomy.Service - background (session 0) process.
+
+    Owns everything that must survive user logoff and must NOT touch the interactive desktop:
+    SQLite outbox, SyncEngine/Kafka, advanced metrics, settings refresh, health checks and the
+    remote-command policy. It hosts the Named Pipe SERVER; it opens no new TCP/UDP listener.
+
+    Migration status: this project currently hosts the IPC endpoint only. The service-side
+    workers are still compiled by the legacy Ergonomy.csproj and are moved over incrementally
+    (see ARCHITECTURE_SPLIT.md).
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Ergonomy.Service</RootNamespace>
+    <AssemblyName>Ergonomy.Service</AssemblyName>
+    <UseWindowsForms>false</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ergonomy.Core\Ergonomy.Core.csproj" />
+  </ItemGroup>
+
+</Project>
