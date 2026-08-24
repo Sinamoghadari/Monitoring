@@ -1,5 +1,20 @@
-bin/
-publish/
-obj/
+# Build outputs
 [Bb]in/
 [Oo]bj/
+
+# Publish output
+publish/
+
+# Visual Studio / Rider / VS Code user files
+.vs/
+.idea/
+
+# User-specific files
+*.user
+*.suo
+
+# Local environment files
+.env
+
+# Logs
+*.log
