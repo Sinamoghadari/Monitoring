@@ -17,6 +17,12 @@ namespace Ergonomy.Logging
         private AppSettings _settings;
         private bool _isRunning = false;
 
+        /// <summary>
+        /// ثبت‌کننده ساعتی اکسل را با منبع فعالیت، شمارنده بستن هشدار و فاصله تنظیمات می‌سازد.
+        /// </summary>
+        /// <param name="activityMonitor">منبع زمان فعال صفحه‌کلید و ماوس.</param>
+        /// <param name="getTotalCloseCounter">تابع خواندن شمارنده بستن نشست.</param>
+        /// <param name="settings">تنظیمات فاصله ثبت فایل.</param>
         public DataLogger(ActivityMonitor activityMonitor, Func<int> getTotalCloseCounter, AppSettings settings)
         {
             _activityMonitor = activityMonitor;
@@ -27,12 +33,21 @@ namespace Ergonomy.Logging
             _logTimer.Elapsed += OnLogTimerElapsed;
         }
 
+        /// <summary>
+        /// فاصله ثبت اکسل را از ساعت تنظیمات به میلی‌ثانیه تبدیل می‌کند.
+        /// </summary>
+        /// <param name="settings">تنظیمات فاصله ثبت.</param>
+        /// <returns>فاصله تایمر به میلی‌ثانیه.</returns>
         private static double GetIntervalMs(AppSettings settings)
         {
             double intervalHours = settings.LoggingIntervalHours > 0 ? settings.LoggingIntervalHours : 1;
             return intervalHours * 60 * 60 * 1000;
         }
 
+        /// <summary>
+        /// فاصله تایمر ثبت اکسل را با تنظیمات تازه‌سازی‌شده هماهنگ می‌کند.
+        /// </summary>
+        /// <param name="settings">تنظیمات جدید برنامه.</param>
         public void UpdateSettings(AppSettings settings)
         {
             if (settings == null) return;
@@ -42,6 +57,9 @@ namespace Ergonomy.Logging
                 _logTimer.Interval = GetIntervalMs(settings);
         }
 
+        /// <summary>
+        /// تایمر ثبت دوره‌ای فایل اکسل را شروع می‌کند.
+        /// </summary>
         public void Start()
         {
             if (_isRunning) return;
@@ -49,6 +67,9 @@ namespace Ergonomy.Logging
             _isRunning = true;
         }
 
+        /// <summary>
+        /// تایمر ثبت دوره‌ای فایل اکسل را متوقف می‌کند.
+        /// </summary>
         public void Stop()
         {
             if (!_isRunning) return;
@@ -56,11 +77,19 @@ namespace Ergonomy.Logging
             _isRunning = false;
         }
 
+        /// <summary>
+        /// نوشتن فایل اکسل را از نخ تایمر به یک وظیفه پس‌زمینه منتقل می‌کند تا IO مسدودکننده نباشد.
+        /// </summary>
+        /// <param name="sender">منبع رویداد تایمر.</param>
+        /// <param name="e">اطلاعات زمان وقوع تیک.</param>
         private void OnLogTimerElapsed(object? sender, ElapsedEventArgs e)
         {
             Task.Run(() => LogData());
         }
 
+        /// <summary>
+        /// یک فایل اکسل ساعتی با زمان تهران/شمسی می‌سازد و ثانیه‌های فعالیت و شمارنده بستن را در آن می‌نویسد.
+        /// </summary>
         private void LogData()
         {
             try
@@ -115,6 +144,9 @@ namespace Ergonomy.Logging
             }
         }
 
+        /// <summary>
+        /// تایمر ثبت اکسل را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             _logTimer.Dispose();

@@ -14,6 +14,12 @@ namespace Ergonomy.Observability
         public string Environment { get; }
         public string AgentId { get; }
 
+        /// <summary>
+        /// پیکربندی نقطه متریک را با درگاه، محیط و شناسه عامل می‌سازد.
+        /// </summary>
+        /// <param name="port">درگاه HTTP اسکرپ.</param>
+        /// <param name="environment">نام محیط استقرار.</param>
+        /// <param name="agentId">شناسه پایدار عامل.</param>
         public MetricsConfig(int port, string environment, string agentId)
         {
             Port = port;
@@ -21,6 +27,10 @@ namespace Ergonomy.Observability
             AgentId = agentId;
         }
 
+        /// <summary>
+        /// پیکربندی متریک را یک‌بار از متغیرهای محیطی سطح ماشین می‌خواند.
+        /// </summary>
+        /// <returns>نمونه پیکربندی آماده برای ترکیب ریشه.</returns>
         public static MetricsConfig FromEnvironment()
         {
             int port = 9100;

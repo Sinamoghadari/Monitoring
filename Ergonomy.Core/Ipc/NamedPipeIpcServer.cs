@@ -29,6 +29,12 @@ namespace Ergonomy.Core.Ipc
         private int _connectionSeq;
         private bool _disposed;
 
+        /// <summary>
+        /// سرور Named Pipe فرایند سرویس را با ظرفیت چندنمونه و لاگر می‌سازد.
+        /// </summary>
+        /// <param name="logger">ثبت‌کننده پذیرش، قطع و خطای پروتکل.</param>
+        /// <param name="pipeName">نام پایپ نسخه‌شده.</param>
+        /// <param name="maxInstances">حداکثر اتصال همزمان فرایندهای تعاملی.</param>
         public NamedPipeIpcServer(
             ILogger<NamedPipeIpcServer> logger,
             string? pipeName = null,
@@ -48,6 +54,9 @@ namespace Ergonomy.Core.Ipc
         public int ConnectedClients => _connections.Count;
         public string PipeName => _pipeName;
 
+        /// <summary>
+        /// حلقه پذیرش پس‌زمینه را شروع می‌کند تا فرایندهای Task بتوانند متصل شوند.
+        /// </summary>
         public void Start()
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -62,6 +71,12 @@ namespace Ergonomy.Core.Ipc
                 _pipeName, _maxInstances);
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام نمونه‌های سرور ACLدار را می‌سازد، منتظر اتصال می‌ماند
+        /// و برای هر کلاینت یک پمپ جداگانه اجرا می‌کند.
+        /// </summary>
+        /// <param name="ct">توکن لغو حلقه پذیرش.</param>
+        /// <returns>وظیفه‌ای که تا توقف سرور زنده است.</returns>
         private async Task AcceptLoopAsync(CancellationToken ct)
         {
             while (!ct.IsCancellationRequested)
@@ -113,6 +128,12 @@ namespace Ergonomy.Core.Ipc
             _logger.LogInformation("IPC accept loop stopped.");
         }
 
+        /// <summary>
+        /// پیام‌های یک اتصال را می‌خواند، hello را ثبت کرده و به router سرویس تحویل می‌دهد.
+        /// </summary>
+        /// <param name="connection">اتصال کلاینت تعاملی.</param>
+        /// <param name="ct">توکن لغو پمپ.</param>
+        /// <returns>وظیفه‌ای که تا قطع کلاینت ادامه دارد.</returns>
         private async Task PumpConnectionAsync(IpcConnection connection, CancellationToken ct)
         {
             try
@@ -187,7 +208,12 @@ namespace Ergonomy.Core.Ipc
             }
         }
 
-        /// <summary>Sends to every connected interactive process. Failures are isolated per connection.</summary>
+        /// <summary>
+        /// پیام را به همه فرایندهای تعاملی متصل پخش می‌کند و خطای هر اتصال را جداگانه می‌گیرد.
+        /// </summary>
+        /// <param name="message">پاکت پخش‌شونده.</param>
+        /// <param name="ct">توکن لغو ارسال.</param>
+        /// <returns>وظیفه‌ای که پس از تلاش برای همه اتصالات کامل می‌شود.</returns>
         public async Task BroadcastAsync(IpcMessage message, CancellationToken ct = default)
         {
             foreach (IpcConnection connection in _connections.Values.ToArray())
@@ -196,9 +222,23 @@ namespace Ergonomy.Core.Ipc
             }
         }
 
+        /// <summary>
+        /// پیام را به یک اتصال مشخص ارسال می‌کند بدون اینکه خطای نوشتن به فراخواننده نشت کند.
+        /// </summary>
+        /// <param name="connection">اتصال مقصد.</param>
+        /// <param name="message">پاکت ارسالی.</param>
+        /// <param name="ct">توکن لغو.</param>
+        /// <returns>وظیفه ارسال امن.</returns>
         public Task SendAsync(IpcConnection connection, IpcMessage message, CancellationToken ct = default)
             => SendSafeAsync(connection, message, ct);
 
+        /// <summary>
+        /// ارسال روی یک اتصال را در try/catch می‌پیچد تا شکست یک کلاینت بقیه را متوقف نکند.
+        /// </summary>
+        /// <param name="connection">اتصال مقصد.</param>
+        /// <param name="message">پاکت ارسالی.</param>
+        /// <param name="ct">توکن لغو.</param>
+        /// <returns>وظیفه ارسال.</returns>
         private async Task SendSafeAsync(IpcConnection connection, IpcMessage message, CancellationToken ct)
         {
             try
@@ -214,6 +254,10 @@ namespace Ergonomy.Core.Ipc
             }
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام حلقه پذیرش را لغو کرده و همه اتصالات باز را می‌بندد.
+        /// </summary>
+        /// <returns>وظیفه‌ای که پس از توقف سرور کامل می‌شود.</returns>
         public async Task StopAsync()
         {
             if (_cts is null)
@@ -249,12 +293,21 @@ namespace Ergonomy.Core.Ipc
             _acceptLoop = null;
         }
 
+        /// <summary>
+        /// تأخیر کوتاه بین تلاش‌های پذیرش ناموفق را بدون پرتاب OperationCanceledException اعمال می‌کند.
+        /// </summary>
+        /// <param name="delay">مدت انتظار.</param>
+        /// <param name="ct">توکن لغو.</param>
+        /// <returns>وظیفه تأخیر.</returns>
         private static async Task DelayQuietAsync(TimeSpan delay, CancellationToken ct)
         {
             try { await Task.Delay(delay, ct).ConfigureAwait(false); }
             catch (OperationCanceledException) { }
         }
 
+        /// <summary>
+        /// سرور پایپ را متوقف کرده و توکن لغو را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed)

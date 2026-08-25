@@ -18,6 +18,13 @@ namespace Ergonomy.Database
 
         private bool _disposed;
 
+        /// <summary>
+        /// تولیدکننده کافکا را با تأیید همه replicaها، ارسال idempotent و فشرده‌سازی Gzip می‌سازد.
+        /// </summary>
+        /// <param name="bootstrapServers">فهرست سرورهای بوت‌استرپ کافکا.</param>
+        /// <param name="userActivityTopic">نام تاپیک فعالیت کاربر.</param>
+        /// <param name="systemMetricsTopic">نام تاپیک متریک سیستم.</param>
+        /// <param name="appLogsTopic">نام تاپیک لاگ برنامه.</param>
         public KafkaConnect(
             string bootstrapServers,
             string? userActivityTopic = null,
@@ -64,6 +71,13 @@ namespace Ergonomy.Database
             Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Kafka producer initialized.");
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام یک رکورد فعالیت کاربر را با کلید پایدار messageId به تاپیک مربوطه در کافکا می‌فرستد.
+        /// </summary>
+        /// <param name="messageId">کلید پیام کافکا برای حذف تکرار.</param>
+        /// <param name="activityData">بار فعالیت کاربر برای سریال‌سازی JSON.</param>
+        /// <param name="cancellationToken">توکن لغو ارسال.</param>
+        /// <returns>وظیفه‌ای که پس از تحویل به کافکا کامل می‌شود.</returns>
         // در KafkaConnect.cs
         public async Task SendUserActivityAsync(
             string messageId,
@@ -81,6 +95,13 @@ namespace Ergonomy.Database
         }
 
 
+        /// <summary>
+        /// به‌صورت ناهمگام متریک‌های پیشرفته سیستم را به تاپیک system_metrics در کافکا ارسال می‌کند.
+        /// </summary>
+        /// <param name="messageId">کلید پیام کافکا.</param>
+        /// <param name="metricsData">دیکشنری متریک‌های جمع‌آوری‌شده.</param>
+        /// <param name="cancellationToken">توکن لغو ارسال.</param>
+        /// <returns>وظیفه ارسال پیام.</returns>
         public Task SendSystemMetricsAsync(
             string messageId,
             Dictionary<string, object> metricsData,
@@ -95,6 +116,13 @@ namespace Ergonomy.Database
                 cancellationToken);
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام یک رکورد تشخیصی برنامه را به تاپیک app_logs در کافکا ارسال می‌کند.
+        /// </summary>
+        /// <param name="messageId">کلید پیام کافکا.</param>
+        /// <param name="logData">شیء لاگ برای سریال‌سازی.</param>
+        /// <param name="cancellationToken">توکن لغو ارسال.</param>
+        /// <returns>وظیفه ارسال پیام.</returns>
         public Task SendAppLogAsync(
             string messageId,
             object logData,
@@ -109,6 +137,14 @@ namespace Ergonomy.Database
                 cancellationToken);
         }
 
+        /// <summary>
+        /// پیام JSON را با کلید مشخص به تاپیک کافکا تحویل می‌دهد و خطاهای تحویل یا لغو را دوباره پرتاب می‌کند.
+        /// </summary>
+        /// <param name="topic">نام تاپیک مقصد.</param>
+        /// <param name="messageId">کلید پیام برای ترتیب و حذف تکرار.</param>
+        /// <param name="message">بدنه JSON پیام.</param>
+        /// <param name="cancellationToken">توکن لغو عملیات شبکه.</param>
+        /// <returns>وظیفه‌ای که پس از تأیید تحویل کامل می‌شود.</returns>
         private async Task SendMessageAsync(
             string topic,
             string messageId,
@@ -163,6 +199,12 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// نام تاپیک را اعتبارسنجی می‌کند و در صورت خالی بودن، نام متغیر محیطی موردنیاز را در استثنا ذکر می‌نماید.
+        /// </summary>
+        /// <param name="topicName">نام تاپیک پیکربندی‌شده.</param>
+        /// <param name="environmentVariableName">نام متغیر محیطی مرتبط برای پیام خطا.</param>
+        /// <returns>نام تاپیک پیراسته‌شده.</returns>
         private static string RequireTopicName(
             string? topicName,
             string environmentVariableName)
@@ -178,12 +220,18 @@ namespace Ergonomy.Database
             return topicName.Trim();
         }
 
+        /// <summary>
+        /// اگر تولیدکننده آزاد شده باشد، ObjectDisposedException پرتاب می‌کند.
+        /// </summary>
         private void ThrowIfDisposed()
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(KafkaConnect));
         }
 
+        /// <summary>
+        /// بافر تولیدکننده کافکا را خالی کرده و منابع کلاینت را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed)

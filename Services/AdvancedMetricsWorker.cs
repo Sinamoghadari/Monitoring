@@ -20,6 +20,12 @@ namespace Ergonomy.Services
         private readonly LocalDatabaseManager _localDb;
         private int _gate;
 
+        /// <summary>
+        /// کارگر جمع‌آوری متریک پیشرفته را با منبع تنظیمات و صف SQLite می‌سازد.
+        /// </summary>
+        /// <param name="settingsService">منبع فهرست متریک‌های فعال و فاصله جمع‌آوری.</param>
+        /// <param name="localDb">صف محلی برای ذخیره متریک‌های سیستم.</param>
+        /// <param name="logger">ثبت‌کننده خطای جمع‌آوری.</param>
         public AdvancedMetricsWorker(
             ISettingsService settingsService,
             LocalDatabaseManager localDb,
@@ -32,12 +38,21 @@ namespace Ergonomy.Services
 
         protected override string Name => nameof(AdvancedMetricsWorker);
 
+        /// <summary>
+        /// فاصله جمع‌آوری متریک پیشرفته را از تنظیمات مؤثر می‌خواند.
+        /// </summary>
+        /// <returns>فاصله حلقه به دقیقه.</returns>
         protected override TimeSpan GetInterval()
         {
             double minutes = _settingsService.Current.AdvancedMetricsIntervalMinutes;
             return TimeSpan.FromMinutes(minutes > 0 ? minutes : 120);
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام متریک‌های سخت‌افزاری را جمع‌آوری کرده و در outbox با هدف advanced_system_metrics ذخیره می‌کند.
+        /// </summary>
+        /// <param name="ct">توکن لغو جمع‌آوری.</param>
+        /// <returns>وظیفه‌ای که پس از ذخیره یا خطا کامل می‌شود.</returns>
         protected override async Task DoWorkAsync(CancellationToken ct)
         {
             if (Interlocked.Exchange(ref _gate, 1) != 0)

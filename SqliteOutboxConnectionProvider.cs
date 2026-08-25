@@ -10,6 +10,9 @@ namespace Ergonomy.Database
         public string DatabasePath { get; }
         public string ConnectionString { get; }
 
+        /// <summary>
+        /// مسیر پایگاه محلی را در ProgramData ایجاد کرده و رشته اتصال اشتراکی SQLite را آماده می‌کند.
+        /// </summary>
         public SqliteOutboxConnectionProvider()
         {
             string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Ergonomy");

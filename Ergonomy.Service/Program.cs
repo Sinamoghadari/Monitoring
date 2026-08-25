@@ -34,6 +34,12 @@ namespace Ergonomy.Service
         /// </summary>
         internal const string ServiceName = "Ergonomy.Service";
 
+        /// <summary>
+        /// نقطه ورود سرویس پس‌زمینه است: میزبان جنریک ویندوز را می‌سازد،
+        /// سرور Named Pipe را ثبت کرده و تا سیگنال توقف SCM یا کنسول اجرا می‌کند.
+        /// </summary>
+        /// <param name="args">آرگومان‌های خط فرمان شامل سوئیچ اختیاری --console.</param>
+        /// <returns>کد خروج صفر در موفقیت و یک در شکست راه‌اندازی.</returns>
         private static async Task<int> Main(string[] args)
         {
             bool isInteractive = !IsRunningAsWindowsService(args);
@@ -87,14 +93,11 @@ namespace Ergonomy.Service
         }
 
         /// <summary>
-        /// Detects whether the process was launched by the Windows Service Control Manager.
-        ///
-        /// <c>UseWindowsService</c> performs the same check internally to choose between
-        /// <c>WindowsServiceLifetime</c> and <c>ConsoleLifetime</c>. We mirror it here so we
-        /// can decide whether to attach the structured console logger. An explicit
-        /// <c>--console</c> flag on the command line forces interactive mode (useful when the
-        /// binary is installed as a service but the developer wants to run it by hand).
+        /// تشخیص می‌دهد فرایند توسط SCM ویندوز راه‌اندازی شده یا به‌صورت تعاملی اجرا شده است.
+        /// پرچم --console حالت تعاملی را حتی برای باینری نصب‌شده به‌عنوان سرویس اجبار می‌کند.
         /// </summary>
+        /// <param name="args">آرگومان‌های خط فرمان.</param>
+        /// <returns>اگر تحت SCM باشد true است.</returns>
         private static bool IsRunningAsWindowsService(string[] args)
         {
             if (args.Any(a => string.Equals(a, "--console", StringComparison.OrdinalIgnoreCase)))
@@ -128,9 +131,9 @@ namespace Ergonomy.Service
         }
 
         /// <summary>
-        /// Retrieves the parent process ID via the NtQueryInformationProcess P/Invoke.
-        /// Best-effort; returns 0 on failure.
+        /// شناسه فرایند والد را از طریق NtQueryInformationProcess می‌خواند تا launcher از نوع services.exe تشخیص داده شود.
         /// </summary>
+        /// <returns>شناسه والد یا صفر در صورت شکست.</returns>
         private static int GetParentProcessId()
         {
             try
@@ -149,6 +152,15 @@ namespace Ergonomy.Service
             }
         }
 
+        /// <summary>
+        /// اطلاعات پایه فرایند از جمله شناسه والد را از ntdll می‌خواند.
+        /// </summary>
+        /// <param name="processHandle">دسته فرایند.</param>
+        /// <param name="processInformationClass">کلاس اطلاعات؛ صفر یعنی PROCESS_BASIC_INFORMATION.</param>
+        /// <param name="processInformation">بافر خروجی.</param>
+        /// <param name="processInformationLength">طول بافر.</param>
+        /// <param name="returnLength">طول واقعی نوشته‌شده.</param>
+        /// <returns>کد وضعیت NT؛ صفر یعنی موفقیت.</returns>
         [System.Runtime.InteropServices.DllImport("ntdll.dll")]
         private static extern int NtQueryInformationProcess(
             IntPtr processHandle, int processInformationClass,

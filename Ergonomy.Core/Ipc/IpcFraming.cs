@@ -15,6 +15,13 @@ namespace Ergonomy.Core.Ipc
     /// </summary>
     public static class IpcFraming
     {
+        /// <summary>
+        /// به‌صورت ناهمگام یک فریم طول‌پیشوند را روی استریم Named Pipe می‌نویسد و آن را flush می‌کند.
+        /// </summary>
+        /// <param name="stream">استریم پایپ.</param>
+        /// <param name="payload">بدنه UTF-8 JSON.</param>
+        /// <param name="ct">توکن لغو نوشتن.</param>
+        /// <returns>وظیفه‌ای که پس از نوشتن کامل فریم تمام می‌شود.</returns>
         public static async Task WriteFrameAsync(Stream stream, ReadOnlyMemory<byte> payload, CancellationToken ct)
         {
             if (stream is null) throw new ArgumentNullException(nameof(stream));
@@ -32,7 +39,12 @@ namespace Ergonomy.Core.Ipc
             await stream.FlushAsync(ct).ConfigureAwait(false);
         }
 
-        /// <summary>Reads one frame. Returns <c>null</c> on a clean end-of-stream (peer disconnected).</summary>
+        /// <summary>
+        /// به‌صورت ناهمگام یک فریم کامل را می‌خواند. در قطع اتصال تمیز null برمی‌گرداند.
+        /// </summary>
+        /// <param name="stream">استریم پایپ.</param>
+        /// <param name="ct">توکن لغو خواندن.</param>
+        /// <returns>بدنه فریم یا null در صورت قطع همتا.</returns>
         public static async Task<byte[]?> ReadFrameAsync(Stream stream, CancellationToken ct)
         {
             if (stream is null) throw new ArgumentNullException(nameof(stream));
@@ -65,6 +77,13 @@ namespace Ergonomy.Core.Ipc
             return body;
         }
 
+        /// <summary>
+        /// بافر را دقیقاً به اندازه درخواستی پر می‌کند تا خواندن ناقص با پیام کامل اشتباه نشود.
+        /// </summary>
+        /// <param name="stream">استریم مبدأ.</param>
+        /// <param name="buffer">بافر مقصد.</param>
+        /// <param name="ct">توکن لغو.</param>
+        /// <returns>اگر بافر کامل پر شد true و اگر استریم بسته شد false است.</returns>
         private static async Task<bool> ReadExactlyAsync(Stream stream, Memory<byte> buffer, CancellationToken ct)
         {
             int read = 0;
@@ -86,7 +105,17 @@ namespace Ergonomy.Core.Ipc
     /// <summary>Raised when a peer violates the framing/envelope contract.</summary>
     public sealed class IpcProtocolException : Exception
     {
+        /// <summary>
+        /// استثنای نقض قرارداد فریم یا پاکت IPC را می‌سازد.
+        /// </summary>
+        /// <param name="message">شرح نقض پروتکل.</param>
         public IpcProtocolException(string message) : base(message) { }
+
+        /// <summary>
+        /// استثنای نقض پروتکل را با استثنای درونی می‌سازد.
+        /// </summary>
+        /// <param name="message">شرح نقض پروتکل.</param>
+        /// <param name="inner">استثنای علت اصلی.</param>
         public IpcProtocolException(string message, Exception inner) : base(message, inner) { }
     }
 }

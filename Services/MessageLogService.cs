@@ -20,6 +20,12 @@ namespace Ergonomy.Services
         private readonly ILogger<MessageLogService> _logger;
         private int _disposed;
 
+        /// <summary>
+        /// کانال لاگ تشخیصی را با صف SQLite، هویت ماشین و ثبت‌کننده ساختاریافته می‌سازد.
+        /// </summary>
+        /// <param name="localDb">صف محلی برای ذخیره رکوردهای app_logs.</param>
+        /// <param name="identity">هویت کاربر و ماشین برای برچسب لاگ.</param>
+        /// <param name="logger">ثبت‌کننده کنسول.</param>
         public MessageLogService(
             LocalDatabaseManager localDb,
             MachineIdentity identity,
@@ -30,7 +36,11 @@ namespace Ergonomy.Services
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        /// <summary>Writes a diagnostic entry to stdout and enqueues it on the SQLite app_logs outbox.</summary>
+        /// <summary>
+        /// یک ورودی تشخیصی را در کنسول می‌نویسد و همان را در صف SQLite با هدف app_logs ذخیره می‌کند.
+        /// </summary>
+        /// <param name="level">سطح لاگ مانند INFO یا ERROR.</param>
+        /// <param name="message">متن پیام تشخیصی.</param>
         public void Log(string level, string message)
         {
             _logger.LogInformation(
@@ -64,7 +74,13 @@ namespace Ergonomy.Services
             }
         }
 
-        /// <summary>Logs a health-check message to the app_logs outbox and synchronously reports status.</summary>
+        /// <summary>
+        /// نتیجه یک پروب سلامت را با دسته مشخص در outbox ثبت کرده و در صورت نیاز در کنسول گزارش می‌دهد.
+        /// </summary>
+        /// <param name="logLevel">سطح نتیجه پروب.</param>
+        /// <param name="message">شرح وضعیت سلامت.</param>
+        /// <param name="category">دسته پروب مانند ApiHealth یا SqliteHealth.</param>
+        /// <param name="reportConsole">اگر true باشد نتیجه در کنسول هم نوشته می‌شود.</param>
         public void LogHealth(
             string logLevel,
             string message,
@@ -105,6 +121,9 @@ namespace Ergonomy.Services
             }
         }
 
+        /// <summary>
+        /// وضعیت آزادسازی را علامت می‌زند؛ این سرویس منبع خارجی مستقلی ندارد.
+        /// </summary>
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)

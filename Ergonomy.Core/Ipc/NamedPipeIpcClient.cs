@@ -29,6 +29,12 @@ namespace Ergonomy.Core.Ipc
         private IpcConnection? _connection;
         private bool _disposed;
 
+        /// <summary>
+        /// کلاینت Named Pipe فرایند تعاملی را با نام پایپ نسخه‌شده و لاگر می‌سازد.
+        /// </summary>
+        /// <param name="logger">ثبت‌کننده اتصال، قطع و خطای ارسال.</param>
+        /// <param name="pipeName">نام پایپ؛ در صورت خالی بودن مقدار ثابت پروتکل استفاده می‌شود.</param>
+        /// <param name="serverName">نام سرور محلی؛ همیشه نقطه برای ماشین جاری.</param>
         public NamedPipeIpcClient(
             ILogger<NamedPipeIpcClient> logger,
             string? pipeName = null,
@@ -56,6 +62,9 @@ namespace Ergonomy.Core.Ipc
             }
         }
 
+        /// <summary>
+        /// حلقه اتصال مجدد پس‌زمینه را شروع می‌کند تا کلاینت بتواند قبل از سرویس بالا بیاید.
+        /// </summary>
         public void Start()
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
@@ -69,6 +78,11 @@ namespace Ergonomy.Core.Ipc
             _logger.LogInformation("IPC client started. Pipe=\\\\{Server}\\pipe\\{PipeName}", _serverName, _pipeName);
         }
 
+        /// <summary>
+        /// حلقه ناهمگام اتصال، پمپ دریافت و اتصال مجدد نمایی را تا لغو ادامه می‌دهد.
+        /// </summary>
+        /// <param name="ct">توکن لغو حلقه کلاینت.</param>
+        /// <returns>وظیفه‌ای که تا توقف کلاینت زنده است.</returns>
         private async Task RunAsync(CancellationToken ct)
         {
             TimeSpan delay = IpcConstants.ReconnectInitialDelay;
@@ -154,6 +168,12 @@ namespace Ergonomy.Core.Ipc
             _logger.LogInformation("IPC client loop stopped.");
         }
 
+        /// <summary>
+        /// پیام‌های ورودی را می‌خواند، نسخه پروتکل را بررسی کرده و به handler پس‌زمینه تحویل می‌دهد.
+        /// </summary>
+        /// <param name="connection">اتصال فعال.</param>
+        /// <param name="ct">توکن لغو پمپ.</param>
+        /// <returns>وظیفه‌ای که تا قطع اتصال ادامه دارد.</returns>
         private async Task PumpAsync(IpcConnection connection, CancellationToken ct)
         {
             while (!ct.IsCancellationRequested)
@@ -188,7 +208,13 @@ namespace Ergonomy.Core.Ipc
             }
         }
 
-        /// <summary>Sends a message. Returns false when currently disconnected (caller may buffer/drop).</summary>
+        /// <summary>
+        /// پیام را در صورت اتصال فعال ارسال می‌کند و در قطع بودن به‌جای انتظار false برمی‌گرداند
+        /// تا نخ رابط کاربری مسدود نشود.
+        /// </summary>
+        /// <param name="message">پاکت ارسالی.</param>
+        /// <param name="ct">توکن لغو ارسال.</param>
+        /// <returns>اگر پیام نوشته شد true است.</returns>
         public async Task<bool> TrySendAsync(IpcMessage message, CancellationToken ct = default)
         {
             IpcConnection? connection;
@@ -215,6 +241,10 @@ namespace Ergonomy.Core.Ipc
             }
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام حلقه اتصال را لغو کرده و اتصال جاری را می‌بندد.
+        /// </summary>
+        /// <returns>وظیفه‌ای که پس از توقف حلقه کامل می‌شود.</returns>
         public async Task StopAsync()
         {
             if (_cts is null)
@@ -243,6 +273,9 @@ namespace Ergonomy.Core.Ipc
             _loop = null;
         }
 
+        /// <summary>
+        /// کلاینت پایپ را متوقف کرده و توکن لغو را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed)

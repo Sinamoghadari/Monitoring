@@ -27,6 +27,16 @@ namespace Ergonomy.Services
         private bool _localCollectionRunning;
         private bool _syncRunning;
 
+        /// <summary>
+        /// ارزیاب مجوز را به تنظیمات، صف محلی، موتور همگام‌سازی، مدیر ارگونومی و کارگر متریک متصل می‌کند.
+        /// </summary>
+        /// <param name="settingsService">منبع سوئیچ‌های AllowSqliteWrite، AllowKafkaWrite و AllowErgonomyCollection.</param>
+        /// <param name="localDb">صف محلی که جمع‌آوری به آن وابسته است.</param>
+        /// <param name="syncEngine">موتور ارسال outbox به کافکا.</param>
+        /// <param name="ergonomyManager">مدیر هوک و هشدار ارگونومی.</param>
+        /// <param name="advancedMetricsWorker">کارگر جمع‌آوری متریک سیستم.</param>
+        /// <param name="log">کانال ثبت وضعیت مجوز.</param>
+        /// <param name="logger">ثبت‌کننده تغییر مجوز ارگونومی.</param>
         public PermissionsEvaluator(
             ISettingsService settingsService,
             LocalDatabaseManager localDb,
@@ -45,6 +55,9 @@ namespace Ergonomy.Services
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
+        /// <summary>
+        /// مجوز نوشتن SQLite، ارسال کافکا و جمع‌آوری ارگونومی را پشت‌سرهم ارزیابی می‌کند.
+        /// </summary>
         public void EvaluateAll()
         {
             EvaluateSqlitePermission();
@@ -52,6 +65,9 @@ namespace Ergonomy.Services
             EvaluateErgonomyPermission();
         }
 
+        /// <summary>
+        /// اگر نوشتن SQLite مجاز باشد جمع‌آوری محلی را شروع می‌کند؛ در غیر این صورت جمع‌آوری و همگام‌سازی را متوقف می‌نماید.
+        /// </summary>
         private void EvaluateSqlitePermission()
         {
             AppSettings s = _settingsService.Current;
@@ -93,6 +109,9 @@ namespace Ergonomy.Services
             }
         }
 
+        /// <summary>
+        /// موتور همگام‌سازی را فقط وقتی شروع می‌کند که هم نوشتن SQLite و هم نوشتن کافکا مجاز باشند.
+        /// </summary>
         private void EvaluateKafkaPermission()
         {
             AppSettings s = _settingsService.Current;
@@ -131,6 +150,10 @@ namespace Ergonomy.Services
             }
         }
 
+        /// <summary>
+        /// مدیر ارگونومی را بر اساس AllowErgonomyCollection شروع یا متوقف می‌کند
+        /// و تغییر وضعیت را در لاگ ثبت می‌نماید.
+        /// </summary>
         private void EvaluateErgonomyPermission()
         {
             AppSettings s = _settingsService.Current;
@@ -163,6 +186,9 @@ namespace Ergonomy.Services
             }
         }
 
+        /// <summary>
+        /// کارگر متریک پیشرفته را با فاصله جدید راه‌اندازی مجدد می‌کند تا جمع‌آوری محلی از سر گرفته شود.
+        /// </summary>
         public void StartLocalDataCollection()
         {
             // Restart the advanced metrics worker so a changed interval takes effect.
@@ -172,6 +198,9 @@ namespace Ergonomy.Services
             _log.Log("INFO", "Local System Metrics Collection Started.");
         }
 
+        /// <summary>
+        /// کارگر متریک و مدیر ارگونومی را متوقف می‌کند تا هیچ داده محلی تازه‌ای تولید نشود.
+        /// </summary>
         public void StopAllDataCollection()
         {
             _advancedMetricsWorker.Stop();
@@ -179,12 +208,18 @@ namespace Ergonomy.Services
             lock (_sync) _localCollectionRunning = false;
         }
 
+        /// <summary>
+        /// پرچم داخلی جمع‌آوری محلی را برای فرمان‌های راه دور start/stop همگام می‌کند.
+        /// </summary>
+        /// <param name="value">وضعیت جدید جمع‌آوری محلی.</param>
         public void SetLocalCollectionRunning(bool value)
         {
             lock (_sync) _localCollectionRunning = value;
         }
 
-        /// <summary>Stops everything; used for sleep/shutdown paths.</summary>
+        /// <summary>
+        /// همه جمع‌آوری‌ها و موتور همگام‌سازی را برای مسیر خواب اضطراری یا خاموشی متوقف می‌کند.
+        /// </summary>
         public void StopAll()
         {
             lock (_sync)
