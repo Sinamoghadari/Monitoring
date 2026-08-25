@@ -21,6 +21,11 @@ namespace Ergonomy.Core.Ipc
     [SupportedOSPlatform("windows")]
     public static class IpcSecurityFactory
     {
+        /// <summary>
+        /// ACL کمینه‌امتیاز پایپ را برای LocalSystem، مدیران و کاربران احرازشده می‌سازد
+        /// و ورود ناشناس یا شبکه‌ای را صریحاً رد می‌کند.
+        /// </summary>
+        /// <returns>شیء امنیت پایپ برای ایجاد سرور.</returns>
         public static PipeSecurity CreatePipeSecurity()
         {
             var security = new PipeSecurity();
@@ -58,6 +63,12 @@ namespace Ergonomy.Core.Ipc
         /// <see cref="NamedPipeServerStreamAcl"/> (.NET 6+) is required: on .NET the
         /// <c>SetAccessControl</c> path throws UnauthorizedAccessException for a service-owned pipe.
         /// </summary>
+        /// <summary>
+        /// یک نمونه سرور Named Pipe دوطرفه و ناهمگام را با ACL صریح ایجاد می‌کند.
+        /// </summary>
+        /// <param name="pipeName">نام پایپ نسخه شده.</param>
+        /// <param name="maxInstances">حداکثر نمونه همزمان.</param>
+        /// <returns>استریم سرور آماده انتظار برای اتصال.</returns>
         public static NamedPipeServerStream CreateServerStream(string pipeName, int maxInstances)
         {
             return NamedPipeServerStreamAcl.Create(

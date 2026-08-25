@@ -16,11 +16,20 @@ namespace Ergonomy.Services
         private System.Timers.Timer? _timer;
         private readonly object _sync = new();
 
+        /// <summary>
+        /// زمان‌بند بیداری پس از خواب اضطراری را می‌سازد.
+        /// </summary>
+        /// <param name="logger">ثبت‌کننده زمان‌بندی و خطای callback.</param>
         public WakeUpScheduler(ILogger<WakeUpScheduler> logger)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
+        /// <summary>
+        /// یک تایمر یک‌بارمصرف برای بیدار شدن پس از تأخیر مشخص زمان‌بندی می‌کند.
+        /// </summary>
+        /// <param name="delay">مدت خواب قبل از تلاش مجدد.</param>
+        /// <param name="wake">عملیات بیداری که یک‌بار اجرا می‌شود.</param>
         public void Schedule(TimeSpan delay, Action wake)
         {
             lock (_sync)
@@ -44,6 +53,9 @@ namespace Ergonomy.Services
             _logger.LogInformation("Sleep mode scheduled; waking up in {Seconds}s.", delay.TotalSeconds);
         }
 
+        /// <summary>
+        /// تایمر بیداری فعال را متوقف و آزاد می‌کند.
+        /// </summary>
         public void Stop()
         {
             lock (_sync)
@@ -54,6 +66,9 @@ namespace Ergonomy.Services
             }
         }
 
+        /// <summary>
+        /// زمان‌بند را متوقف کرده و منابع تایمر را آزاد می‌کند.
+        /// </summary>
         public void Dispose() => Stop();
     }
 }

@@ -20,6 +20,10 @@ namespace Ergonomy.Services
         private int _loopManagedThreadId;
         private bool _disposed;
 
+        /// <summary>
+        /// پایه کارگران دوره‌ای را با ثبت‌کننده مشترک می‌سازد.
+        /// </summary>
+        /// <param name="logger">ثبت‌کننده رویدادهای شروع، توقف و خطای کارگر.</param>
         protected WorkerBase(ILogger logger)
         {
             Logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -29,11 +33,17 @@ namespace Ergonomy.Services
 
         protected abstract string Name { get; }
 
-        /// <summary>Current loop interval; read from settings so it can change at runtime.</summary>
+        /// <summary>
+        /// فاصله فعلی حلقه را از تنظیمات می‌خواند تا در زمان اجرا قابل تغییر باشد.
+        /// </summary>
+        /// <returns>فاصله انتظار تا دور بعدی.</returns>
         protected abstract TimeSpan GetInterval();
 
         public bool IsRunning { get; private set; }
 
+        /// <summary>
+        /// حلقه پس‌زمینه کارگر را روی یک وظیفه مستقل شروع می‌کند.
+        /// </summary>
         public void Start()
         {
             lock (_sync)
@@ -56,6 +66,12 @@ namespace Ergonomy.Services
         /// </summary>
         protected virtual bool ImmediateFirstRun => false;
 
+        /// <summary>
+        /// حلقه ناهمگام کارگر است: در صورت نیاز یک دور فوری اجرا می‌کند
+        /// و سپس با PeriodicTimer و فاصله پویا تکرار می‌نماید.
+        /// </summary>
+        /// <param name="ct">توکن لغو حلقه هنگام توقف.</param>
+        /// <returns>وظیفه‌ای که تا پایان حلقه زنده است.</returns>
         private async Task RunLoopAsync(CancellationToken ct)
         {
             _loopManagedThreadId = Environment.CurrentManagedThreadId;
@@ -93,6 +109,11 @@ namespace Ergonomy.Services
         }
 
 
+        /// <summary>
+        /// یک دور کاری را با گرفتن استثنا اجرا می‌کند و پس از خطا تأخیر کوتاهی برای تلاش مجدد می‌گذارد.
+        /// </summary>
+        /// <param name="ct">توکن لغو دور کاری.</param>
+        /// <returns>وظیفه‌ای که پس از دور یا تأخیر خطا کامل می‌شود.</returns>
         private async Task RunIterationSafelyAsync(CancellationToken ct)
         {
             try
@@ -110,8 +131,16 @@ namespace Ergonomy.Services
             }
         }
 
+        /// <summary>
+        /// واحد کار اختصاصی هر کارگر را به‌صورت ناهمگام اجرا می‌کند.
+        /// </summary>
+        /// <param name="ct">توکن لغو واحد کار.</param>
+        /// <returns>وظیفه‌ای که پس از پایان واحد کار کامل می‌شود.</returns>
         protected abstract Task DoWorkAsync(CancellationToken ct);
 
+        /// <summary>
+        /// حلقه کارگر را لغو می‌کند و اگر از داخل همان حلقه صدا زده نشود برای خروج کوتاه منتظر می‌ماند.
+        /// </summary>
         public void Stop()
         {
             Task? loop = null;
@@ -149,12 +178,18 @@ namespace Ergonomy.Services
             Logger.LogInformation(LogEvents.WorkerStoppedId, "{Worker} stopped.", Name);
         }
 
+        /// <summary>
+        /// اگر کارگر آزاد شده باشد از شروع دوباره جلوگیری می‌کند.
+        /// </summary>
         private void ThrowIfDisposed()
         {
             if (_disposed)
                 throw new ObjectDisposedException(Name);
         }
 
+        /// <summary>
+        /// کارگر را متوقف کرده و منابع حلقه را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed)

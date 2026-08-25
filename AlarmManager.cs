@@ -38,18 +38,32 @@ namespace Ergonomy
         public int PrimaryAlarmCount { get { lock (_lock) return _primaryAlarmCount; } }
         public int SecondaryAlarmCount { get { lock (_lock) return _secondaryAlarmCount; } }
 
+        /// <summary>
+        /// مرجع تنظیمات هشدار را به‌صورت امن برای چندنخ جایگزین می‌کند
+        /// تا حد بستن نشست و زمان‌بندی فرم‌ها از مقادیر جدید پیروی کنند.
+        /// </summary>
+        /// <param name="appSettings">تنظیمات جدید هشدار و محدودیت نشست.</param>
         public void UpdateSettings(AppSettings appSettings)
         {
             if (appSettings == null) return;
             lock (_lock) { _appSettings = appSettings; }
         }
 
+        /// <summary>
+        /// مدیر هشدار را با تنظیمات اولیه و فهرست خالی تصاویر می‌سازد.
+        /// </summary>
+        /// <param name="appSettings">تنظیمات حد بستن نشست و مسیر API تصاویر.</param>
         public AlarmManager(AppSettings appSettings)
         {
             _appSettings = appSettings;
             _loadedImages = new List<Image>();
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام تصاویر هشدار را از API پیکربندی‌شده دریافت کرده،
+        /// داده Base64 را به تصویر تبدیل و فهرست درون‌حافظه‌ای را جایگزین می‌کند.
+        /// </summary>
+        /// <returns>وظیفه‌ای که پس از پایان بارگذاری یا شکست شبکه کامل می‌شود.</returns>
         // آدرس به صورت خودکار از تنظیمات خوانده می‌شود
         public async Task LoadImagesFromApiAsync()
         {
@@ -97,6 +111,10 @@ namespace Ergonomy
             }
         }
 
+        /// <summary>
+        /// هشدار اولیه را روی نخ رابط کاربری نمایش می‌دهد، شمارنده را افزایش می‌دهد
+        /// و در صورت رسیدن به حد بستن نشست از نمایش فرم جلوگیری می‌کند.
+        /// </summary>
         // MUST be called on the WinForms UI thread: it creates and shows a Form.
         public void ShowPrimaryAlarm()
         {
@@ -152,6 +170,11 @@ namespace Ergonomy
                 $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Primary alarm shown on UI thread.");
         }
 
+        /// <summary>
+        /// پس از بسته شدن هشدار اولیه، اگر کاربر آن را بسته باشد شمارنده نشست را افزایش می‌دهد
+        /// و در صورت عبور از حد مجاز، هشدار ثانویه را درخواست می‌کند.
+        /// </summary>
+        /// <param name="isUserClose">اگر true باشد کاربر فرم را بسته است، نه بستن خودکار.</param>
         private void OnPrimaryAlarmClosed(bool isUserClose)
         {
             bool showSecondary = false;
@@ -185,6 +208,10 @@ namespace Ergonomy
             }
         }
 
+        /// <summary>
+        /// هشدار ثانویه را روی نخ رابط کاربری با یک تصویر تصادفی نمایش می‌دهد
+        /// و پس از بسته شدن، شمارنده بستن نشست و پرچم فعال بودن هشدار را صفر می‌کند.
+        /// </summary>
         private void ShowSecondaryAlarmOnUiThread()
         {
             Image? randomImage = null;
@@ -218,6 +245,9 @@ namespace Ergonomy
                 $"[{DateTime.Now:HH:mm:ss}] [Ergonomy] Secondary alarm shown on UI thread.");
         }
 
+        /// <summary>
+        /// پرچم فعال بودن هشدار را پاک می‌کند تا ارزیابی آستانه بعدی مسدود نماند.
+        /// </summary>
         public void StopAlarms()
         {
             lock (_lock) { _isAlarmActive = false; }

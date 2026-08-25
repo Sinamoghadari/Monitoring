@@ -11,6 +11,11 @@ namespace Ergonomy.Configuration
     /// </summary>
     public static class EnvironmentSettingsProvider
     {
+        /// <summary>
+        /// یک متغیر محیطی سطح ماشین را می‌خواند و در صورت خطا null برمی‌گرداند.
+        /// </summary>
+        /// <param name="name">نام متغیر محیطی.</param>
+        /// <returns>مقدار متغیر یا null.</returns>
         private static string? GetEnv(string name)
         {
             try
@@ -25,6 +30,12 @@ namespace Ergonomy.Configuration
             }
         }
 
+        /// <summary>
+        /// متغیر محیطی بولی را با مقدار جایگزین در صورت نبود یا نامعتبر بودن می‌خواند.
+        /// </summary>
+        /// <param name="name">نام متغیر محیطی.</param>
+        /// <param name="fallback">مقدار پیش‌فرض.</param>
+        /// <returns>مقدار بولی تفسیرشده.</returns>
         private static bool GetBool(string name, bool fallback)
         {
             string? value = GetEnv(name);
@@ -37,6 +48,12 @@ namespace Ergonomy.Configuration
                 : fallback;
         }
 
+        /// <summary>
+        /// متغیر محیطی اعشاری را با فرهنگ ثابت و مقدار جایگزین می‌خواند.
+        /// </summary>
+        /// <param name="name">نام متغیر محیطی.</param>
+        /// <param name="fallback">مقدار پیش‌فرض.</param>
+        /// <returns>مقدار double تفسیرشده.</returns>
         private static double GetDouble(string name, double fallback)
         {
             string? value = GetEnv(name);
@@ -53,6 +70,12 @@ namespace Ergonomy.Configuration
                 : fallback;
         }
 
+        /// <summary>
+        /// متغیر محیطی صحیح را با فرهنگ ثابت و مقدار جایگزین می‌خواند.
+        /// </summary>
+        /// <param name="name">نام متغیر محیطی.</param>
+        /// <param name="fallback">مقدار پیش‌فرض.</param>
+        /// <returns>مقدار int تفسیرشده.</returns>
         private static int GetInt(string name, int fallback)
         {
             string? value = GetEnv(name);
@@ -69,6 +92,12 @@ namespace Ergonomy.Configuration
                 : fallback;
         }
 
+        /// <summary>
+        /// متغیر محیطی رشته‌ای را پیراسته کرده و در صورت خالی بودن مقدار جایگزین برمی‌گرداند.
+        /// </summary>
+        /// <param name="name">نام متغیر محیطی.</param>
+        /// <param name="fallback">مقدار پیش‌فرض.</param>
+        /// <returns>رشته پیراسته‌شده یا جایگزین.</returns>
         private static string GetString(string name, string fallback = "")
         {
             string? value = GetEnv(name);
@@ -78,6 +107,10 @@ namespace Ergonomy.Configuration
                 : value.Trim();
         }
 
+        /// <summary>
+        /// کل مدل AppSettings را فقط از متغیرهای محیطی سطح ماشین می‌سازد و هیچ فایل JSON نمی‌خواند.
+        /// </summary>
+        /// <returns>تنظیمات بوت‌استرپ آماده استفاده.</returns>
         public static AppSettings Load()
         {
             return new AppSettings
@@ -225,6 +258,11 @@ namespace Ergonomy.Configuration
             };
         }
 
+        /// <summary>
+        /// فهرست متریک‌های فعال را از رشته جداشده با ویرگول استخراج می‌کند.
+        /// </summary>
+        /// <param name="csv">رشته CSV نام متریک‌ها.</param>
+        /// <returns>فهرست نام متریک‌های فعال.</returns>
         private static List<string> ParseEnabledMetrics(string? csv)
         {
             if (string.IsNullOrWhiteSpace(csv))

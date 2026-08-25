@@ -43,6 +43,28 @@ namespace Ergonomy
         private NotifyIcon? _notifyIcon;
         private bool _isDisposed;
 
+        /// <summary>
+        /// پوسته چرخه حیات برنامه را می‌سازد، وابستگی‌های اصلی را تزریق می‌کند،
+        /// مدیریت خطا و آیکون سینی را راه‌اندازی کرده و کارگران پس‌زمینه را شروع می‌کند.
+        /// </summary>
+        /// <param name="settingsService">سرویس تنظیمات مؤثر و رویداد تغییر تنظیمات.</param>
+        /// <param name="kafkaConnect">تولیدکننده کافکا برای ارسال نهایی پیام‌ها.</param>
+        /// <param name="syncEngine">موتور همگام‌سازی صف SQLite به کافکا.</param>
+        /// <param name="ergonomyManager">مدیر جمع‌آوری فعالیت و هشدار ارگونومی.</param>
+        /// <param name="commandManager">مدیر دریافت و اجرای فرمان‌های راه دور.</param>
+        /// <param name="messageLog">کانال ثبت تشخیصی در کنسول و outbox لاگ‌ها.</param>
+        /// <param name="permissions">ارزیاب مجوزهای SQLite، کافکا و ارگونومی.</param>
+        /// <param name="advancedMetricsWorker">کارگر جمع‌آوری متریک‌های پیشرفته سیستم.</param>
+        /// <param name="settingsRefreshWorker">کارگر تازه‌سازی دوره‌ای تنظیمات از API.</param>
+        /// <param name="healthMonitorWorker">کارگر پایش سلامت API، SQLite و خود عامل.</param>
+        /// <param name="permissionMonitorWorker">کارگر بازبینی دوره‌ای مجوزهای اجرا.</param>
+        /// <param name="metricsEndpoint">نقطه پایانی HTTP برای اسکرپ متریک‌های پرومتئوس.</param>
+        /// <param name="identity">هویت پایدار ماشین و نشست جاری.</param>
+        /// <param name="wakeUpScheduler">زمان‌بند بیدار شدن پس از خواب اضطراری.</param>
+        /// <param name="healthCheckService">سرویس پروب سلامت که خرابی SQLite را اعلام می‌کند.</param>
+        /// <param name="metricsConfig">پیکربندی درگاه و برچسب‌های نقطه متریک.</param>
+        /// <param name="logger">ثبت‌کننده ساختاریافته رویدادهای پوسته برنامه.</param>
+        /// <param name="uiAnchor">کنترل پنهان برای انتقال کار به نخ رابط کاربری.</param>
         public MainApplicationContext(
             ISettingsService settingsService,
             KafkaConnect kafkaConnect,
@@ -132,11 +154,20 @@ namespace Ergonomy
             _logger.LogInformation("MainApplicationContext started. Workers: settings, health, permission, advanced-metrics.");
         }
 
+        /// <summary>
+        /// نقطه پایانی پرومتئوس را روی درگاه پیکربندی‌شده راه‌اندازی می‌کند
+        /// تا سرور مرکزی بتواند وضعیت عامل را اسکرپ کند.
+        /// </summary>
         private void StartMetricsEndpoint()
         {
             _metricsEndpoint.Start(_metricsConfig.Port);
         }
 
+        /// <summary>
+        /// پس از تازه‌سازی تنظیمات از API، فاصله همگام‌سازی، فرمان‌ها و مدیر ارگونومی را
+        /// به‌روز کرده و مجوزهای اجرایی را دوباره ارزیابی می‌کند.
+        /// </summary>
+        /// <param name="newSettings">نسخه جدید تنظیمات مؤثر برنامه.</param>
         private void OnSettingsChanged(AppSettings newSettings)
         {
             _logger.LogInformation(LogEvents.SettingsRefreshedId, "Settings updated from API; reconfiguring runtime.");
@@ -147,12 +178,21 @@ namespace Ergonomy
             _permissions.EvaluateAll();
         }
 
+        /// <summary>
+        /// خطای بحرانی را ثبت کرده و چرخه خواب و تلاش مجدد را فعال می‌کند
+        /// تا جمع‌آوری داده در وضعیت ناپایدار ادامه پیدا نکند.
+        /// </summary>
+        /// <param name="errorMessage">شرح خطای بحرانی رخ‌داده.</param>
         private void HandleCriticalFailure(string errorMessage)
         {
             _messageLog.Log("FATAL", $"Critical error occurred: {errorMessage}. Forcing system to sleep state.");
             GoToSleepAndRetry();
         }
 
+        /// <summary>
+        /// همه کارگران و جمع‌آوری را متوقف می‌کند و بیدار شدن بعدی را
+        /// بر اساس فاصله خواب تنظیمات زمان‌بندی می‌کند.
+        /// </summary>
         private void GoToSleepAndRetry()
         {
             _logger.LogWarning("Entering Sleep Mode due to critical failures...");
@@ -167,6 +207,10 @@ namespace Ergonomy
             _wakeUpScheduler.Schedule(TimeSpan.FromMinutes(sleepMinutes), WakeUpAsync);
         }
 
+        /// <summary>
+        /// پس از دوره خواب، پایش سلامت، ارزیابی مجوز و کارگران وابسته را دوباره شروع می‌کند.
+        /// این متد روی نخ زمان‌بند اجرا می‌شود و نباید حلقه رابط کاربری را مسدود کند.
+        /// </summary>
         private void WakeUpAsync()
         {
             _logger.LogInformation("Waking up and re-evaluating connections...");
@@ -179,6 +223,11 @@ namespace Ergonomy
             _commandManager.Start();
         }
 
+        /// <summary>
+        /// منابع پوسته برنامه را آزاد می‌کند: کارگران، همگام‌سازی، مدیر ارگونومی،
+        /// کافکا، نقطه متریک، زمان‌بند بیداری و کنترل پنهان رابط کاربری.
+        /// </summary>
+        /// <param name="disposing">اگر true باشد منابع مدیریت‌شده نیز آزاد می‌شوند.</param>
         protected override void Dispose(bool disposing)
         {
             if (disposing && !_isDisposed)

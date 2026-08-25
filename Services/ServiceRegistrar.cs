@@ -22,6 +22,11 @@ namespace Ergonomy.Services
     /// </summary>
     public static class ServiceRegistrar
     {
+        /// <summary>
+        /// ظرف تزریق وابستگی برنامه میراثی را می‌سازد و همه سرویس‌ها، کارگران و پوسته UI را ثبت می‌کند.
+        /// </summary>
+        /// <param name="uiAnchor">کنترل پنهان نخ رابط کاربری برای انتقال هشدار.</param>
+        /// <returns>ارائه‌دهنده سرویس آماده برای اجرای برنامه.</returns>
         public static ServiceProvider Build(Control uiAnchor)
         {
             var services = new ServiceCollection();
@@ -124,12 +129,20 @@ namespace Ergonomy.Services
             return services.BuildServiceProvider();
         }
 
+        /// <summary>
+        /// SID کاربر جاری ویندوز را برای هویت payload می‌خواند.
+        /// </summary>
+        /// <returns>مقدار SID یا UNKNOWN.</returns>
         private static string GetWindowsSID()
         {
             try { return WindowsIdentity.GetCurrent()?.User?.Value ?? "UNKNOWN"; }
             catch { return "UNKNOWN"; }
         }
 
+        /// <summary>
+        /// نام کاربری ویندوز فرایند جاری را برای هویت عامل می‌خواند.
+        /// </summary>
+        /// <returns>نام کاربری یا مقدار جایگزین محیطی.</returns>
         private static string GetWindowsUsername()
         {
             try { return WindowsIdentity.GetCurrent().Name; }

@@ -39,6 +39,14 @@ namespace Ergonomy.Core.Ipc
         [JsonPropertyName("payload")]
         public JsonElement? Payload { get; set; }
 
+        /// <summary>
+        /// یک پاکت IPC با نوع مشخص و payload سریال‌شده به JSON می‌سازد.
+        /// </summary>
+        /// <typeparam name="T">نوع قرارداد payload.</typeparam>
+        /// <param name="type">نوع پیام در کاتالوگ IPC.</param>
+        /// <param name="payload">بدنه قرارداد.</param>
+        /// <param name="correlationId">شناسه همبستگی اختیاری برای پاسخ.</param>
+        /// <returns>پاکت آماده ارسال روی Named Pipe.</returns>
         public static IpcMessage Create<T>(string type, T payload, string? correlationId = null)
         {
             return new IpcMessage
@@ -49,10 +57,20 @@ namespace Ergonomy.Core.Ipc
             };
         }
 
+        /// <summary>
+        /// یک پاکت IPC بدون بدنه برای پیام‌های کنترلی می‌سازد.
+        /// </summary>
+        /// <param name="type">نوع پیام.</param>
+        /// <param name="correlationId">شناسه همبستگی اختیاری.</param>
+        /// <returns>پاکت بدون payload.</returns>
         public static IpcMessage Create(string type, string? correlationId = null)
             => new IpcMessage { Type = type, CorrelationId = correlationId };
 
-        /// <summary>Deserializes the payload, returning <c>default</c> when absent or malformed.</summary>
+        /// <summary>
+        /// payload خام JSON را به نوع قرارداد تبدیل می‌کند و در صورت نبود یا خرابی مقدار پیش‌فرض برمی‌گرداند.
+        /// </summary>
+        /// <typeparam name="T">نوع قرارداد مورد انتظار.</typeparam>
+        /// <returns>نمونه بازسازی‌شده یا مقدار پیش‌فرض.</returns>
         public T? GetPayload<T>()
         {
             if (Payload is null || Payload.Value.ValueKind == JsonValueKind.Null ||

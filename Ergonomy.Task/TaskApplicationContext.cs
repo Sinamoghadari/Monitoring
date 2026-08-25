@@ -35,6 +35,11 @@ namespace Ergonomy.TaskAgent
         private volatile bool _collectionEnabled;
         private int _disposed;
 
+        /// <summary>
+        /// پوسته چرخه حیات Task را می‌سازد، کنترل پنهان UI را ایجاد کرده و کلاینت پایپ و تایمر heartbeat را شروع می‌کند.
+        /// </summary>
+        /// <param name="client">کلاینت Named Pipe به سرویس.</param>
+        /// <param name="logger">ثبت‌کننده اتصال، تنظیمات و هشدار.</param>
         public TaskApplicationContext(NamedPipeIpcClient client, ILogger<TaskApplicationContext> logger)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
@@ -58,20 +63,30 @@ namespace Ergonomy.TaskAgent
         public SettingsSnapshotPayload? Settings => _settings;
 
         /// <summary>
-        /// Reports accumulated activity to the Service. Called by ActivityMonitor/ErgonomyManager
-        /// once they are migrated into this process. Never blocks the caller's thread.
+        /// فعالیت تجمعی را به‌صورت ناهمگام به سرویس گزارش می‌دهد و نخ فراخواننده را مسدود نمی‌کند.
+        /// پس از مهاجرت هوک‌ها، ActivityMonitor این متد را صدا خواهد زد.
         /// </summary>
+        /// <param name="report">گزارش فعالیت نشست.</param>
+        /// <param name="ct">توکن لغو ارسال.</param>
+        /// <returns>اگر پیام تحویل شد true است.</returns>
         public Task<bool> ReportActivityAsync(ActivityReportPayload report, CancellationToken ct = default)
         {
             if (report is null) throw new ArgumentNullException(nameof(report));
             return _client.TrySendAsync(IpcMessage.Create(IpcMessageTypes.ActivityReport, report), ct);
         }
 
+        /// <summary>
+        /// پس از اتصال به سرویس، پیام hello را در پس‌زمینه ارسال می‌کند.
+        /// </summary>
         private void OnConnected()
         {
             _ = SendHelloAsync();
         }
 
+        /// <summary>
+        /// هویت نشست ویندوز و نسخه عامل را به‌صورت ناهمگام برای سرویس ارسال می‌کند.
+        /// </summary>
+        /// <returns>وظیفه ارسال hello.</returns>
         private async Task SendHelloAsync()
         {
             var hello = new TaskHelloPayload
@@ -88,6 +103,10 @@ namespace Ergonomy.TaskAgent
             _logger.LogInformation("Hello sent to Ergonomy.Service. Delivered={Delivered}", sent);
         }
 
+        /// <summary>
+        /// ضربان حیات دوره‌ای شامل وضعیت جمع‌آوری و مصرف حافظه را به سرویس می‌فرستد.
+        /// </summary>
+        /// <returns>وظیفه ارسال heartbeat.</returns>
         private async Task SendHeartbeatAsync()
         {
             try
@@ -107,6 +126,12 @@ namespace Ergonomy.TaskAgent
             }
         }
 
+        /// <summary>
+        /// پیام‌های سرویس را روی نخ پس‌زمینه تفسیر می‌کند و نمایش هشدار یا خروج را به نخ UI منتقل می‌نماید.
+        /// </summary>
+        /// <param name="message">پاکت دریافتی از سرویس.</param>
+        /// <param name="ct">توکن لغو پردازش.</param>
+        /// <returns>وظیفه کامل‌شده پس از مسیریابی پیام.</returns>
         private Task OnMessageAsync(IpcMessage message, CancellationToken ct)
         {
             switch (message.Type)
@@ -165,10 +190,10 @@ namespace Ergonomy.TaskAgent
         }
 
         /// <summary>
-        /// UI-thread alarm rendering. The concrete PrimaryAlarmForm / SecondaryAlarmForm /
-        /// MessageAlarmForm move into this project in the next migration step; until then the
-        /// request is acknowledged so the Service-side counters and logs are already exercised.
+        /// درخواست نمایش هشدار را روی نخ UI پردازش می‌کند.
+        /// تا مهاجرت فرم‌ها، فقط تأیید «هنوز مهاجرت نشده» به سرویس بازگردانده می‌شود.
         /// </summary>
+        /// <param name="alarm">مشخصات هشدار درخواستی سرویس.</param>
         private void ShowAlarm(ShowAlarmPayload alarm)
         {
             var ack = new AlarmAckPayload { Kind = alarm.Kind, Shown = false };
@@ -191,6 +216,10 @@ namespace Ergonomy.TaskAgent
             _ = _client.TrySendAsync(IpcMessage.Create(IpcMessageTypes.AlarmAck, ack));
         }
 
+        /// <summary>
+        /// کار وابسته به فرم را از نخ استخر به کنترل پنهان STA منتقل می‌کند.
+        /// </summary>
+        /// <param name="action">عملی که باید روی نخ UI اجرا شود.</param>
         private void MarshalToUi(Action action)
         {
             try
@@ -210,18 +239,30 @@ namespace Ergonomy.TaskAgent
             }
         }
 
+        /// <summary>
+        /// SID کاربر جاری را برای پیام hello می‌خواند.
+        /// </summary>
+        /// <returns>SID یا UNKNOWN.</returns>
         private static string TryGetSid()
         {
             try { return WindowsIdentity.GetCurrent()?.User?.Value ?? "UNKNOWN"; }
             catch (Exception) { return "UNKNOWN"; }
         }
 
+        /// <summary>
+        /// نام کاربری ویندوز را برای پیام hello می‌خواند.
+        /// </summary>
+        /// <returns>نام کاربری یا مقدار جایگزین محیطی.</returns>
         private static string TryGetUsername()
         {
             try { return WindowsIdentity.GetCurrent().Name; }
             catch (Exception) { return Environment.UserName; }
         }
 
+        /// <summary>
+        /// تایمر heartbeat را متوقف کرده، پیام goodbye را به سرویس می‌فرستد و کلاینت پایپ را آزاد می‌کند.
+        /// </summary>
+        /// <param name="disposing">اگر true باشد منابع مدیریت‌شده آزاد می‌شوند.</param>
         protected override void Dispose(bool disposing)
         {
             if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0)

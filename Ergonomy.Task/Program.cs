@@ -24,6 +24,10 @@ namespace Ergonomy.TaskAgent
         /// <summary>Guarantees a single interactive agent per logon session.</summary>
         private const string SingleInstanceMutexName = @"Local\Ergonomy.Task.SingleInstance.v1";
 
+        /// <summary>
+        /// نقطه ورود فرایند تعاملی است: تک‌نمونه‌ای بودن نشست را تضمین می‌کند،
+        /// کانتینر DI را می‌سازد و حلقه پیام WinForms را اجرا می‌نماید.
+        /// </summary>
         [STAThread]
         private static void Main()
         {
@@ -47,6 +51,10 @@ namespace Ergonomy.TaskAgent
             logger.LogInformation("Ergonomy.Task stopped.");
         }
 
+        /// <summary>
+        /// کانتینر DI فرایند Task را با لاگر ساختاریافته، کلاینت پایپ و پوسته چرخه حیات می‌سازد.
+        /// </summary>
+        /// <returns>ارائه‌دهنده سرویس آماده اجرا.</returns>
         private static ServiceProvider BuildServiceProvider()
         {
             var services = new ServiceCollection();

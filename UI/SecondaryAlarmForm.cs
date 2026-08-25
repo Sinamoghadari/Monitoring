@@ -13,6 +13,11 @@ namespace Ergonomy.UI
         private bool _isCustomMaximized = false;
         private Rectangle _originalBounds;
 
+        /// <summary>
+        /// فرم هشدار ثانویه را با دوره غیرقابل‌بستن و سپس بستن خودکار بر اساس تنظیمات می‌سازد.
+        /// </summary>
+        /// <param name="settings">تنظیمات مدت قفل بودن و بستن خودکار.</param>
+        /// <param name="alarmImage">تصویر تصادفی هشدار یا null.</param>
         // دریافت مستقیم عکس رندوم از ورودی
         public SecondaryAlarmForm(AppSettings settings, Image? alarmImage)
         {
@@ -47,11 +52,20 @@ namespace Ergonomy.UI
             };
         }
 
+        /// <summary>
+        /// محدوده اولیه فرم را برای بازگرداندن از بیشینه‌سازی سفارشی ذخیره می‌کند.
+        /// </summary>
+        /// <param name="sender">منبع رویداد بارگذاری.</param>
+        /// <param name="e">آرگومان رویداد.</param>
         private void AlarmForm_Load(object sender, EventArgs e)
         {
             _originalBounds = this.Bounds;
         }
 
+        /// <summary>
+        /// بیشینه‌سازی را به اندازه سفارشی تبدیل کرده و فرمان بستن را تا پایان دوره قفل نادیده می‌گیرد.
+        /// </summary>
+        /// <param name="m">پیام بومی پنجره.</param>
         protected override void WndProc(ref Message m)
         {
             const int WM_SYSCOMMAND = 0x0112;
@@ -87,6 +101,11 @@ namespace Ergonomy.UI
             base.WndProc(ref m);
         }
 
+        /// <summary>
+        /// اندازه قلم پیام هشدار ثانویه را متناسب با ارتفاع فرم تنظیم می‌کند.
+        /// </summary>
+        /// <param name="sender">منبع رویداد تغییر اندازه.</param>
+        /// <param name="e">آرگومان رویداد.</param>
         private void AlarmForm_Resize(object sender, EventArgs e)
         {
             float newSize = this.ClientSize.Height / 15.0F;
@@ -94,6 +113,10 @@ namespace Ergonomy.UI
             this.label1.Font = new Font(this.label1.Font.FontFamily, newSize, this.label1.Font.Style);
         }
 
+        /// <summary>
+        /// تایمرهای قفل و بستن خودکار هشدار ثانویه را متوقف و آزاد می‌کند.
+        /// </summary>
+        /// <param name="e">اطلاعات بسته شدن فرم.</param>
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             _unclosableTimer.Stop();

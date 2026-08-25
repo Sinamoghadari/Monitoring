@@ -33,6 +33,10 @@ namespace Ergonomy.Hooks
         // یک شاخص ساده برای اینکه بفهمیم موس چقدر "واقعاً" استفاده شده
         public long TotalMouseActivityScore { get { lock (_stateLock) return _totalMouseActivityScore; } }
 
+        /// <summary>
+        /// پایشگر فعالیت را با هوک ورودی سراسری و تایمر نمونه‌برداری یک‌ثانیه‌ای می‌سازد.
+        /// </summary>
+        /// <param name="globalInputHook">هوک سطح پایین صفحه‌کلید و ماوس.</param>
         public ActivityMonitor(GlobalInputHook globalInputHook)
         {
             _globalInputHook = globalInputHook ?? throw new ArgumentNullException(nameof(globalInputHook));
@@ -45,6 +49,9 @@ namespace Ergonomy.Hooks
         private DateTime _lastSampleLogUtc = DateTime.MinValue;
         private bool _firstActivityLogged;
 
+        /// <summary>
+        /// هوک ورودی و تایمر نمونه‌برداری را شروع می‌کند تا زمان فعالیت تجمع یابد.
+        /// </summary>
         public void Start()
         {
             lock (_stateLock)
@@ -61,6 +68,9 @@ namespace Ergonomy.Hooks
             }
         }
 
+        /// <summary>
+        /// نمونه‌برداری و هوک ورودی را متوقف می‌کند بدون اینکه مجموع‌های تجمعی پاک شوند.
+        /// </summary>
         public void Stop()
         {
             lock (_stateLock)
@@ -74,6 +84,10 @@ namespace Ergonomy.Hooks
             }
         }
 
+        /// <summary>
+        /// مجموع زمان و شمارنده‌های فعالیت را صفر کرده و شمارنده‌های هوک را نیز بازنشانی می‌کند.
+        /// این کار پس از ثبت رکورد Update و نمایش هشدار انجام می‌شود.
+        /// </summary>
         public void ResetTotals()
         {
             lock (_stateLock)
@@ -95,6 +109,12 @@ namespace Ergonomy.Hooks
         private int _samplingInProgress;
         private bool _disposed;
 
+        /// <summary>
+        /// اسنپ‌شات یک‌ثانیه‌ای هوک را مصرف می‌کند و در صورت وجود رویداد،
+        /// پنجره نمونه‌برداری را به زمان فعال صفحه‌کلید یا ماوس می‌افزاید.
+        /// </summary>
+        /// <param name="sender">منبع رویداد تایمر.</param>
+        /// <param name="e">اطلاعات زمان وقوع تیک.</param>
         private void OnSampleTimerElapsed(object? sender, ElapsedEventArgs e)
         {
             if (Interlocked.Exchange(ref _samplingInProgress, 1) != 0)
@@ -173,6 +193,9 @@ namespace Ergonomy.Hooks
             }
         }
 
+        /// <summary>
+        /// پایشگر را متوقف کرده و تایمر نمونه‌برداری و هوک ورودی را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed)

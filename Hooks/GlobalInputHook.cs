@@ -45,12 +45,20 @@ namespace Ergonomy.Hooks
         private long _lastMousePointPacked;
         private int _hasLastMousePoint;
 
+        /// <summary>
+        /// هوک ورودی سراسری را با delegatهای پایدار صفحه‌کلید و ماوس آماده می‌کند
+        /// تا GC نتواند callbackهای Win32 را جمع‌آوری کند.
+        /// </summary>
         public GlobalInputHook()
         {
             _keyboardCallback = KeyboardHookCallback;
             _mouseCallback = MouseHookCallback;
         }
 
+        /// <summary>
+        /// نخ اختصاصی Ergonomy-InputHook را می‌سازد، هوک‌های WH_KEYBOARD_LL و WH_MOUSE_LL را نصب کرده
+        /// و تا آماده شدن حلقه پیام یا پایان مهلت ده ثانیه منتظر می‌ماند.
+        /// </summary>
         public void Start()
         {
             lock (_stateLock)
@@ -93,6 +101,9 @@ namespace Ergonomy.Hooks
             }
         }
 
+        /// <summary>
+        /// پیام WM_QUIT را به نخ هوک می‌فرستد تا حلقه GetMessage خارج شود و سپس برای پایان نخ منتظر می‌ماند.
+        /// </summary>
         public void Stop()
         {
             Thread? threadToJoin = null;
@@ -125,6 +136,10 @@ namespace Ergonomy.Hooks
             }
         }
 
+        /// <summary>
+        /// نقطه ورود نخ هوک است: صف پیام می‌سازد، هوک‌ها را نصب می‌کند
+        /// و حلقه بومی GetMessage را تا دریافت WM_QUIT نگه می‌دارد.
+        /// </summary>
         private void HookThreadEntryPoint()
         {
             try
@@ -205,6 +220,11 @@ namespace Ergonomy.Hooks
             }
         }
 
+        /// <summary>
+        /// کد خطای Win32 را به پیام قابل خواندن تبدیل می‌کند تا نصب ناموفق هوک قابل تشخیص باشد.
+        /// </summary>
+        /// <param name="errorCode">کد خطای GetLastWin32Error.</param>
+        /// <returns>شرح متنی خطا.</returns>
         private static string DescribeWin32Error(int errorCode)
         {
             try
@@ -217,6 +237,9 @@ namespace Ergonomy.Hooks
             }
         }
 
+        /// <summary>
+        /// هوک‌های صفحه‌کلید و ماوس را روی همان نخی که نصب شده‌اند آزاد می‌کند.
+        /// </summary>
         private void CleanupHooksOnHookThread()
         {
             if (_keyboardHookHandle != IntPtr.Zero)
@@ -232,6 +255,10 @@ namespace Ergonomy.Hooks
             }
         }
 
+        /// <summary>
+        /// شمارنده‌های مسیر داغ را به‌صورت اتمی صفر کرده و اسنپ‌شات پنجره نمونه‌برداری را برمی‌گرداند.
+        /// </summary>
+        /// <returns>اسنپ‌شات رویدادهای صفحه‌کلید و ماوس از آخرین مصرف.</returns>
         public InputActivitySnapshot ConsumeSnapshot()
         {
             return new InputActivitySnapshot(
@@ -243,6 +270,9 @@ namespace Ergonomy.Hooks
             );
         }
 
+        /// <summary>
+        /// شمارنده‌های اتمی و نقطه مرجع حرکت ماوس را برای شروع یک دوره اندازه‌گیری جدید صفر می‌کند.
+        /// </summary>
         public void ResetCounters()
         {
             Interlocked.Exchange(ref _keyboardEvents, 0);
@@ -255,6 +285,12 @@ namespace Ergonomy.Hooks
             _lastMousePointPacked = 0;
         }
 
+        /// <summary>
+        /// هوک سطح پایین ویندوز را برای کل نشست با ماژول فرایند جاری نصب می‌کند.
+        /// </summary>
+        /// <param name="hookId">شناسه هوک مانند WH_KEYBOARD_LL یا WH_MOUSE_LL.</param>
+        /// <param name="callback">تابع callback که باید در نخ هوک زنده بماند.</param>
+        /// <returns>دسته هوک نصب‌شده یا صفر در صورت شکست.</returns>
         private IntPtr SetHook(int hookId, HookCallback callback)
         {
             using (Process curProcess = Process.GetCurrentProcess())
@@ -264,6 +300,14 @@ namespace Ergonomy.Hooks
             }
         }
 
+        /// <summary>
+        /// در مسیر داغ فقط کلیدهای پایین‌رفته را به‌صورت اتمی می‌شمارد و زنجیره هوک را ادامه می‌دهد.
+        /// هیچ کار سنگینی در این callback انجام نمی‌شود تا تأخیر ورودی ایجاد نشود.
+        /// </summary>
+        /// <param name="nCode">کد هوک ویندوز.</param>
+        /// <param name="wParam">نوع پیام صفحه‌کلید.</param>
+        /// <param name="lParam">اشاره‌گر به ساختار داده هوک.</param>
+        /// <returns>نتیجه CallNextHookEx برای ادامه زنجیره.</returns>
         private IntPtr KeyboardHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode >= 0 && (wParam == (IntPtr)WM_KEYDOWN || wParam == (IntPtr)WM_SYSKEYDOWN))
@@ -274,6 +318,14 @@ namespace Ergonomy.Hooks
             return CallNextHookEx(_keyboardHookHandle, nCode, wParam, lParam);
         }
 
+        /// <summary>
+        /// حرکت، کلیک و اسکرول ماوس را به‌صورت اتمی می‌شمارد و فاصله منهتن حرکت را محاسبه می‌کند.
+        /// سپس زنجیره هوک را بدون مسدود کردن ورودی ادامه می‌دهد.
+        /// </summary>
+        /// <param name="nCode">کد هوک ویندوز.</param>
+        /// <param name="wParam">نوع پیام ماوس.</param>
+        /// <param name="lParam">اشاره‌گر به MSLLHOOKSTRUCT.</param>
+        /// <returns>نتیجه CallNextHookEx برای ادامه زنجیره.</returns>
         private IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
         {
             if (nCode >= 0)
@@ -325,6 +377,9 @@ namespace Ergonomy.Hooks
             return CallNextHookEx(_mouseHookHandle, nCode, wParam, lParam);
         }
 
+        /// <summary>
+        /// هوک را متوقف کرده و رویداد شروع نصب را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             lock (_stateLock)
@@ -338,16 +393,32 @@ namespace Ergonomy.Hooks
             _startCompletedEvent.Dispose();
         }
 
+        /// <summary>
+        /// مختصات نقطه ماوس را در یک long بسته‌بندی می‌کند تا تبادل اتمی ممکن شود.
+        /// </summary>
+        /// <param name="x">مختصات افقی.</param>
+        /// <param name="y">مختصات عمودی.</param>
+        /// <returns>مقدار بسته‌بندی‌شده نقطه.</returns>
         private static long PackPoint(int x, int y)
         {
             return ((long)x << 32) | (uint)y;
         }
 
+        /// <summary>
+        /// مختصات X را از مقدار بسته‌بندی‌شده نقطه استخراج می‌کند.
+        /// </summary>
+        /// <param name="packed">مقدار بسته‌بندی‌شده.</param>
+        /// <returns>مختصات افقی.</returns>
         private static int UnpackX(long packed)
         {
             return (int)(packed >> 32);
         }
 
+        /// <summary>
+        /// مختصات Y را از مقدار بسته‌بندی‌شده نقطه استخراج می‌کند.
+        /// </summary>
+        /// <param name="packed">مقدار بسته‌بندی‌شده.</param>
+        /// <returns>مختصات عمودی.</returns>
         private static int UnpackY(long packed)
         {
             return unchecked((int)(packed & 0xFFFFFFFF));
@@ -355,35 +426,100 @@ namespace Ergonomy.Hooks
 
         #region PInvoke
 
+        /// <summary>
+        /// هوک سراسری ویندوز را برای صفحه‌کلید یا ماوس نصب می‌کند.
+        /// </summary>
+        /// <param name="idHook">شناسه نوع هوک.</param>
+        /// <param name="lpfn">تابع callback هوک.</param>
+        /// <param name="hMod">دسته ماژول فرایند جاری.</param>
+        /// <param name="dwThreadId">شناسه نخ؛ صفر یعنی هوک سراسری.</param>
+        /// <returns>دسته هوک نصب‌شده.</returns>
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern IntPtr SetWindowsHookEx(int idHook, HookCallback lpfn, IntPtr hMod, uint dwThreadId);
 
+        /// <summary>
+        /// هوک نصب‌شده را از زنجیره هوک‌های ویندوز خارج می‌کند.
+        /// </summary>
+        /// <param name="hhk">دسته هوک.</param>
+        /// <returns>نتیجه موفقیت آزادسازی.</returns>
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool UnhookWindowsHookEx(IntPtr hhk);
 
+        /// <summary>
+        /// رویداد را به هوک بعدی زنجیره تحویل می‌دهد تا ورودی سیستم مسدود نشود.
+        /// </summary>
+        /// <param name="hhk">دسته هوک جاری.</param>
+        /// <param name="nCode">کد هوک.</param>
+        /// <param name="wParam">پارامتر پیام.</param>
+        /// <param name="lParam">اشاره‌گر داده پیام.</param>
+        /// <returns>نتیجه هوک بعدی.</returns>
         [DllImport("user32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
 
+        /// <summary>
+        /// دسته ماژول اجرایی فرایند را برای نصب هوک سطح پایین می‌گیرد.
+        /// </summary>
+        /// <param name="lpModuleName">نام ماژول.</param>
+        /// <returns>دسته ماژول.</returns>
         [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
         private static extern IntPtr GetModuleHandle(string lpModuleName);
 
+        /// <summary>
+        /// شناسه نخ جاری ویندوز را برای ارسال WM_QUIT برمی‌گرداند.
+        /// </summary>
+        /// <returns>شناسه نخ.</returns>
         [DllImport("kernel32.dll")]
         private static extern uint GetCurrentThreadId();
 
+        /// <summary>
+        /// پیامی مانند WM_QUIT را به صف پیام نخ هوک ارسال می‌کند.
+        /// </summary>
+        /// <param name="idThread">شناسه نخ مقصد.</param>
+        /// <param name="Msg">کد پیام.</param>
+        /// <param name="wParam">پارامتر اول.</param>
+        /// <param name="lParam">پارامتر دوم.</param>
+        /// <returns>نتیجه ارسال پیام.</returns>
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool PostThreadMessage(uint idThread, uint Msg, IntPtr wParam, IntPtr lParam);
 
+        /// <summary>
+        /// پیام بعدی را از صف پیام نخ هوک می‌خواند و حلقه بومی را زنده نگه می‌دارد.
+        /// </summary>
+        /// <param name="lpMsg">ساختار پیام خروجی.</param>
+        /// <param name="hWnd">پنجره فیلتر؛ صفر یعنی همه.</param>
+        /// <param name="wMsgFilterMin">حد پایین فیلتر.</param>
+        /// <param name="wMsgFilterMax">حد بالای فیلتر.</param>
+        /// <returns>نتیجه دریافت پیام.</returns>
         [DllImport("user32.dll")]
         private static extern int GetMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax);
 
+        /// <summary>
+        /// شتاب‌دهنده‌های صفحه‌کلید پیام را ترجمه می‌کند.
+        /// </summary>
+        /// <param name="lpMsg">پیام جاری.</param>
+        /// <returns>نتیجه ترجمه.</returns>
         [DllImport("user32.dll")]
         private static extern bool TranslateMessage(ref MSG lpMsg);
 
+        /// <summary>
+        /// پیام را به رویه پنجره مقصد ارسال می‌کند.
+        /// </summary>
+        /// <param name="lpMsg">پیام جاری.</param>
+        /// <returns>نتیجه توزیع پیام.</returns>
         [DllImport("user32.dll")]
         private static extern IntPtr DispatchMessage(ref MSG lpMsg);
 
+        /// <summary>
+        /// بدون مسدود شدن، وجود پیام را بررسی می‌کند تا صف پیام نخ هوک ساخته شود.
+        /// </summary>
+        /// <param name="lpMsg">ساختار پیام خروجی.</param>
+        /// <param name="hWnd">پنجره فیلتر.</param>
+        /// <param name="wMsgFilterMin">حد پایین فیلتر.</param>
+        /// <param name="wMsgFilterMax">حد بالای فیلتر.</param>
+        /// <param name="wRemoveMsg">پرچم برداشتن پیام از صف.</param>
+        /// <returns>اگر پیامی موجود باشد true است.</returns>
         [DllImport("user32.dll")]
         private static extern bool PeekMessage(out MSG lpMsg, IntPtr hWnd, uint wMsgFilterMin, uint wMsgFilterMax, uint wRemoveMsg);
 
@@ -420,6 +556,14 @@ namespace Ergonomy.Hooks
 
     public readonly struct InputActivitySnapshot
     {
+        /// <summary>
+        /// اسنپ‌شات غیرقابل‌تغییر رویدادهای ورودی یک پنجره نمونه‌برداری را می‌سازد.
+        /// </summary>
+        /// <param name="keyboardEvents">تعداد رویدادهای صفحه‌کلید.</param>
+        /// <param name="mouseMoveEvents">تعداد حرکت ماوس.</param>
+        /// <param name="mouseClickEvents">تعداد کلیک ماوس.</param>
+        /// <param name="mouseWheelEvents">تعداد اسکرول ماوس.</param>
+        /// <param name="mouseMovementPixels">مجموع فاصله حرکت ماوس به پیکسل.</param>
         public InputActivitySnapshot(
             long keyboardEvents,
             long mouseMoveEvents,

@@ -30,12 +30,22 @@ namespace Ergonomy.Service.Hosting
         private readonly ServiceIpcHost _ipcHost;
         private readonly ILogger<IpcHostedService> _logger;
 
+        /// <summary>
+        /// پل میزبان جنریک را به روتر IPC سرویس متصل می‌کند.
+        /// </summary>
+        /// <param name="ipcHost">میزبان IPC سمت سرویس.</param>
+        /// <param name="logger">ثبت‌کننده شروع و توقف hosted service.</param>
         public IpcHostedService(ServiceIpcHost ipcHost, ILogger<IpcHostedService> logger)
         {
             _ipcHost = ipcHost ?? throw new ArgumentNullException(nameof(ipcHost));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
+        /// <summary>
+        /// سرور Named Pipe را هنگام سیگنال running از SCM یا ConsoleLifetime شروع می‌کند.
+        /// </summary>
+        /// <param name="cancellationToken">توکن لغو راه‌اندازی میزبان.</param>
+        /// <returns>وظیفه کامل‌شده پس از شروع سرور.</returns>
         public Task StartAsync(CancellationToken cancellationToken)
         {
             _ipcHost.Start();
@@ -45,6 +55,11 @@ namespace Ergonomy.Service.Hosting
             return Task.CompletedTask;
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام درخواست خاموشی را به فرایندهای Task پخش کرده و سپس سرور پایپ را می‌بندد.
+        /// </summary>
+        /// <param name="cancellationToken">توکن لغو توقف میزبان.</param>
+        /// <returns>وظیفه‌ای که پس از توقف IPC کامل می‌شود.</returns>
         public async Task StopAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("IPC hosted service stopping.");

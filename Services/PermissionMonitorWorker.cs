@@ -18,6 +18,12 @@ namespace Ergonomy.Services
         private readonly ISettingsService _settingsService;
         private readonly PermissionsEvaluator _permissions;
 
+        /// <summary>
+        /// کارگر بازبینی مجوز را به تنظیمات و ارزیاب مجوز متصل می‌کند.
+        /// </summary>
+        /// <param name="settingsService">منبع فاصله بازبینی SQLite و کافکا.</param>
+        /// <param name="permissions">ارزیاب شروع و توقف اجزای جمع‌آوری.</param>
+        /// <param name="logger">ثبت‌کننده چرخه کارگر.</param>
         public PermissionMonitorWorker(
             ISettingsService settingsService,
             PermissionsEvaluator permissions,
@@ -30,6 +36,10 @@ namespace Ergonomy.Services
 
         protected override string Name => nameof(PermissionMonitorWorker);
 
+        /// <summary>
+        /// کوچک‌ترین فاصله بازبینی مجوز SQLite و کافکا را به‌عنوان فاصله حلقه انتخاب می‌کند.
+        /// </summary>
+        /// <returns>فاصله حلقه به ساعت.</returns>
         protected override TimeSpan GetInterval()
         {
             AppSettings s = _settingsService.Current;
@@ -42,6 +52,11 @@ namespace Ergonomy.Services
             return TimeSpan.FromHours(hours);
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام همه مجوزهای اجرایی را دوباره ارزیابی می‌کند.
+        /// </summary>
+        /// <param name="ct">توکن لغو دور کاری.</param>
+        /// <returns>وظیفه ارزیابی مجوزها.</returns>
         protected override async Task DoWorkAsync(CancellationToken ct)
         {
             await Task.Yield();
