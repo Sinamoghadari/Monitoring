@@ -366,3 +366,43 @@ caveats:
   Task process running as a standard (non-admin) interactive user.
 - Steps 2 and 3 of the migration (moving hooks/UI into Ergonomy.Task and the persistence/metrics
   workers into Ergonomy.Service, then deleting Ergonomy.csproj) are still pending.
+
+
+1405/06/09 - continuing session
+problem:
+Previous session claimed UpdateManager + FlexibleStringConverter + Kafka producer re-init on
+SettingsChanged, but those artifacts were not in the tree (arena/01a04c26-monitoring == 3f6b4cd,
+identical content to origin/main). Control API JSONB also mixes string/number/bool tokens, so
+AppSettings deserialization was brittle. KafkaConnect held a readonly producer and could not
+follow Control API broker/topic changes. There was no auto-update path.
+solution:
+- Added FlexibleStringConverter / FlexibleBoolConverter and SettingsJson.CreateOptions() so
+  PostgreSQL/Control API payloads deserialize mixed types.
+- SettingsService now merges Kafka (and Commands/LoadImages) from the API with bootstrap
+  fallback; Settings API URL + RemoteCommandsEnabled/SystemPowerCommandsEnabled stay
+  machine-authoritative.
+- KafkaConnect.Reconfigure rebuilds the producer only when bootstrap/topics actually change;
+  failed rebuilds keep the previous producer; in-flight ProduceAsync on a replaced producer
+  is treated as transient so the outbox record is preserved.
+- Added UpdateManager (semver vs baseline 1.0.0, deterministic per-machine jitter,
+  SHA256, http(s)-only download with exponential retry on transient faults, staging reuse,
+  named mutex, apply_update.bat handoff after all FileStreams are disposed).
+- apply_update.bat waits for parent PID (file-lock release), retries robocopy while files
+  stay locked, writes an applied_version marker (idempotent), then restarts the service or exe.
+- MessageLogService.Log(level, message, category) restores the 3-arg overload (Category defaults
+  to General) so MainApplicationContext compiles.
+files:
+Ergonomy.Core/Configuration/FlexibleJsonConverters.cs; Ergonomy.Core/Configuration/AppSettings.cs;
+Ergonomy.Core/Logging/LogEvents.cs; Configuration/SettingsService.cs;
+Configuration/EnvironmentSettingsProvider.cs; Configuration/AppDefaults.cs; KafkaConnect.cs;
+Services/UpdateManager.cs; Scripts/apply_update.bat; Services/ServiceRegistrar.cs;
+Services/MessageLogService.cs; MainApplicationContext.cs; Ergonomy.csproj;
+Postgres/app_configuration.sql; Environment_set.txt; Panel/main.py.
+verification result:
+Static review of Kafka reconfigure, update download/hash/handoff, and settings merge.
+dotnet build attempted in this sandbox (Windows targeting).
+caveats:
+- Auto-update Enabled can be turned on by the Control API (integrity gate is SHA256 + https).
+- apply_update.bat must run on Windows; this sandbox cannot execute it.
+- Two-process migration (ARCHITECTURE_SPLIT.md steps 2-3) is still pending; UpdateManager currently
+  lives in the legacy WinForms process.

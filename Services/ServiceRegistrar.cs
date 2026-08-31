@@ -62,7 +62,7 @@ namespace Ergonomy.Services
             services.AddSingleton<KafkaConnect>(sp =>
             {
                 KafkaSettings k = sp.GetRequiredService<AppSettings>().Kafka!;
-                return new KafkaConnect(k.BootstrapServers, k.UserActivityTopic, k.SystemMetricsTopic, k.AppLogsTopic);
+                return new KafkaConnect(k);
             });
 
             // Observability (Prometheus scrape endpoint; no new Kafka/SQLite pipeline).
@@ -123,6 +123,7 @@ namespace Ergonomy.Services
             services.AddSingleton<HealthMonitorWorker>();
             services.AddSingleton<PermissionMonitorWorker>();
             services.AddSingleton<AdvancedMetricsWorker>();
+            services.AddSingleton<UpdateManager>();
 
             services.AddTransient<MainApplicationContext>();
 

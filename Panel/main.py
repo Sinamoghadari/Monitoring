@@ -151,6 +151,24 @@ def save_settings(settings: Dict[str, Any]):
     finally:
         conn.close()
 
+@app.get("/api/agent-update")
+def get_agent_update():
+    """خواندن مانیفست به‌روزرسانی عامل از آخرین تنظیمات PostgreSQL"""
+    conn = get_pg_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT settings_json FROM app_configuration ORDER BY id DESC LIMIT 1")
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return {"Enabled": False}
+        settings = row[0]
+        if isinstance(settings, str):
+            settings = json.loads(settings)
+        update = settings.get("Update") or settings.get("update") or {"Enabled": False}
+        return update
+    finally:
+        conn.close()
+
 # ==========================================
 # API نمودار برای داشبورد وب
 # ==========================================

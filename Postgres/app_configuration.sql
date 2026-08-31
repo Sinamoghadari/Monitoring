@@ -36,7 +36,18 @@ VALUES (
   "Kafka": {
     "BootstrapServers": "172.17.214.38:9092",
     "UserActivityTopic": "user_activity",
-    "SystemMetricsTopic": "system_metrics"
+    "SystemMetricsTopic": "system_metrics",
+    "AppLogsTopic": "app_logs"
+  },
+  "Update": {
+    "Enabled": false,
+    "LatestVersion": "1.0.0",
+    "DownloadUrl": "",
+    "Sha256": "",
+    "ServiceName": "Ergonomy.Service",
+    "CheckIntervalMinutes": 60,
+    "MaxJitterSeconds": 900,
+    "DownloadRetryCount": 5
   },
   "Images": {
     "PrimaryAlarmImagePath": "Assets/primary_alarm.png",

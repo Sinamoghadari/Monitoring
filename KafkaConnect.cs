@@ -4,18 +4,16 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using Confluent.Kafka;
+using Ergonomy.Configuration;
 using Ergonomy.Database;
 
 namespace Ergonomy.Database
 {
     public sealed class KafkaConnect : IDisposable
     {
-        private readonly IProducer<string, string> _producer;
-
-        private readonly string _userActivityTopic;
-        private readonly string _systemMetricsTopic;
-        private readonly string _appLogsTopic;
-
+        private IProducer<string, string>? _producer;
+        private KafkaSettings _settings;
+        private readonly object _sync = new();
         private bool _disposed;
 
         /// <summary>
@@ -30,45 +28,87 @@ namespace Ergonomy.Database
             string? userActivityTopic = null,
             string? systemMetricsTopic = null,
             string? appLogsTopic = null)
-        {
-            if (string.IsNullOrWhiteSpace(bootstrapServers))
+            : this(new KafkaSettings
             {
-                throw new ArgumentException(
-                    "Kafka BootstrapServers is not configured. " +
-                    "Set ERGONOMY_KAFKA_BOOTSTRAP_SERVERS at Machine level.",
-                    nameof(bootstrapServers));
+                BootstrapServers = bootstrapServers,
+                UserActivityTopic = userActivityTopic ?? string.Empty,
+                SystemMetricsTopic = systemMetricsTopic ?? string.Empty,
+                AppLogsTopic = appLogsTopic ?? string.Empty
+            })
+        {
+        }
+
+        /// <summary>
+        /// تولیدکننده کافکا را از مدل تنظیمات می‌سازد.
+        /// </summary>
+        public KafkaConnect(KafkaSettings settings)
+        {
+            ArgumentNullException.ThrowIfNull(settings);
+            KafkaSettings normalized = NormalizeOrThrow(settings);
+            _settings = normalized;
+            _producer = BuildProducer(normalized);
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Kafka producer initialized.");
+        }
+
+        /// <summary>
+        /// تنظیمات فعلی تولیدکننده را به‌صورت رونوشت برمی‌گرداند.
+        /// </summary>
+        public KafkaSettings CurrentSettings
+        {
+            get { lock (_sync) return _settings.Clone(); }
+        }
+
+        /// <summary>
+        /// در صورت تغییر واقعی bootstrap یا تاپیک‌ها، تولیدکننده را با تنظیمات جدید بازسازی می‌کند.
+        /// اگر ساخت تولیدکننده جدید شکست بخورد، تولیدکننده قبلی حفظ می‌شود (idempotent و fail-safe).
+        /// </summary>
+        /// <param name="settings">تنظیمات کافکا از Control API یا بوت‌استرپ.</param>
+        /// <returns>اگر تولیدکننده واقعاً جایگزین شد true است.</returns>
+        public bool Reconfigure(KafkaSettings? settings)
+        {
+            if (settings == null)
+                return false;
+
+            KafkaSettings normalized;
+            try
+            {
+                normalized = NormalizeOrThrow(settings);
+            }
+            catch (ArgumentException ex)
+            {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka reconfigure ignored: {ex.Message}");
+                return false;
             }
 
-            _userActivityTopic = RequireTopicName(
-                userActivityTopic, "ERGONOMY_KAFKA_USER_ACTIVITY_TOPIC");
-
-            _systemMetricsTopic = RequireTopicName(
-                systemMetricsTopic, "ERGONOMY_KAFKA_SYSTEM_METRICS_TOPIC");
-
-            _appLogsTopic = RequireTopicName(
-                appLogsTopic, "ERGONOMY_KAFKA_APP_LOGS_TOPIC");
-
-            var config = new ProducerConfig
+            lock (_sync)
             {
-                BootstrapServers = bootstrapServers.Trim(),
-                Acks = Acks.All,
-                EnableIdempotence = true,
-                MessageTimeoutMs = 30_000,
-                LingerMs = 50,
-                CompressionType = CompressionType.Gzip,
-                LogConnectionClose = false
-            };
+                ThrowIfDisposed();
 
-            _producer = new ProducerBuilder<string, string>(config)
-                .SetErrorHandler((_, error) =>
+                if (_settings.EquivalentTo(normalized))
+                    return false;
+
+                IProducer<string, string> next;
+                try
+                {
+                    next = BuildProducer(normalized);
+                }
+                catch (Exception)
                 {
                     Console.WriteLine(
-                        $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka client error: " +
-                        $"{error.Code}");
-                })
-                .Build();
+                        $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka producer rebuild failed; keeping the existing producer.");
+                    return false;
+                }
 
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Kafka producer initialized.");
+                IProducer<string, string>? previous = _producer;
+                _producer = next;
+                _settings = normalized;
+
+                DisposeProducer(previous);
+            }
+
+            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Kafka producer re-initialized.");
+            return true;
         }
 
         /// <summary>
@@ -78,22 +118,19 @@ namespace Ergonomy.Database
         /// <param name="activityData">بار فعالیت کاربر برای سریال‌سازی JSON.</param>
         /// <param name="cancellationToken">توکن لغو ارسال.</param>
         /// <returns>وظیفه‌ای که پس از تحویل به کافکا کامل می‌شود.</returns>
-        // در KafkaConnect.cs
         public async Task SendUserActivityAsync(
             string messageId,
-            UserActivityPayload activityData, 
+            UserActivityPayload activityData,
             CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(activityData);
 
-            // اکنون Serialize دقیقاً بر اساس کلاس UserActivityPayload انجام می‌شود
             await SendMessageAsync(
-                _userActivityTopic,
+                Snapshot().UserActivityTopic,
                 messageId,
                 JsonSerializer.Serialize(activityData),
                 cancellationToken);
         }
-
 
         /// <summary>
         /// به‌صورت ناهمگام متریک‌های پیشرفته سیستم را به تاپیک system_metrics در کافکا ارسال می‌کند.
@@ -110,7 +147,7 @@ namespace Ergonomy.Database
             ArgumentNullException.ThrowIfNull(metricsData);
 
             return SendMessageAsync(
-                _systemMetricsTopic,
+                Snapshot().SystemMetricsTopic,
                 messageId,
                 JsonSerializer.Serialize(metricsData),
                 cancellationToken);
@@ -131,7 +168,7 @@ namespace Ergonomy.Database
             ArgumentNullException.ThrowIfNull(logData);
 
             return SendMessageAsync(
-                _appLogsTopic,
+                Snapshot().AppLogsTopic,
                 messageId,
                 JsonSerializer.Serialize(logData),
                 cancellationToken);
@@ -140,18 +177,13 @@ namespace Ergonomy.Database
         /// <summary>
         /// پیام JSON را با کلید مشخص به تاپیک کافکا تحویل می‌دهد و خطاهای تحویل یا لغو را دوباره پرتاب می‌کند.
         /// </summary>
-        /// <param name="topic">نام تاپیک مقصد.</param>
-        /// <param name="messageId">کلید پیام برای ترتیب و حذف تکرار.</param>
-        /// <param name="message">بدنه JSON پیام.</param>
-        /// <param name="cancellationToken">توکن لغو عملیات شبکه.</param>
-        /// <returns>وظیفه‌ای که پس از تأیید تحویل کامل می‌شود.</returns>
         private async Task SendMessageAsync(
             string topic,
             string messageId,
             string message,
             CancellationToken cancellationToken)
         {
-            ThrowIfDisposed();
+            IProducer<string, string> producer = SnapshotProducer();
 
             if (string.IsNullOrWhiteSpace(messageId))
             {
@@ -162,7 +194,7 @@ namespace Ergonomy.Database
 
             try
             {
-                DeliveryResult<string, string> result = await _producer.ProduceAsync(
+                await producer.ProduceAsync(
                     topic,
                     new Message<string, string>
                     {
@@ -172,6 +204,13 @@ namespace Ergonomy.Database
                     cancellationToken);
 
                 Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Kafka message sent.");
+            }
+            catch (ObjectDisposedException)
+            {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka producer was replaced during send.");
+                throw new InvalidOperationException(
+                    "Kafka producer was replaced during send.");
             }
             catch (ProduceException<string, string> ex)
             {
@@ -185,15 +224,15 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka send was cancelled. " +
-                    $"Kafka send was cancelled.");
+                    "Kafka send was cancelled.");
 
                 throw;
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ❌ Unexpected Kafka send error. " +
-                    $"Kafka send failed.");
+                    "Kafka send failed.");
 
                 throw;
             }
@@ -202,9 +241,6 @@ namespace Ergonomy.Database
         /// <summary>
         /// نام تاپیک را اعتبارسنجی می‌کند و در صورت خالی بودن، نام متغیر محیطی موردنیاز را در استثنا ذکر می‌نماید.
         /// </summary>
-        /// <param name="topicName">نام تاپیک پیکربندی‌شده.</param>
-        /// <param name="environmentVariableName">نام متغیر محیطی مرتبط برای پیام خطا.</param>
-        /// <returns>نام تاپیک پیراسته‌شده.</returns>
         private static string RequireTopicName(
             string? topicName,
             string environmentVariableName)
@@ -221,6 +257,75 @@ namespace Ergonomy.Database
         }
 
         /// <summary>
+        /// تنظیمات کافکا را نرمال و اعتبارسنجی می‌کند.
+        /// </summary>
+        private static KafkaSettings NormalizeOrThrow(KafkaSettings settings)
+        {
+            if (string.IsNullOrWhiteSpace(settings.BootstrapServers))
+            {
+                throw new ArgumentException(
+                    "Kafka BootstrapServers is not configured. " +
+                    "Set ERGONOMY_KAFKA_BOOTSTRAP_SERVERS at Machine level.",
+                    nameof(settings));
+            }
+
+            return new KafkaSettings
+            {
+                BootstrapServers = settings.BootstrapServers.Trim(),
+                UserActivityTopic = RequireTopicName(
+                    settings.UserActivityTopic, "ERGONOMY_KAFKA_USER_ACTIVITY_TOPIC"),
+                SystemMetricsTopic = RequireTopicName(
+                    settings.SystemMetricsTopic, "ERGONOMY_KAFKA_SYSTEM_METRICS_TOPIC"),
+                AppLogsTopic = RequireTopicName(
+                    settings.AppLogsTopic, "ERGONOMY_KAFKA_APP_LOGS_TOPIC")
+            };
+        }
+
+        /// <summary>
+        /// یک تولیدکننده idempotent با فشرده‌سازی Gzip می‌سازد.
+        /// </summary>
+        private static IProducer<string, string> BuildProducer(KafkaSettings settings)
+        {
+            var config = new ProducerConfig
+            {
+                BootstrapServers = settings.BootstrapServers,
+                Acks = Acks.All,
+                EnableIdempotence = true,
+                MessageTimeoutMs = 30_000,
+                LingerMs = 50,
+                CompressionType = CompressionType.Gzip,
+                LogConnectionClose = false
+            };
+
+            return new ProducerBuilder<string, string>(config)
+                .SetErrorHandler((_, error) =>
+                {
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka client error: " +
+                        $"{error.Code}");
+                })
+                .Build();
+        }
+
+        private KafkaSettings Snapshot()
+        {
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                return _settings;
+            }
+        }
+
+        private IProducer<string, string> SnapshotProducer()
+        {
+            lock (_sync)
+            {
+                ThrowIfDisposed();
+                return _producer ?? throw new ObjectDisposedException(nameof(KafkaConnect));
+            }
+        }
+
+        /// <summary>
         /// اگر تولیدکننده آزاد شده باشد، ObjectDisposedException پرتاب می‌کند.
         /// </summary>
         private void ThrowIfDisposed()
@@ -229,29 +334,49 @@ namespace Ergonomy.Database
                 throw new ObjectDisposedException(nameof(KafkaConnect));
         }
 
-        /// <summary>
-        /// بافر تولیدکننده کافکا را خالی کرده و منابع کلاینت را آزاد می‌کند.
-        /// </summary>
-        public void Dispose()
+        private static void DisposeProducer(IProducer<string, string>? producer)
         {
-            if (_disposed)
+            if (producer == null)
                 return;
-
-            _disposed = true;
 
             try
             {
-                _producer.Flush(TimeSpan.FromSeconds(10));
+                producer.Flush(TimeSpan.FromSeconds(10));
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] Kafka producer flush failed.");
             }
             finally
             {
-                _producer.Dispose();
+                try
+                {
+                    producer.Dispose();
+                }
+                catch
+                {
+                }
             }
+        }
+
+        /// <summary>
+        /// بافر تولیدکننده کافکا را خالی کرده و منابع کلاینت را آزاد می‌کند.
+        /// </summary>
+        public void Dispose()
+        {
+            IProducer<string, string>? producer;
+            lock (_sync)
+            {
+                if (_disposed)
+                    return;
+
+                _disposed = true;
+                producer = _producer;
+                _producer = null;
+            }
+
+            DisposeProducer(producer);
         }
     }
 }

@@ -39,6 +39,7 @@ namespace Ergonomy
         private readonly ILogger<MainApplicationContext> _logger;
         private readonly Control _uiAnchor;
         private readonly KafkaConnect _kafkaConnect;
+        private readonly UpdateManager _updateManager;
 
         private NotifyIcon? _notifyIcon;
         private bool _isDisposed;
@@ -83,7 +84,8 @@ namespace Ergonomy
             HealthCheckService healthCheckService,
             MetricsConfig metricsConfig,
             ILogger<MainApplicationContext> logger,
-            Control uiAnchor)
+            Control uiAnchor,
+            UpdateManager updateManager)
         {
             _settingsService = settingsService;
             _kafkaConnect = kafkaConnect;
@@ -103,6 +105,7 @@ namespace Ergonomy
             _metricsConfig = metricsConfig;
             _logger = logger;
             _uiAnchor = uiAnchor;
+            _updateManager = updateManager ?? throw new ArgumentNullException(nameof(updateManager));
 
             // SQLite becoming inaccessible triggers the sleep-and-retry lifecycle.
             _healthCheckService.OnSqliteCriticalFailure = HandleCriticalFailure;
@@ -148,6 +151,9 @@ namespace Ergonomy
             _permissionMonitorWorker.Start();
             _commandManager.Start();
 
+            _updateManager.OnShutdownRequested = RequestUpdateShutdown;
+            _updateManager.Start();
+
             // Internal Prometheus scrape endpoint (no new Kafka/SQLite pipeline).
             StartMetricsEndpoint();
 
@@ -171,11 +177,44 @@ namespace Ergonomy
         private void OnSettingsChanged(AppSettings newSettings)
         {
             _logger.LogInformation(LogEvents.SettingsRefreshedId, "Settings updated from API; reconfiguring runtime.");
+            if (newSettings.Kafka != null && _kafkaConnect.Reconfigure(newSettings.Kafka))
+            {
+                _logger.LogInformation(
+                    LogEvents.KafkaReconfiguredId,
+                    "Kafka producer re-initialized after SettingsChanged.");
+            }
             _syncEngine.UpdateSyncInterval(newSettings.SyncEngineIntervalMinutes);
             _commandManager.UpdateSettings(newSettings);
             _ergonomyManager.UpdateSettings(newSettings);
             _ergonomyManager.SettingsSourceIsApi = _settingsService.SettingsSourceIsApi;
             _permissions.EvaluateAll();
+        }
+
+        /// <summary>
+        /// پس از راه‌اندازی apply_update.bat، حلقه WinForms را روی نخ UI می‌بندد
+        /// تا قفل فایل باینری آزاد شود.
+        /// </summary>
+        private void RequestUpdateShutdown()
+        {
+            void Exit()
+            {
+                try { ExitThread(); }
+                catch { Application.Exit(); }
+            }
+
+            try
+            {
+                if (_uiAnchor.IsHandleCreated)
+                {
+                    _uiAnchor.BeginInvoke(new Action(Exit));
+                    return;
+                }
+            }
+            catch
+            {
+            }
+
+            Exit();
         }
 
         /// <summary>
@@ -202,6 +241,7 @@ namespace Ergonomy
             _settingsRefreshWorker.Stop();
             _healthMonitorWorker.Stop();
             _permissionMonitorWorker.Stop();
+            _updateManager.Stop();
 
             double sleepMinutes = _settingsService.Current.ConnectionFailureSleepMinutes;
             _wakeUpScheduler.Schedule(TimeSpan.FromMinutes(sleepMinutes), WakeUpAsync);
@@ -221,6 +261,7 @@ namespace Ergonomy
             _settingsRefreshWorker.Start();
             _permissionMonitorWorker.Start();
             _commandManager.Start();
+            _updateManager.Start();
         }
 
         /// <summary>
@@ -266,6 +307,8 @@ namespace Ergonomy
                 _healthMonitorWorker.Stop();
                 _permissionMonitorWorker.Stop();
                 _advancedMetricsWorker.Stop();
+                _updateManager.OnShutdownRequested = null;
+                _updateManager.Stop();
 
                 _syncEngine.Stop("application shutdown");
                 _ergonomyManager.Stop("application shutdown");

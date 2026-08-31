@@ -33,7 +33,14 @@ namespace Ergonomy.Logging
         public const int SystemPowerCommandDenied = 6020;
         public const int RemoteCommandFailure = 6030;
         public const int KafkaSendFailure = 6040;
+        public const int KafkaReconfigured = 6050;
         public const int GracefulShutdown = 7000;
+
+        public const int UpdateCheck = 8000;
+        public const int UpdateAvailable = 8010;
+        public const int UpdateDownloadFailed = 8020;
+        public const int UpdateIntegrityFailed = 8030;
+        public const int UpdateApplied = 8040;
 
         public static readonly EventId WorkerStartedId = new(WorkerStarted, "WorkerStarted");
         public static readonly EventId WorkerStoppedId = new(WorkerStopped, "WorkerStopped");
@@ -55,6 +62,12 @@ namespace Ergonomy.Logging
         public static readonly EventId SystemPowerCommandDeniedId = new(SystemPowerCommandDenied, "SystemPowerCommandDenied");
         public static readonly EventId RemoteCommandFailureId = new(RemoteCommandFailure, "RemoteCommandFailure");
         public static readonly EventId KafkaSendFailureId = new(KafkaSendFailure, "KafkaSendFailure");
+        public static readonly EventId KafkaReconfiguredId = new(KafkaReconfigured, "KafkaReconfigured");
         public static readonly EventId GracefulShutdownId = new(GracefulShutdown, "GracefulShutdown");
+        public static readonly EventId UpdateCheckId = new(UpdateCheck, "UpdateCheck");
+        public static readonly EventId UpdateAvailableId = new(UpdateAvailable, "UpdateAvailable");
+        public static readonly EventId UpdateDownloadFailedId = new(UpdateDownloadFailed, "UpdateDownloadFailed");
+        public static readonly EventId UpdateIntegrityFailedId = new(UpdateIntegrityFailed, "UpdateIntegrityFailed");
+        public static readonly EventId UpdateAppliedId = new(UpdateApplied, "UpdateApplied");
     }
 }

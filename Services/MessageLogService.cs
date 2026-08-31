@@ -43,9 +43,22 @@ namespace Ergonomy.Services
         /// <param name="message">متن پیام تشخیصی.</param>
         public void Log(string level, string message)
         {
+            Log(level, message, "General");
+        }
+
+        /// <summary>
+        /// یک ورودی تشخیصی را با دسته مشخص در کنسول و outbox app_logs ثبت می‌کند.
+        /// اگر دسته خالی باشد مقدار General استفاده می‌شود.
+        /// </summary>
+        public void Log(string level, string message, string category)
+        {
+            if (string.IsNullOrWhiteSpace(category))
+                category = "General";
+
             _logger.LogInformation(
-                "AgentLog Level={LogLevel} Message={Message}",
+                "AgentLog Level={LogLevel} Category={Category} Message={Message}",
                 level,
+                category,
                 message);
 
             DateTime currentTime = DateTime.Now;
@@ -59,6 +72,7 @@ namespace Ergonomy.Services
                     $"{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
                 LogLevel = level,
                 Message = message,
+                Category = category,
                 WindowsUsername = _identity.WindowsUsername,
                 WindowsSid = _identity.WindowsSid,
                 MachineName = _identity.MachineName

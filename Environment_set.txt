@@ -61,6 +61,15 @@ $vars = @{
     "ERGONOMY_OUTBOX_WARNING_THRESHOLD"                 = "0.7"
     "ERGONOMY_OUTBOX_CRITICAL_THRESHOLD"                = "0.9"
     "ERGONOMY_OUTBOX_RETENTION_CHECK_INTERVAL_SECONDS"  = "300"
+
+    # ------------------------------------------------------
+    # Auto-update (disabled by default; Control API can supply the manifest)
+    # ------------------------------------------------------
+    "ERGONOMY_UPDATE_ENABLED"                           = "false"
+    "ERGONOMY_UPDATE_SERVICE_NAME"                      = "Ergonomy.Service"
+    "ERGONOMY_UPDATE_CHECK_INTERVAL_MINUTES"            = "60"
+    "ERGONOMY_UPDATE_MAX_JITTER_SECONDS"                = "900"
+    "ERGONOMY_UPDATE_DOWNLOAD_RETRY_COUNT"              = "5"
 }
 
 foreach ($item in $vars.GetEnumerator()) {
