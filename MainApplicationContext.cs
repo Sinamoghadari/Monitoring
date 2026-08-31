@@ -115,7 +115,7 @@ namespace Ergonomy
             };
 
             // Command manager callbacks (routed to workers/services, not the shell).
-            _commandManager.OnLogRequired = _messageLog.Log;
+            _commandManager.OnLogRequired = (level, message) => _messageLog.Log(level, message, "Command");
             _commandManager.OnForceSync = () => _syncEngine.ForceSyncAsync();
             _commandManager.OnStopCollection = () =>
             {
@@ -130,7 +130,7 @@ namespace Ergonomy
 
             _notifyIcon = new NotifyIcon
             {
-                Icon = SystemIcons.Application,
+                Icon = LoadAppIcon(),
                 Visible = true,
                 Text = "Ergonomy"
             };
@@ -228,6 +228,30 @@ namespace Ergonomy
         /// کافکا، نقطه متریک، زمان‌بند بیداری و کنترل پنهان رابط کاربری.
         /// </summary>
         /// <param name="disposing">اگر true باشد منابع مدیریت‌شده نیز آزاد می‌شوند.</param>
+        private static System.Drawing.Icon LoadAppIcon()
+        {
+            try
+            {
+                string icoPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "app_icon.ico");
+                if (System.IO.File.Exists(icoPath))
+                {
+                    return new System.Drawing.Icon(icoPath);
+                }
+
+                string pngPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "app_icon.png");
+                if (System.IO.File.Exists(pngPath))
+                {
+                    using (var bmp = new System.Drawing.Bitmap(pngPath))
+                    {
+                        return System.Drawing.Icon.FromHandle(bmp.GetHicon());
+                    }
+                }
+            }
+            catch { }
+
+            return System.Drawing.SystemIcons.Application;
+        }
+
         protected override void Dispose(bool disposing)
         {
             if (disposing && !_isDisposed)
