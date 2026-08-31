@@ -39,6 +39,14 @@ namespace Ergonomy
         public Action? OnStartCollection { get; set; }
         public Action? OnForceSync { get; set; }
 
+        /// <summary>
+        /// مدیر فرمان‌های راه دور را با تایمر زمان‌بندی، کلاینت HTTP و درگاه جلوگیری از همپوشانی می‌سازد.
+        /// </summary>
+        /// <param name="appSettings">تنظیمات اولیه فاصله بررسی فرمان.</param>
+        /// <param name="windowsUsername">نام کاربری ویندوز برای فیلتر فرمان‌های اختصاصی ماشین.</param>
+        /// <param name="localDbManager">مدیر پایگاه محلی که در مسیر فعلی برای سازگاری تزریق شده است.</param>
+        /// <param name="settingsService">منبع تنظیمات مؤثر و سوئیچ‌های امنیتی ماشین.</param>
+        /// <param name="logger">ثبت‌کننده اجازه، رد و خطای فرمان‌های راه دور.</param>
         public CommandManager(AppSettings appSettings, string windowsUsername, LocalDatabaseManager localDbManager,
             ISettingsService settingsService, ILogger<CommandManager> logger)
         {
@@ -52,16 +60,40 @@ namespace Ergonomy
             _scheduleTimer.Elapsed += OnTimerElapsed;
         }
 
+        /// <summary>
+        /// فاصله بررسی فرمان را به میلی‌ثانیه تبدیل می‌کند و در صورت مقدار نامعتبر از ۳۰ ثانیه استفاده می‌نماید.
+        /// </summary>
+        /// <param name="seconds">فاصله تنظیم‌شده به ثانیه.</param>
+        /// <returns>فاصله تایمر به میلی‌ثانیه.</returns>
         private static double GetIntervalMilliseconds(double seconds) => (seconds > 0 ? seconds : 30) * 1000;
+
+        /// <summary>
+        /// تایمر دوره‌ای دریافت فرمان و بررسی زمان‌بندی خاموش/راه‌اندازی را شروع می‌کند.
+        /// </summary>
         public void Start() => _scheduleTimer.Start();
+
+        /// <summary>
+        /// تایمر دوره‌ای دریافت فرمان را متوقف می‌کند بدون اینکه منابع را آزاد کند.
+        /// </summary>
         public void Stop() => _scheduleTimer.Stop();
 
+        /// <summary>
+        /// در هر تیک تایمر یک عملیات ناهمگام پایش فرمان را آغاز می‌کند؛
+        /// همپوشانی با درگاه داخلی کنترل می‌شود.
+        /// </summary>
+        /// <param name="sender">منبع رویداد تایمر.</param>
+        /// <param name="e">اطلاعات زمان وقوع تیک.</param>
         private void OnTimerElapsed(object? sender, ElapsedEventArgs e)
         {
             // The timer callback only begins one tracked async operation; overlap is prevented by _pollGate.
             lock (_pollSync) _pollTask = PollOnceAsync();
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام زمان‌بندی‌های محلی را بررسی کرده و سپس فرمان‌های معلق را از API دریافت می‌کند.
+        /// اگر پایش قبلی هنوز در حال اجرا باشد، این فراخوانی نادیده گرفته می‌شود.
+        /// </summary>
+        /// <returns>وظیفه‌ای که پس از یک دور پایش کامل می‌شود.</returns>
         private async Task PollOnceAsync()
         {
             if (!await _pollGate.WaitAsync(0).ConfigureAwait(false)) return;
@@ -77,6 +109,10 @@ namespace Ergonomy
             finally { _pollGate.Release(); }
         }
 
+        /// <summary>
+        /// زمان‌بندی راه‌اندازی مجدد یا خاموشی را با ساعت محلی مقایسه می‌کند
+        /// و در صورت تطابق و فعال بودن سوئیچ قدرت سیستم، فرمان shutdown را اجرا می‌نماید.
+        /// </summary>
         private void CheckScheduledTasks()
         {
             AppSettings settings = _settingsService.Current;
@@ -93,6 +129,11 @@ namespace Ergonomy
             }
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام فرمان‌های معلق این ماشین را از API دریافت کرده
+        /// و پس از تأخیر امنیتی، هر فرمان مجاز را اجرا می‌کند.
+        /// </summary>
+        /// <returns>وظیفه‌ای که پس از پردازش فهرست فرمان‌ها کامل می‌شود.</returns>
         private async Task CheckAndExecuteCommandsFromApi()
         {
             // Do not poll or log command content when remote commands are disabled.
@@ -114,6 +155,13 @@ namespace Ergonomy
             }
         }
 
+        /// <summary>
+        /// پس از تأخیر بیست ثانیه‌ای، مجوز فرمان راه دور را دوباره بررسی می‌کند،
+        /// فرمان را اجرا کرده و در صورت موفقیت، تأیید اجرا را به API ارسال می‌نماید.
+        /// </summary>
+        /// <param name="command">فرمان دریافتی از API.</param>
+        /// <param name="baseUrl">آدرس پایه API برای اعلام اجرای فرمان.</param>
+        /// <returns>وظیفه‌ای که پس از تأخیر، اجرا و اعلام نتیجه کامل می‌شود.</returns>
         private async Task ExecuteDelayedAsync(RemoteCommand command, string baseUrl)
         {
             await Task.Delay(TimeSpan.FromSeconds(20)).ConfigureAwait(false);
@@ -129,6 +177,12 @@ namespace Ergonomy
             catch (Exception ex) { _logger.LogWarning(LogEvents.RemoteCommandFailureId, ex, "Remote command acknowledgement failed. Operation={Operation}", "acknowledge"); }
         }
 
+        /// <summary>
+        /// فرمان متنی را در فهرست مجاز بررسی می‌کند: پیام UI، توقف یا شروع جمع‌آوری.
+        /// فرمان‌های خارج از فهرست یا غیرفعال‌شده رد می‌شوند.
+        /// </summary>
+        /// <param name="command">متن فرمان دریافتی.</param>
+        /// <returns>اگر فرمان شناخته‌شده و اجرا شد true برمی‌گرداند.</returns>
         private bool ProcessCommand(string? command)
         {
             if (!IsRemoteEnabled()) { DenyRemote("remote", "RemoteCommandsEnabled is false"); return false; }
@@ -151,10 +205,31 @@ namespace Ergonomy
             }
         }
 
+        /// <summary>
+        /// سوئیچ ماشین‌محور فرمان‌های راه دور را از تنظیمات مؤثر می‌خواند.
+        /// </summary>
+        /// <returns>اگر فرمان راه دور مجاز باشد true است.</returns>
         private bool IsRemoteEnabled() => _settingsService.Current.RemoteCommandsEnabled;
+
+        /// <summary>
+        /// سوئیچ ماشین‌محور فرمان‌های قدرت سیستم را از تنظیمات مؤثر می‌خواند.
+        /// </summary>
+        /// <returns>اگر خاموشی و راه‌اندازی مجدد مجاز باشد true است.</returns>
         private bool IsSystemPowerEnabled() => _settingsService.Current.SystemPowerCommandsEnabled;
+
+        /// <summary>
+        /// رد شدن فرمان راه دور را با دسته و دلیل مشخص در لاگ هشدار ثبت می‌کند.
+        /// </summary>
+        /// <param name="category">دسته فرمان ردشده.</param>
+        /// <param name="reason">دلیل رد شدن فرمان.</param>
         private void DenyRemote(string category, string reason) => _logger.LogWarning(LogEvents.RemoteCommandDeniedId,
             "Remote command denied. Category={Category}, Reason={Reason}, RemoteCommandsEnabled={Enabled}", category, reason, IsRemoteEnabled());
+
+        /// <summary>
+        /// در صورت فعال بودن سوئیچ قدرت سیستم، فرایند shutdown ویندوز را با آرگومان داده‌شده اجرا می‌کند.
+        /// </summary>
+        /// <param name="category">دسته عملیاتی برای ثبت در لاگ.</param>
+        /// <param name="arguments">آرگومان‌های خط فرمان ابزار shutdown.</param>
         private void ExecuteSystemPower(string category, string arguments)
         {
             // This check is deliberately adjacent to the only power-process invocation.
@@ -162,14 +237,27 @@ namespace Ergonomy
             _logger.LogWarning(LogEvents.RemoteCommandAllowedId, "System power command allowed. Category={Category}", category);
             System.Diagnostics.Process.Start("shutdown", arguments);
         }
+
+        /// <summary>
+        /// رد شدن فرمان قدرت سیستم را با دلیل و وضعیت سوئیچ امنیتی ثبت می‌کند.
+        /// </summary>
+        /// <param name="category">دسته فرمان قدرت.</param>
+        /// <param name="reason">دلیل رد شدن فرمان.</param>
         private void DenySystemPower(string category, string reason) => _logger.LogWarning(LogEvents.SystemPowerCommandDeniedId,
             "System power command denied. Category={Category}, Reason={Reason}, SystemPowerCommandsEnabled={Enabled}", category, reason, IsSystemPowerEnabled());
 
+        /// <summary>
+        /// فاصله تایمر بررسی فرمان را با تنظیمات جدید هماهنگ می‌کند.
+        /// </summary>
+        /// <param name="settings">تنظیمات به‌روزشده برنامه.</param>
         public void UpdateSettings(AppSettings settings)
         {
             _appSettings = settings ?? throw new ArgumentNullException(nameof(settings));
             _scheduleTimer.Interval = GetIntervalMilliseconds(settings.CommandCheckIntervalSeconds);
         }
+        /// <summary>
+        /// تایمر، پایش در حال اجرا، کلاینت HTTP و درگاه همپوشانی را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed) return;

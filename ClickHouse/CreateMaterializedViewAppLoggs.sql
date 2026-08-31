@@ -1,10 +1,16 @@
-CREATE MATERIALIZED VIEW MV_AppLogs_To_Target TO AppLogs AS
+CREATE MATERIALIZED VIEW Monitoring.MV_AppLogs_To_Target
+TO Monitoring.AppLogs
+AS
 SELECT
-    parseDateTime64BestEffortOrZero(Timestamp, 7) AS Timestamp,
-    CollectedAt_Shamsi ,
-    CAST(LogLevel AS LowCardinality(String)) AS LogLevel,
+    coalesce(
+        toDateTime64(Timestamp, 3),
+        toDateTime64(CollectedAt, 3)
+    ) AS Timestamp,
+    toDateTime(CollectedAt) AS CollectedAt,
+    CollectedAt_Shamsi,
+    LogLevel,
     Message,
     WindowsUsername,
     MachineName,
-    CAST(Category AS LowCardinality(String)) AS Category
-FROM Kafka_AppLogs;
+    Category
+FROM Monitoring.Kafka_AppLogs;

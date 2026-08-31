@@ -14,6 +14,11 @@ namespace Ergonomy.Services
     {
         private readonly HealthCheckService _healthCheckService;
 
+        /// <summary>
+        /// کارگر پایش سلامت را به سرویس پروب متصل می‌کند.
+        /// </summary>
+        /// <param name="healthCheckService">سرویس اجرای پروب‌های سلامت.</param>
+        /// <param name="logger">ثبت‌کننده چرخه کارگر.</param>
         public HealthMonitorWorker(
             HealthCheckService healthCheckService,
             ILogger<HealthMonitorWorker> logger)
@@ -26,8 +31,17 @@ namespace Ergonomy.Services
 
         protected override bool ImmediateFirstRun => true;
 
+        /// <summary>
+        /// فاصله ثابت پانزده دقیقه‌ای پایش سلامت را برمی‌گرداند.
+        /// </summary>
+        /// <returns>فاصله حلقه.</returns>
         protected override TimeSpan GetInterval() => TimeSpan.FromMinutes(15);
 
+        /// <summary>
+        /// یک دور کامل پروب سلامت را به‌صورت ناهمگام اجرا می‌کند.
+        /// </summary>
+        /// <param name="ct">توکن لغو دور کاری.</param>
+        /// <returns>وظیفه اجرای پروب‌ها.</returns>
         protected override async Task DoWorkAsync(CancellationToken ct)
         {
             await _healthCheckService.RunAllAsync().ConfigureAwait(false);

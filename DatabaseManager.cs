@@ -25,9 +25,23 @@ namespace Ergonomy.Database
         private readonly string _password;
         private readonly int _port;
 
+        /// <summary>
+        /// رشته اتصال Npgsql را از پارامترهای میزبان، درگاه و اعتبارنامه‌های تزریق‌شده می‌سازد.
+        /// </summary>
+        /// <returns>رشته اتصال PostgreSQL.</returns>
         private string GetConnectionString() =>
             $"Host={_host};Port={_port};Username={_user};Password={_password};Database={_database}";
 
+        /// <summary>
+        /// مدیر دسترسی به PostgreSQL را با مشخصات اتصال و صف محلی اختیاری می‌سازد.
+        /// </summary>
+        /// <param name="host">آدرس میزبان پایگاه PostgreSQL.</param>
+        /// <param name="database">نام پایگاه داده.</param>
+        /// <param name="user">نام کاربری اتصال.</param>
+        /// <param name="password">رمز عبور اتصال.</param>
+        /// <param name="port">شماره درگاه PostgreSQL.</param>
+        /// <param name="checkPostgresConnection">اگر true باشد پروب سلامت در outbox ثبت می‌شود.</param>
+        /// <param name="localDb">مدیر صف محلی برای ثبت لاگ سلامت؛ در صورت نبود ساخته می‌شود.</param>
         public DatabaseManager(
             string host,
             string database,
@@ -47,6 +61,10 @@ namespace Ergonomy.Database
             _localDb = localDb ?? new LocalDatabaseManager();
         }
 
+        /// <summary>
+        /// تنظیمات برنامه را از جدول app_configuration در PostgreSQL می‌خواند و به AppSettings تبدیل می‌کند.
+        /// </summary>
+        /// <returns>تنظیمات بارگذاری‌شده یا null در صورت نبود داده یا خطا.</returns>
         public AppSettings? GetSettingsFromDatabase()
         {
             try
@@ -149,6 +167,10 @@ namespace Ergonomy.Database
         }
 
 
+        /// <summary>
+        /// نام همه تصاویر هشدار ذخیره‌شده در جدول alarm_images را از PostgreSQL برمی‌گرداند.
+        /// </summary>
+        /// <returns>فهرست نام تصاویر یا فهرست خالی در صورت خطا.</returns>
         public List<string> GetAllImageNames()
         {
             var names = new List<string>();
@@ -175,6 +197,11 @@ namespace Ergonomy.Database
             return names;
         }
 
+        /// <summary>
+        /// داده باینری تصویر هشدار را از PostgreSQL می‌خواند و یک Bitmap مستقل از استریم می‌سازد.
+        /// </summary>
+        /// <param name="imageName">نام تصویر ذخیره‌شده در جدول alarm_images.</param>
+        /// <returns>تصویر بارگذاری‌شده یا null در صورت نبود داده.</returns>
         public Image? GetImageFromDatabase(string imageName)
         {
             if (string.IsNullOrWhiteSpace(imageName))
@@ -215,6 +242,12 @@ namespace Ergonomy.Database
             return null;
         }
 
+        /// <summary>
+        /// فرمان‌های در وضعیت pending را برای این رایانه یا کاربر از جدول client_commands می‌خواند.
+        /// </summary>
+        /// <param name="computerName">نام رایانه برای فیلتر فرمان.</param>
+        /// <param name="windowsUsername">نام کاربری ویندوز برای فیلتر فرمان.</param>
+        /// <returns>فهرست فرمان‌های معلق.</returns>
         public List<ClientCommand> GetPendingCommands(
             string computerName,
             string windowsUsername)
@@ -267,6 +300,10 @@ namespace Ergonomy.Database
             return commands;
         }
 
+        /// <summary>
+        /// وضعیت فرمان را در PostgreSQL به outdated تغییر می‌دهد تا دوباره اجرا نشود.
+        /// </summary>
+        /// <param name="commandId">شناسه فرمان در جدول client_commands.</param>
         public void MarkCommandAsOutdated(int commandId)
         {
             try
@@ -289,6 +326,10 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// وضعیت فرمان را در PostgreSQL به executed تغییر می‌دهد تا به‌عنوان انجام‌شده علامت بخورد.
+        /// </summary>
+        /// <param name="commandId">شناسه فرمان در جدول client_commands.</param>
         public void MarkCommandAsExecuted(int commandId)
         {
             try

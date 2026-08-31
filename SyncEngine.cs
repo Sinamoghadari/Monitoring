@@ -38,6 +38,14 @@ namespace Ergonomy.Database
 
         public bool IsRunning { get; private set; }
 
+        /// <summary>
+        /// موتور همگام‌سازی outbox را با اتصال کافکا، پایگاه محلی، متریک‌ها و فاصله پایه می‌سازد.
+        /// </summary>
+        /// <param name="kafkaConnect">تولیدکننده کافکا برای تحویل رکوردها.</param>
+        /// <param name="localDb">مدیر صف SQLite برای خواندن و حذف رکوردها.</param>
+        /// <param name="logger">ثبت‌کننده رویدادهای همگام‌سازی و backoff.</param>
+        /// <param name="metrics">رجیستری متریک پرومتئوس برای شمارنده‌های همگام‌سازی.</param>
+        /// <param name="syncIntervalMinutes">فاصله پایه بین دورهای همگام‌سازی.</param>
         public SyncEngine(
             KafkaConnect kafkaConnect,
             LocalDatabaseManager localDb,
@@ -52,6 +60,9 @@ namespace Ergonomy.Database
             _baseIntervalMinutes = syncIntervalMinutes > 0 ? syncIntervalMinutes : 1;
         }
 
+        /// <summary>
+        /// حلقه پس‌زمینه همگام‌سازی را روی یک وظیفه جداگانه شروع می‌کند.
+        /// </summary>
         public void Start()
         {
             lock (_sync)
@@ -68,6 +79,10 @@ namespace Ergonomy.Database
             _logger.LogInformation(LogEvents.WorkerStartedId, "Sync Engine started (Kafka Allowed).");
         }
 
+        /// <summary>
+        /// حلقه همگام‌سازی را لغو کرده، برای خروج کوتاه منتظر می‌ماند و وضعیت اجرا را پاک می‌کند.
+        /// </summary>
+        /// <param name="reason">دلیل توقف برای ثبت در لاگ.</param>
         public void Stop(string reason = "requested")
         {
             CancellationTokenSource? cts = null;
@@ -113,6 +128,10 @@ namespace Ergonomy.Database
                 LogEvents.WorkerStoppedId, "Sync Engine stopped (reason: {Reason}).", reason);
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام یک دور همگام‌سازی فوری را بدون در نظر گرفتن backoff فعال اجرا می‌کند.
+        /// </summary>
+        /// <returns>وظیفه‌ای که پس از پردازش صف کامل می‌شود.</returns>
         public async Task ForceSyncAsync()
         {
             ThrowIfDisposed();
@@ -123,6 +142,10 @@ namespace Ergonomy.Database
             await ProcessQueueAsync(CancellationToken.None).ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// فاصله پایه حلقه همگام‌سازی را در زمان اجرا به‌روز می‌کند.
+        /// </summary>
+        /// <param name="intervalMinutes">فاصله جدید به دقیقه.</param>
         public void UpdateSyncInterval(double intervalMinutes)
         {
             ThrowIfDisposed();
@@ -134,6 +157,12 @@ namespace Ergonomy.Database
                 _baseIntervalMinutes.ToString(CultureInfo.InvariantCulture));
         }
 
+        /// <summary>
+        /// حلقه ناهمگام همگام‌سازی است: یک دور فوری اجرا می‌کند و سپس با PeriodicTimer
+        /// دورهای بعدی را با رعایت backoff زمان‌بندی می‌نماید.
+        /// </summary>
+        /// <param name="ct">توکن لغو حلقه هنگام توقف موتور.</param>
+        /// <returns>وظیفه‌ای که تا پایان حلقه زنده می‌ماند.</returns>
         private async Task RunLoopAsync(CancellationToken ct)
         {
             try
@@ -190,6 +219,12 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// یک دسته از رکوردهای pending را از SQLite می‌خواند، به کافکا می‌فرستد و
+        /// پس از تحویل موفق حذف می‌کند. رکوردهای سمی حذف و خطاهای گذرا باعث backoff می‌شوند.
+        /// </summary>
+        /// <param name="cancellationToken">توکن لغو پردازش دسته.</param>
+        /// <returns>وظیفه‌ای که پس از پایان دسته کامل می‌شود.</returns>
         private async Task ProcessQueueAsync(CancellationToken cancellationToken)
         {
             if (_disposed)
@@ -297,6 +332,10 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// در صورت شکست گذرای کافکا، زمان backoff نمایی را محاسبه و متریک مربوط را به‌روز می‌کند.
+        /// </summary>
+        /// <param name="anyTransientFailure">اگر در دسته فعلی خطای گذرا رخ داده باشد true است.</param>
         private void ApplyBackoff(bool anyTransientFailure)
         {
             if (anyTransientFailure)
@@ -323,6 +362,13 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// بر اساس TargetTable، payload را از JSON بازسازی کرده و به تاپیک مناسب کافکا ارسال می‌کند.
+        /// </summary>
+        /// <param name="record">رکورد صف محلی.</param>
+        /// <param name="jsonOptions">گزینه‌های بازسازی JSON.</param>
+        /// <param name="cancellationToken">توکن لغو ارسال.</param>
+        /// <returns>وظیفه‌ای که پس از تحویل به کافکا کامل می‌شود.</returns>
         private async Task SendRecordToKafkaAsync(
             SyncRecord record,
             JsonSerializerOptions jsonOptions,
@@ -371,6 +417,12 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// رکورد سمی با payload نامعتبر را از صف SQLite حذف کرده و شمارنده پرومتئوس را افزایش می‌دهد.
+        /// </summary>
+        /// <param name="recordId">شناسه رکورد در صف.</param>
+        /// <param name="targetTable">جدول مقصد برای برچسب متریک.</param>
+        /// <param name="reason">دلیل مسموم بودن رکورد.</param>
         private void HandlePoisonRecord(Guid recordId, string targetTable, string reason)
         {
             _metrics.IncrementCounter(
@@ -387,12 +439,18 @@ namespace Ergonomy.Database
             _localDb.DeleteRecord(recordId);
         }
 
+        /// <summary>
+        /// اگر موتور آزاد شده باشد، از ادامه عملیات جلوگیری می‌کند.
+        /// </summary>
         private void ThrowIfDisposed()
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(SyncEngine));
         }
 
+        /// <summary>
+        /// حلقه همگام‌سازی را متوقف کرده و درگاه همپوشانی را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed)

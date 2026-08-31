@@ -7,6 +7,10 @@ namespace Ergonomy.UI
         private System.Windows.Forms.Label label1;
         private System.Windows.Forms.PictureBox pictureBox1;
 
+        /// <summary>
+        /// منابع طراح فرم هشدار ثانویه را آزاد می‌کند.
+        /// </summary>
+        /// <param name="disposing">اگر true باشد اجزای مدیریت‌شده نیز آزاد می‌شوند.</param>
         protected override void Dispose(bool disposing)
         {
             if (disposing && (components != null))
@@ -16,6 +20,9 @@ namespace Ergonomy.UI
             base.Dispose(disposing);
         }
 
+        /// <summary>
+        /// کنترل‌های برچسب، تصویر و چیدمان فرم هشدار ثانویه را توسط طراح مقداردهی می‌کند.
+        /// </summary>
         private void InitializeComponent()
         {
             this.tableLayoutPanel1 = new System.Windows.Forms.TableLayoutPanel();

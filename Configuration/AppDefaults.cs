@@ -7,14 +7,32 @@ namespace Ergonomy.Configuration
     /// </summary>
     public static class AppDefaults
     {
+        /// <summary>
+        /// مقدار صحیح را در صورت عبور نکردن از حداقل، با مقدار پیش‌فرض جایگزین می‌کند.
+        /// </summary>
+        /// <param name="value">مقدار ورودی.</param>
+        /// <param name="fallback">مقدار جایگزین معتبر.</param>
+        /// <param name="minimum">حداقل مقدار قابل قبول.</param>
+        /// <returns>مقدار نرمال‌شده.</returns>
         public static int Normalize(
             int value, int fallback, int minimum) =>
             value <= minimum ? fallback : value;
 
+        /// <summary>
+        /// مقدار اعشاری را در صورت عبور نکردن از حداقل، با مقدار پیش‌فرض جایگزین می‌کند.
+        /// </summary>
+        /// <param name="value">مقدار ورودی.</param>
+        /// <param name="fallback">مقدار جایگزین معتبر.</param>
+        /// <param name="minimum">حداقل مقدار قابل قبول.</param>
+        /// <returns>مقدار نرمال‌شده.</returns>
         public static double Normalize(
             double value, double fallback, double minimum) =>
             value <= minimum ? fallback : value;
 
+        /// <summary>
+        /// فاصله‌های حیاتی همگام‌سازی، متریک، تنظیمات و خواب را روی مقادیر پیش‌فرض امن نرمال می‌کند.
+        /// </summary>
+        /// <param name="settings">شیء تنظیماتی که باید اصلاح شود.</param>
         public static void Apply(AppSettings settings)
         {
             if (settings == null)
@@ -40,10 +58,10 @@ namespace Ergonomy.Configuration
         }
 
         /// <summary>
-        /// Validates required infrastructure settings. Infrastructure endpoints/topics are
-        /// authoritative only from the machine environment (bootstrap) and are preserved by
-        /// <see cref="SettingsService"/>, so a missing API endpoint is the main actionable gap.
+        /// وجود تنظیمات اجباری API و کافکا را بررسی می‌کند.
+        /// نقاط پایانی زیرساخت فقط از محیط ماشین معتبرند و API نمی‌تواند آن‌ها را بازنویسی کند.
         /// </summary>
+        /// <param name="settings">تنظیمات مورد اعتبارسنجی.</param>
         public static void ValidateRequired(AppSettings settings)
         {
             if (settings == null)
@@ -67,8 +85,12 @@ namespace Ergonomy.Configuration
         }
     }
 
-    public sealed class SettingsValidationException : Exception
-    {
-        public SettingsValidationException(string message) : base(message) { }
-    }
+        public sealed class SettingsValidationException : Exception
+        {
+            /// <summary>
+            /// استثنای اعتبارسنجی تنظیمات اجباری را با پیام مشخص می‌سازد.
+            /// </summary>
+            /// <param name="message">شرح تنظیم ناقص یا نامعتبر.</param>
+            public SettingsValidationException(string message) : base(message) { }
+        }
 }

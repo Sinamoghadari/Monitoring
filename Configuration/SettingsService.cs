@@ -22,14 +22,19 @@ namespace Ergonomy.Configuration
         /// <summary>Raised (on a background thread) whenever the effective settings are replaced.</summary>
         event Action<AppSettings>? SettingsChanged;
 
-        /// <summary>Loads the machine environment bootstrap settings; idempotent.</summary>
+        /// <summary>
+        /// تنظیمات بوت‌استرپ را از متغیرهای محیطی سطح ماشین بارگذاری می‌کند؛ فراخوانی تکرارپذیر است.
+        /// </summary>
         void LoadBootstrap();
 
         /// <summary>
-        /// Fetches settings from the Settings API (backed by PostgreSQL) and, if they differ,
-        /// replaces <see cref="Current"/> and raises <see cref="SettingsChanged"/>.
-        /// Infrastructure (API endpoints + Kafka topics) is always preserved from bootstrap.
+        /// به‌صورت ناهمگام تنظیمات را از API تنظیمات (پشتیبانی‌شده با PostgreSQL) می‌خواند
+        /// و در صورت تفاوت، Current را جایگزین کرده و SettingsChanged را اعلام می‌کند.
+        /// نقاط پایانی زیرساخت و تاپیک‌های کافکا همیشه از بوت‌استرپ حفظ می‌شوند.
         /// </summary>
+        /// <param name="logFailures">اگر true باشد شکست شبکه در سطح هشدار ثبت می‌شود.</param>
+        /// <param name="cancellationToken">توکن لغو درخواست HTTP.</param>
+        /// <returns>اگر تنظیمات مؤثر عوض شد true است.</returns>
         Task<bool> RefreshFromApiAsync(bool logFailures = false, CancellationToken cancellationToken = default);
     }
 
@@ -47,6 +52,11 @@ namespace Ergonomy.Configuration
 
         public event Action<AppSettings>? SettingsChanged;
 
+        /// <summary>
+        /// سرویس تنظیمات را با کلاینت HTTP مشترک و ثبت‌کننده رویداد می‌سازد.
+        /// </summary>
+        /// <param name="httpClient">کلاینت HTTP برای فراخوانی API تنظیمات.</param>
+        /// <param name="logger">ثبت‌کننده بارگذاری، تازه‌سازی و خطای اعتبارسنجی.</param>
         public SettingsService(HttpClient httpClient, ILogger<SettingsService> logger)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
@@ -68,6 +78,9 @@ namespace Ergonomy.Configuration
             get { lock (_sync) return _sourceIsApi; }
         }
 
+        /// <summary>
+        /// تنظیمات بوت‌استرپ را از محیط ماشین می‌خواند، نرمال می‌کند و به‌عنوان تنظیمات مؤثر اولیه قرار می‌دهد.
+        /// </summary>
         public void LoadBootstrap()
         {
             AppSettings bootstrap;
@@ -88,6 +101,11 @@ namespace Ergonomy.Configuration
                 _current.EnabledMetrics?.Count ?? 0);
         }
 
+        /// <summary>
+        /// تنظیمات اجباری API و کافکا را اعتبارسنجی کرده و در صورت نقص فقط هشدار می‌دهد.
+        /// </summary>
+        /// <param name="settings">تنظیمات مورد بررسی.</param>
+        /// <returns>اگر اعتبارسنجی موفق باشد true است.</returns>
         private bool TryValidate(AppSettings settings)
         {
             try
@@ -103,6 +121,13 @@ namespace Ergonomy.Configuration
             }
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام تنظیمات را از API می‌گیرد، زیرساخت محیطی را حفظ می‌کند
+        /// و فقط در صورت تفاوت واقعی، تنظیمات مؤثر را جایگزین می‌نماید.
+        /// </summary>
+        /// <param name="logFailures">اگر true باشد خطاها با سطح Warning ثبت می‌شوند.</param>
+        /// <param name="cancellationToken">توکن لغو درخواست.</param>
+        /// <returns>اگر تنظیمات جدید اعمال شد true است.</returns>
         public async Task<bool> RefreshFromApiAsync(bool logFailures = false, CancellationToken cancellationToken = default)
         {
             await _refreshLock.WaitAsync(cancellationToken);
@@ -187,6 +212,10 @@ namespace Ergonomy.Configuration
             }
         }
 
+        /// <summary>
+        /// نقاط پایانی API، تنظیمات کافکا و سوئیچ‌های امنیتی را از بوت‌استرپ محیطی روی پاسخ API بازنویسی می‌کند.
+        /// </summary>
+        /// <param name="remoteSettings">تنظیمات دریافتی از API که باید اصلاح شود.</param>
         private void PreserveEnvironmentInfrastructureSettings(AppSettings remoteSettings)
         {
             AppSettings bootstrap;
@@ -198,6 +227,11 @@ namespace Ergonomy.Configuration
             remoteSettings.SystemPowerCommandsEnabled = bootstrap.SystemPowerCommandsEnabled;
         }
 
+        /// <summary>
+        /// تنظیمات را به JSON فشرده تبدیل می‌کند تا مقایسه برابری نسخه‌های مؤثر ممکن شود.
+        /// </summary>
+        /// <param name="settings">تنظیمات مورد مقایسه.</param>
+        /// <returns>رشته JSON نرمال‌شده.</returns>
         private static string NormalizeSettings(AppSettings settings)
         {
             return JsonSerializer.Serialize(settings, new JsonSerializerOptions
@@ -206,6 +240,9 @@ namespace Ergonomy.Configuration
             });
         }
 
+        /// <summary>
+        /// قفل تازه‌سازی تنظیمات را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed)

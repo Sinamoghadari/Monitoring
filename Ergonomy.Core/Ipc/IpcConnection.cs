@@ -18,6 +18,11 @@ namespace Ergonomy.Core.Ipc
         private readonly SemaphoreSlim _writeLock = new(1, 1);
         private int _disposed;
 
+        /// <summary>
+        /// یک اتصال زنده پایپ را با شناسه لاگ و قفل سریال‌سازی نوشتن می‌سازد.
+        /// </summary>
+        /// <param name="stream">استریم پایپ متصل.</param>
+        /// <param name="id">شناسه پایدار اتصال برای همبستگی لاگ.</param>
         public IpcConnection(PipeStream stream, string id)
         {
             _stream = stream ?? throw new ArgumentNullException(nameof(stream));
@@ -35,6 +40,12 @@ namespace Ergonomy.Core.Ipc
 
         public bool IsConnected => Volatile.Read(ref _disposed) == 0 && _stream.IsConnected;
 
+        /// <summary>
+        /// پیام را به‌صورت ناهمگام و با قفل نوشتن به فریم پایپ تبدیل کرده و ارسال می‌کند.
+        /// </summary>
+        /// <param name="message">پاکت IPC.</param>
+        /// <param name="ct">توکن لغو ارسال.</param>
+        /// <returns>وظیفه‌ای که پس از نوشتن فریم کامل می‌شود.</returns>
         public async Task SendAsync(IpcMessage message, CancellationToken ct = default)
         {
             if (message is null) throw new ArgumentNullException(nameof(message));
@@ -52,7 +63,12 @@ namespace Ergonomy.Core.Ipc
             }
         }
 
-        /// <summary>Reads the next message, or <c>null</c> when the peer disconnected.</summary>
+        /// <summary>
+        /// فریم بعدی را به‌صورت ناهمگام می‌خواند و به پاکت JSON تبدیل می‌کند.
+        /// در قطع اتصال همتا null برمی‌گرداند.
+        /// </summary>
+        /// <param name="ct">توکن لغو خواندن.</param>
+        /// <returns>پیام بازسازی‌شده یا null.</returns>
         public async Task<IpcMessage?> ReceiveAsync(CancellationToken ct = default)
         {
             byte[]? frame = await IpcFraming.ReadFrameAsync(_stream, ct).ConfigureAwait(false);
@@ -73,6 +89,9 @@ namespace Ergonomy.Core.Ipc
             }
         }
 
+        /// <summary>
+        /// اتصال سرور را در صورت نیاز قطع کرده و استریم پایپ و قفل نوشتن را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)

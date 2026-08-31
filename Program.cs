@@ -10,10 +10,9 @@ namespace Ergonomy
     internal static class Program
     {
         /// <summary>
-        ///  The main entry point for the application.
-        ///  A DI service provider (composition root) is built once on the UI thread and injected
-        ///  into the thin MainApplicationContext shell. The WinForms STA message loop remains the
-        ///  process pump (the generic-host run loop is intentionally not used).
+        /// نقطه ورود برنامه تعاملی ارگونومی است.
+        /// ارائه‌دهنده تزریق وابستگی را روی نخ رابط کاربری می‌سازد، تنظیمات اولیه را بارگذاری می‌کند
+        /// و حلقه پیام WinForms را به‌عنوان پمپ اصلی فرایند اجرا می‌کند.
         /// </summary>
         [STAThread]
         static void Main()

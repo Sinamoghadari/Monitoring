@@ -43,6 +43,11 @@ namespace Ergonomy.Database
         public int DeletedByAge { get; }
         public int DeletedByCapacity { get; }
 
+        /// <summary>
+        /// نتیجه یک دور نگهداری را با تعداد حذف سنی و حذف ظرفیتی می‌سازد.
+        /// </summary>
+        /// <param name="deletedByAge">تعداد رکوردهای حذف‌شده به‌خاطر سن.</param>
+        /// <param name="deletedByCapacity">تعداد رکوردهای حذف‌شده به‌خاطر ظرفیت.</param>
         public RetentionResult(int deletedByAge, int deletedByCapacity)
         {
             DeletedByAge = deletedByAge;
@@ -77,11 +82,20 @@ namespace Ergonomy.Database
 
         private bool _disposed;
 
+        /// <summary>
+        /// مدیر outbox را با تنظیمات و مسیر پیش‌فرض ProgramData می‌سازد.
+        /// </summary>
         public LocalDatabaseManager()
             : this(new OutboxSettings(), new SqliteOutboxConnectionProvider())
         {
         }
 
+        /// <summary>
+        /// مدیر outbox را با تنظیمات ظرفیت و ارائه‌دهنده مسیر SQLite می‌سازد،
+        /// جدول صف را ایجاد کرده و تایمر نگهداری را در صورت نیاز شروع می‌کند.
+        /// </summary>
+        /// <param name="settings">آستانه‌ها و فاصله نگهداری outbox.</param>
+        /// <param name="connectionProvider">مسیر و رشته اتصال پایگاه محلی.</param>
         public LocalDatabaseManager(OutboxSettings settings, SqliteOutboxConnectionProvider connectionProvider)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -115,6 +129,11 @@ namespace Ergonomy.Database
                 $"[{DateTime.Now:HH:mm:ss}] SQLite outbox initialized.");
         }
 
+        /// <summary>
+        /// در هر تیک تایمر نگهداری، سیاست حذف سنی و ظرفیتی را روی صف SQLite اجرا می‌کند.
+        /// </summary>
+        /// <param name="sender">منبع رویداد تایمر.</param>
+        /// <param name="e">اطلاعات زمان وقوع تیک.</param>
         private void OnRetentionTimerElapsed(object? sender, System.Timers.ElapsedEventArgs e)
         {
             try
@@ -128,6 +147,10 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// اتصال SQLite را با حالت WAL، timeout مشغول بودن و همگام‌سازی NORMAL باز می‌کند.
+        /// </summary>
+        /// <returns>اتصال باز و آماده‌به‌کار.</returns>
         private SqliteConnection CreateOpenConnection()
         {
             var connection = new SqliteConnection(_connectionString);
@@ -145,6 +168,9 @@ namespace Ergonomy.Database
             return connection;
         }
 
+        /// <summary>
+        /// جدول sync_queue و ایندکس‌های created_at و message_id را در صورت نبود ایجاد می‌کند.
+        /// </summary>
         private void InitializeDatabase()
         {
             using var connection = CreateOpenConnection();
@@ -180,6 +206,10 @@ namespace Ergonomy.Database
             indexCommand.ExecuteNonQuery();
         }
 
+        /// <summary>
+        /// ستون message_id را برای پایگاه‌های قدیمی اضافه کرده و مقادیر خالی را از id پر می‌کند.
+        /// </summary>
+        /// <param name="connection">اتصال باز به پایگاه outbox.</param>
         private static void EnsureMessageIdColumn(SqliteConnection connection)
         {
             var existingColumns = GetColumnNames(connection, "sync_queue");
@@ -206,6 +236,12 @@ namespace Ergonomy.Database
             backfillCommand.ExecuteNonQuery();
         }
 
+        /// <summary>
+        /// نام ستون‌های یک جدول SQLite را از PRAGMA table_info می‌خواند.
+        /// </summary>
+        /// <param name="connection">اتصال باز به پایگاه.</param>
+        /// <param name="tableName">نام جدول مورد بررسی.</param>
+        /// <returns>مجموعه نام ستون‌ها.</returns>
         private static HashSet<string> GetColumnNames(
             SqliteConnection connection,
             string tableName)
@@ -230,6 +266,11 @@ namespace Ergonomy.Database
         // ─────────────────────────────────────────────
         //  اولویت target — مبنای سیاست drop در بحران
         // ─────────────────────────────────────────────
+        /// <summary>
+        /// اولویت هدف صف را تعیین می‌کند تا در بحران ظرفیت فقط رکوردهای حیاتی حفظ شوند.
+        /// </summary>
+        /// <param name="targetTable">نام جدول مقصد در صف.</param>
+        /// <returns>اولویت Critical، Medium یا Low.</returns>
         private static TargetPriority GetTargetPriority(string targetTable)
         {
             switch (targetTable)
@@ -250,6 +291,10 @@ namespace Ergonomy.Database
         // ─────────────────────────────────────────────
         //  اندازه‌گیری ظرفیت
         // ─────────────────────────────────────────────
+        /// <summary>
+        /// اندازه فایل پایگاه و فایل WAL را برای محاسبه نسبت ظرفیت برمی‌گرداند.
+        /// </summary>
+        /// <returns>حجم تقریبی پایگاه به بایت.</returns>
         public long GetDatabaseSizeBytes()
         {
             long total = 0;
@@ -277,6 +322,12 @@ namespace Ergonomy.Database
         public long DeletedByAgeCount => Interlocked.Read(ref _deletedByAgeCount);
         public long DeletedByCapacityCount => Interlocked.Read(ref _deletedByCapacityCount);
 
+        /// <summary>
+        /// وضعیت ظرفیت outbox را بر اساس نسبت تعداد رکورد و حجم فایل محاسبه می‌کند
+        /// و برای کاهش IO نتیجه را برای چند ثانیه کش می‌نماید.
+        /// </summary>
+        /// <param name="forceRefresh">اگر true باشد کش وضعیت نادیده گرفته می‌شود.</param>
+        /// <returns>وضعیت Normal، Warning یا Critical.</returns>
         public CapacityStatus GetCapacityStatus(bool forceRefresh = false)
         {
             if (!forceRefresh &&
@@ -309,6 +360,13 @@ namespace Ergonomy.Database
         // ─────────────────────────────────────────────
         //  ذخیره با gating اولویت
         // ─────────────────────────────────────────────
+        /// <summary>
+        /// شیء داده را به JSON تبدیل کرده و در صف SQLite درج می‌کند.
+        /// در وضعیت بحرانی فقط هدف‌های Critical پذیرفته می‌شوند.
+        /// </summary>
+        /// <param name="targetTableName">نام جدول مقصد برای مسیریابی SyncEngine.</param>
+        /// <param name="dataObject">شیء یا رشته JSON قابل سریال‌سازی.</param>
+        /// <returns>نتیجه ذخیره، حذف اولویت پایین یا شکست.</returns>
         public OutboxSaveResult SaveUserActivity(
             string targetTableName,
             object dataObject)
@@ -381,6 +439,11 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// قدیمی‌ترین رکوردهای pending را برای ارسال به کافکا از صف SQLite می‌خواند.
+        /// </summary>
+        /// <param name="limit">حداکثر تعداد رکورد در دسته.</param>
+        /// <returns>فهرست رکوردهای آماده ارسال.</returns>
         public List<SyncRecord> GetPendingRecords(int limit = 50)
         {
             var records = new List<SyncRecord>();
@@ -441,6 +504,11 @@ namespace Ergonomy.Database
             return records;
         }
 
+        /// <summary>
+        /// یک رکورد تحویل‌شده یا سمی را از صف SQLite حذف کرده و شمارنده pending را کاهش می‌دهد.
+        /// </summary>
+        /// <param name="id">شناسه رکورد در جدول sync_queue.</param>
+        /// <returns>اگر دقیقاً یک ردیف حذف شد true است.</returns>
         public bool DeleteRecord(Guid id)
         {
             try
@@ -481,6 +549,11 @@ namespace Ergonomy.Database
         // ─────────────────────────────────────────────
         //  Retention
         // ─────────────────────────────────────────────
+        /// <summary>
+        /// سیاست نگهداری را اجرا می‌کند: ابتدا رکوردهای منقضی و سپس در صورت بحران،
+        /// قدیمی‌ترین رکوردهای کم‌اولویت را حذف می‌نماید.
+        /// </summary>
+        /// <returns>تعداد حذف‌های سنی و ظرفیتی.</returns>
         public RetentionResult RunRetention()
         {
             int deletedByAge = DeleteExpiredRecords();
@@ -509,6 +582,10 @@ namespace Ergonomy.Database
             return new RetentionResult(deletedByAge, deletedByCapacity);
         }
 
+        /// <summary>
+        /// رکوردهای قدیمی‌تر از MaxRecordAgeDays را با مقایسه رشته‌ای created_at حذف می‌کند.
+        /// </summary>
+        /// <returns>تعداد ردیف‌های حذف‌شده.</returns>
         private int DeleteExpiredRecords()
         {
             // cutoff با همان فرمت strftime ساخته می‌شود تا مقایسه‌ی رشتهای
@@ -543,6 +620,10 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// برای خروج از وضعیت بحرانی، ابتدا app_logs و سپس user_activity را از قدیمی‌ترین‌ها حذف می‌کند.
+        /// </summary>
+        /// <returns>تعداد کل رکوردهای حذف‌شده برای کاهش ظرفیت.</returns>
         private int DeleteLowPriorityToRelieve()
         {
             // هدف: برگرداندن شمارنده به سطح Warning (نه لزوماً Normal).
@@ -567,6 +648,12 @@ namespace Ergonomy.Database
             return deleted;
         }
 
+        /// <summary>
+        /// قدیمی‌ترین رکوردهای یک هدف مشخص را تا سقف داده‌شده از صف SQLite حذف می‌کند.
+        /// </summary>
+        /// <param name="targetTable">هدف صف برای فیلتر حذف.</param>
+        /// <param name="count">حداکثر تعداد حذف.</param>
+        /// <returns>تعداد ردیف‌های حذف‌شده.</returns>
         private int DeleteOldestByTarget(string targetTable, int count)
         {
             if (count <= 0)
@@ -608,6 +695,9 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// شمارنده درون‌حافظه‌ای pending را با COUNT واقعی جدول همگام می‌کند تا drift اصلاح شود.
+        /// </summary>
         private void ReconcileCount()
         {
             try
@@ -628,6 +718,11 @@ namespace Ergonomy.Database
             }
         }
 
+        /// <summary>
+        /// شیء ورودی را به JSON فشرده تبدیل می‌کند؛ اگر از قبل رشته باشد همان را برمی‌گرداند.
+        /// </summary>
+        /// <param name="dataObject">شیء یا رشته JSON.</param>
+        /// <returns>بدنه JSON قابل ذخیره در صف.</returns>
         private static string SerializePayload(object dataObject)
         {
             if (dataObject == null)
@@ -647,6 +742,9 @@ namespace Ergonomy.Database
         }
 
 
+        /// <summary>
+        /// تایمر نگهداری outbox را متوقف و آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed)

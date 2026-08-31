@@ -13,6 +13,11 @@ namespace Ergonomy.UI
         private bool _isCustomMaximized = false;
         private Rectangle _originalBounds;
 
+        /// <summary>
+        /// فرم هشدار اولیه را با تصویر اختیاری و تایمر بستن خودکار بر اساس تنظیمات می‌سازد.
+        /// </summary>
+        /// <param name="settings">تنظیمات مدت نمایش خودکار هشدار اولیه.</param>
+        /// <param name="alarmImage">تصویر تمرین یا null در صورت نبود تصویر.</param>
         // پارامتر ورودی از string به Image تغییر کرد
         public PrimaryAlarmForm(AppSettings settings, Image? alarmImage)
         {
@@ -40,11 +45,20 @@ namespace Ergonomy.UI
             _autoCloseTimer.Start();
         }
 
+        /// <summary>
+        /// محدوده اولیه فرم را برای بازگرداندن از حالت بیشینه‌سازی سفارشی ذخیره می‌کند.
+        /// </summary>
+        /// <param name="sender">منبع رویداد بارگذاری.</param>
+        /// <param name="e">آرگومان رویداد.</param>
         private void AlarmForm_Load(object sender, EventArgs e)
         {
             _originalBounds = this.Bounds;
         }
 
+        /// <summary>
+        /// فرمان بیشینه‌سازی ویندوز را به تغییر اندازه سفارشی نصف صفحه تبدیل می‌کند.
+        /// </summary>
+        /// <param name="m">پیام بومی پنجره.</param>
         protected override void WndProc(ref Message m)
         {
             const int WM_SYSCOMMAND = 0x0112;
@@ -70,6 +84,11 @@ namespace Ergonomy.UI
             base.WndProc(ref m);
         }
 
+        /// <summary>
+        /// اندازه قلم پیام هشدار را متناسب با ارتفاع فرم تنظیم می‌کند.
+        /// </summary>
+        /// <param name="sender">منبع رویداد تغییر اندازه.</param>
+        /// <param name="e">آرگومان رویداد.</param>
         private void AlarmForm_Resize(object sender, EventArgs e)
         {
             float newSize = this.ClientSize.Height / 15.0F;
@@ -77,6 +96,10 @@ namespace Ergonomy.UI
             this.label1.Font = new Font(this.label1.Font.FontFamily, newSize, this.label1.Font.Style);
         }
 
+        /// <summary>
+        /// تایمر بستن خودکار را آزاد کرده و به مدیر هشدار اعلام می‌کند که بستن توسط کاربر بوده یا خودکار.
+        /// </summary>
+        /// <param name="e">اطلاعات بسته شدن فرم.</param>
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             _autoCloseTimer.Stop();

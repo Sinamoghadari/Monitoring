@@ -24,6 +24,13 @@ namespace Ergonomy.Services
         /// <summary>Invoked when SQLite becomes inaccessible; wired by the lifecycle shell.</summary>
         public Action<string>? OnSqliteCriticalFailure { get; set; }
 
+        /// <summary>
+        /// سرویس پروب سلامت را با تنظیمات، کانال لاگ و مسیر پایگاه محلی می‌سازد.
+        /// </summary>
+        /// <param name="settingsService">منبع آدرس API تنظیمات.</param>
+        /// <param name="log">کانال ثبت نتیجه پروب در outbox.</param>
+        /// <param name="logger">ثبت‌کننده خطای دسترسی به SQLite.</param>
+        /// <param name="outboxConnection">ارائه‌دهنده مسیر و رشته اتصال outbox.</param>
         public HealthCheckService(
             ISettingsService settingsService,
             MessageLogService log,
@@ -36,6 +43,10 @@ namespace Ergonomy.Services
             _outboxConnection = outboxConnection ?? throw new ArgumentNullException(nameof(outboxConnection));
         }
 
+        /// <summary>
+        /// به‌صورت ناهمگام هر سه پروب سلامت API، SQLite و عملکرد خود عامل را اجرا می‌کند.
+        /// </summary>
+        /// <returns>وظیفه‌ای که پس از پایان همه پروب‌ها کامل می‌شود.</returns>
         public async Task RunAllAsync()
         {
             await CheckApiHealthAsync().ConfigureAwait(false);
@@ -43,6 +54,10 @@ namespace Ergonomy.Services
             await CheckSelfPerformanceAsync().ConfigureAwait(false);
         }
 
+        /// <summary>
+        /// دسترسی به API تنظیمات را با یک درخواست HTTP کوتاه بررسی کرده و نتیجه را در app_logs ثبت می‌کند.
+        /// </summary>
+        /// <returns>وظیفه‌ای که پس از پروب شبکه کامل می‌شود.</returns>
         private async Task CheckApiHealthAsync()
         {
             string? apiUrl = _settingsService.Current.API?.Settings;
@@ -70,6 +85,11 @@ namespace Ergonomy.Services
 
         public string OutboxDatabasePathForDiagnostics => _outboxConnection.DatabasePath;
 
+        /// <summary>
+        /// اتصال به همان پایگاه SQLite outbox را با SELECT 1 بررسی می‌کند
+        /// و در صورت خرابی، چرخه خواب اضطراری را از طریق callback اعلام می‌نماید.
+        /// </summary>
+        /// <returns>وظیفه کامل‌شده پس از ثبت نتیجه.</returns>
         private Task CheckSqliteHealthAsync()
         {
             // Use exactly the same connection configuration as LocalDatabaseManager.
@@ -102,6 +122,10 @@ namespace Ergonomy.Services
             return Task.CompletedTask;
         }
 
+        /// <summary>
+        /// مصرف حافظه و تعداد نخ فرایند عامل را اندازه‌گیری کرده و در صورت عبور از ۵۰۰ مگابایت هشدار می‌دهد.
+        /// </summary>
+        /// <returns>وظیفه کامل‌شده پس از ثبت نتیجه.</returns>
         private Task CheckSelfPerformanceAsync()
         {
             try

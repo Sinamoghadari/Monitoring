@@ -9,6 +9,10 @@ namespace Ergonomy.UI
         private Label labelMessage;
         private Button btnClose;
 
+        /// <summary>
+        /// فرم پیام مدیریتی را با متن فرمان راه دور و ظاهر راست‌به‌چپ می‌سازد.
+        /// </summary>
+        /// <param name="message">متن پیام نمایش‌داده‌شده به کاربر.</param>
         public MessageAlarmForm(string message)
         {
             SetupUI(message);
@@ -28,6 +32,10 @@ namespace Ergonomy.UI
             this.Load += new System.EventHandler(this.MessageAlarmForm_Load);
         }
 
+        /// <summary>
+        /// برچسب پیام و دکمه تأیید را با چیدمان راست‌به‌چپ روی فرم قرار می‌دهد.
+        /// </summary>
+        /// <param name="message">متن پیام.</param>
         private void SetupUI(string message)
         {
             this.Size = new Size(350, 200);
@@ -60,6 +68,11 @@ namespace Ergonomy.UI
             this.Controls.Add(btnClose);
         }
 
+        /// <summary>
+        /// فرم پیام را در گوشه بالای راست ناحیه کاری صفحه اصلی قرار می‌دهد.
+        /// </summary>
+        /// <param name="sender">منبع رویداد بارگذاری.</param>
+        /// <param name="e">آرگومان رویداد.</param>
         private void MessageAlarmForm_Load(object sender, EventArgs e)
         {
             Rectangle workingArea = Screen.PrimaryScreen.WorkingArea;

@@ -6,7 +6,7 @@ WORKDIR /app
 
 # کپی کردن فایل نیازمندی‌ها و نصب آن‌ها
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt -i https://mirror-pypi.runflare.com/simple
+RUN pip install --no-cache-dir -r requirements.txt
 
 # کپی کردن کل کدهای پروژه به داخل کانتینر
 COPY . .
@@ -15,4 +15,4 @@ COPY . .
 EXPOSE 8000
 
 # دستور اجرای برنامه (فرض بر این است که فایل اصلی main.py و نام اپ app است)
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000" , "--reload"]

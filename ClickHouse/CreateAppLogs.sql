@@ -1,6 +1,7 @@
 CREATE TABLE AppLogs
 (
     Timestamp DateTime64(7),
+    CollectedAt DateTime,
     CollectedAt_Shamsi String,
     LogLevel LowCardinality(String),
     Message String,

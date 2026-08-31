@@ -14,6 +14,12 @@ namespace Ergonomy.Services
         public string MachineName { get; }
         public string SessionGuid { get; }
 
+        /// <summary>
+        /// هویت پایدار عامل را با SID، نام کاربری، نام ماشین و یک شناسه نشست تازه می‌سازد.
+        /// </summary>
+        /// <param name="windowsSid">شناسه امنیتی کاربر ویندوز.</param>
+        /// <param name="windowsUsername">نام کاربری ویندوز.</param>
+        /// <param name="machineName">نام رایانه.</param>
         public MachineIdentity(string windowsSid, string windowsUsername, string machineName)
         {
             WindowsSid = windowsSid;

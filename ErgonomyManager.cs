@@ -33,6 +33,16 @@ namespace Ergonomy.Core
 
         public bool IsRunning { get; private set; } = false;
 
+        /// <summary>
+        /// مدیر چرخه حیات ارگونومی را با وابستگی‌های جمع‌آوری فعالیت، هشدار، ثبت محلی و هویت ماشین می‌سازد.
+        /// </summary>
+        /// <param name="appSettings">تنظیمات جاری آستانه فعالیت و فاصله اعلان.</param>
+        /// <param name="localDb">مدیر پایگاه محلی SQLite برای صف‌بندی فعالیت کاربر.</param>
+        /// <param name="identity">هویت پایدار نشست، SID و نام کاربری ویندوز.</param>
+        /// <param name="activityMonitor">نمونه‌بردار فعالیت صفحه‌کلید و ماوس.</param>
+        /// <param name="alarmManager">مدیر نمایش هشدارهای اولیه و ثانویه.</param>
+        /// <param name="dataLogger">ثبت‌کننده ساعتی فعالیت در فایل اکسل.</param>
+        /// <param name="uiAnchor">کنترل پنهان برای انتقال نمایش هشدار به نخ رابط کاربری.</param>
         public ErgonomyManager(
             AppSettings appSettings,
             LocalDatabaseManager localDb,
@@ -52,6 +62,11 @@ namespace Ergonomy.Core
             _dataLogger = dataLogger ?? throw new ArgumentNullException(nameof(dataLogger));
         }
 
+        /// <summary>
+        /// مرجع تنظیمات را به‌روز می‌کند و فاصله تایمر اعلان، مدیر هشدار و ثبت‌کننده اکسل را
+        /// با مقادیر جدید هماهنگ می‌سازد.
+        /// </summary>
+        /// <param name="appSettings">تنظیمات جدید دریافتی از سرویس تنظیمات.</param>
         public void UpdateSettings(AppSettings appSettings)
         {
             if (appSettings == null) return;
@@ -75,6 +90,10 @@ namespace Ergonomy.Core
             }
         }
 
+        /// <summary>
+        /// جمع‌آوری ارگونومی را شروع می‌کند: تصاویر هشدار را به‌صورت ناهمگام از API بارگذاری می‌کند،
+        /// پایشگر فعالیت و ثبت‌کننده را فعال کرده و رکورد شروع نشست را در outbox می‌نویسد.
+        /// </summary>
         public void Start()
         {
             lock (_lifecycleLock)
@@ -119,6 +138,11 @@ namespace Ergonomy.Core
             }
         }
 
+        /// <summary>
+        /// جمع‌آوری ارگونومی را متوقف می‌کند، هشدارهای فعال را می‌بندد،
+        /// رکورد پایان نشست را در SQLite ثبت کرده و هوک‌ها و تایمرها را خاموش می‌کند.
+        /// </summary>
+        /// <param name="reason">دلیل توقف برای ثبت در لاگ عملیاتی.</param>
         public void Stop(string reason = "requested")
         {
             lock (_lifecycleLock)
@@ -144,6 +168,9 @@ namespace Ergonomy.Core
             }
         }
 
+        /// <summary>
+        /// مقادیر مؤثر مجوز، فاصله اعلان و آستانه فعالیت را برای تشخیص منبع تنظیمات در کنسول می‌نویسد.
+        /// </summary>
         private void LogEffectiveSettings()
         {
             Console.WriteLine(
@@ -154,6 +181,12 @@ namespace Ergonomy.Core
                 $"Source={(SettingsSourceIsApi ? "API" : "Bootstrap/Environment")}");
         }
 
+        /// <summary>
+        /// در هر تیک تایمر thread-safe، مجموع زمان فعالیت را با آستانه مقایسه می‌کند
+        /// و در صورت عبور، نمایش هشدار را به نخ رابط کاربری منتقل می‌کند.
+        /// </summary>
+        /// <param name="sender">منبع رویداد تایمر.</param>
+        /// <param name="e">اطلاعات زمان وقوع تیک.</param>
         private void OnNotificationTimerElapsed(object? sender, System.Timers.ElapsedEventArgs e)
         {
             if (_alarmManager == null || _activityMonitor == null) return;
@@ -197,6 +230,10 @@ namespace Ergonomy.Core
             }
         }
 
+        /// <summary>
+        /// روی نخ رابط کاربری اجرا می‌شود، هشدار اولیه را نمایش می‌دهد،
+        /// رکورد Update را در outbox صف می‌کند و شمارنده‌های فعالیت را صفر می‌نماید.
+        /// </summary>
         // Runs on the WinForms UI thread. Creates and shows the alarm Form.
         private void HandleThresholdReached()
         {
@@ -215,6 +252,11 @@ namespace Ergonomy.Core
             }
         }
 
+        /// <summary>
+        /// وضعیت نشست (Start/Update/End) را به همراه زمان فعالیت و شمارنده‌های هشدار
+        /// در صف SQLite ذخیره می‌کند. نوشتن پایگاه خارج از نخ رابط کاربری انجام می‌شود.
+        /// </summary>
+        /// <param name="stateType">نوع وضعیت نشست که در payload ثبت می‌شود.</param>
         private void LogSessionState(string stateType)
         {
             double keyboardSeconds = _activityMonitor?.TotalKeyboardActiveTime.TotalSeconds ?? 0;
@@ -256,6 +298,12 @@ namespace Ergonomy.Core
         }
 
 
+        /// <summary>
+        /// تاریخ و ساعت محلی را به رشته تقویم شمسی با قالب ثابت تبدیل می‌کند
+        /// تا در payload فعالیت کاربر ذخیره شود.
+        /// </summary>
+        /// <param name="dateTime">زمان مبدأ برای تبدیل شمسی.</param>
+        /// <returns>رشته تاریخ و ساعت شمسی با جداکننده ثابت.</returns>
         private static string ToShamsiDateTimeString(DateTime dateTime)
         {
             var pc = new PersianCalendar();
@@ -271,6 +319,9 @@ namespace Ergonomy.Core
                 pc.GetSecond(dateTime));
         }
 
+        /// <summary>
+        /// مدیر را متوقف کرده و تایمر اعلان و پایشگر فعالیت را آزاد می‌کند.
+        /// </summary>
         public void Dispose()
         {
             Stop("manager disposed");

@@ -18,6 +18,12 @@ public class AdvancedMetricsCollector
     private readonly string _targetIp;
     private readonly HashSet<string> _enabledMetrics;
 
+    /// <summary>
+    /// جمع‌کننده متریک‌های پیشرفته را با فهرست متریک‌های فعال، تعداد فرایندهای برتر و IP هدف ردیابی شبکه می‌سازد.
+    /// </summary>
+    /// <param name="enabledMetrics">فهرست نام متریک‌های مجاز از تنظیمات.</param>
+    /// <param name="topProcessesCount">تعداد فرایندهای پرمصرف برای گزارش.</param>
+    /// <param name="targetIp">آدرس مقصد برای traceroute محدود.</param>
     public AdvancedMetricsCollector(List<string> enabledMetrics, int topProcessesCount = 10, string targetIp = "172.17.214.1")
     {
         _topProcessesCount = topProcessesCount;
@@ -44,6 +50,11 @@ public class AdvancedMetricsCollector
         NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowNamedFloatingPointLiterals
     };
 
+    /// <summary>
+    /// مجموعه متریک‌های فعال را از WMI، LibreHardwareMonitor، Event Log و شمارنده‌های عملکرد جمع‌آوری می‌کند
+    /// و دیکشنری آماده صف SQLite را برمی‌گرداند.
+    /// </summary>
+    /// <returns>دیکشنری متریک‌ها با زمان میلادی و شمسی.</returns>
     public Dictionary<string, object> Collect()
     {
         
@@ -122,6 +133,10 @@ public class AdvancedMetricsCollector
     }
 
     // --- توابع جدید برای استخراج کاربر واقعی تعاملی ---
+    /// <summary>
+    /// نام کاربر تعاملی را از Win32_ComputerSystem می‌خواند تا هویت نشست واقعی مشخص شود.
+    /// </summary>
+    /// <returns>نام کاربر یا null در صورت شکست WMI.</returns>
     private string GetInteractiveWindowsUsername()
     {
         try
@@ -139,6 +154,10 @@ public class AdvancedMetricsCollector
         return null;
     }
 
+    /// <summary>
+    /// مالک فرایند explorer.exe را از WMI می‌خواند تا کاربر نشست دسکتاپ شناسایی شود.
+    /// </summary>
+    /// <returns>نام دامنه\\کاربر یا null.</returns>
     private string GetExplorerUser()
     {
         try
@@ -161,6 +180,10 @@ public class AdvancedMetricsCollector
     }
     // ---------------------------------------------------
 
+    /// <summary>
+    /// وضعیت سلامت دیسک‌ها را از Win32_DiskDrive می‌خواند و به JSON تبدیل می‌کند.
+    /// </summary>
+    /// <returns>JSON فهرست مدل و وضعیت دیسک.</returns>
     // 1. متد جمع آوری وضعیت سلامت دیسک (S.M.A.R.T)
     private string GetDiskHealthStatus()
     {
@@ -182,6 +205,10 @@ public class AdvancedMetricsCollector
         return JsonSerializer.Serialize(diskHealth, _jsonOptions);
     }
 
+    /// <summary>
+    /// رویدادهای بحرانی خاموشی ناگهانی و BSOD را در ۲۴ ساعت گذشته از Event Log سیستم می‌شمارد.
+    /// </summary>
+    /// <returns>JSON شمارنده‌های EventID 41 و 1001.</returns>
     // 2. متد بررسی رویدادهای بحرانی (Crash و Shutdown ناگهانی در 24 ساعت گذشته)
     private string GetCriticalSystemEvents()
     {
@@ -212,6 +239,11 @@ public class AdvancedMetricsCollector
         return JsonSerializer.Serialize(eventStats, _jsonOptions);
     }
 
+    /// <summary>
+    /// داده‌های CPU، RAM، دیسک و شبکه را از LibreHardwareMonitor و WMI جمع کرده
+    /// و کلیدهای JSON مربوط را به دیکشنری متریک اضافه می‌کند.
+    /// </summary>
+    /// <param name="metrics">دیکشنری خروجی Collect.</param>
     private void CollectHardwareData(Dictionary<string, object> metrics)
     {
         Computer computer = new Computer
@@ -344,6 +376,10 @@ public class AdvancedMetricsCollector
         computer.Close();
     }
     
+    /// <summary>
+    /// جزئیات بار، فرکانس و تعداد هسته پردازنده را از Win32_Processor می‌خواند.
+    /// </summary>
+    /// <returns>دیکشنری جزئیات CPU.</returns>
     private Dictionary<string, object> GetCpuWmiDetails()
     {
         var cpuWmi = new Dictionary<string, object>();
@@ -371,6 +407,10 @@ public class AdvancedMetricsCollector
         return cpuWmi;
     }
 
+    /// <summary>
+    /// شمارنده‌های عملکرد PhysicalDisk را برای درصد زمان دیسک، صف و تأخیر نمونه‌برداری می‌کند.
+    /// </summary>
+    /// <returns>دیکشنری متریک عملکرد دیسک.</returns>
     private Dictionary<string, object> GetDiskPerformanceMetrics()
     {
         var dict = new Dictionary<string, object>();
@@ -399,6 +439,11 @@ public class AdvancedMetricsCollector
         return dict;
     }
 
+    /// <summary>
+    /// ویژگی‌های SMART حیاتی را از MSStorageDriver_FailurePredictData می‌خواند.
+    /// این خواندن معمولاً به دسترسی مدیریتی نیاز دارد.
+    /// </summary>
+    /// <returns>دیکشنری ویژگی‌های SMART یا پیام خطا.</returns>
     private Dictionary<string, object> GetAdvancedSmartData()
     {
         var dict = new Dictionary<string, object>();
@@ -450,6 +495,10 @@ public class AdvancedMetricsCollector
         return dict;
     }
 
+    /// <summary>
+    /// پرمصرف‌ترین فرایندها را بر اساس RAM و زمان CPU جمع کرده و به JSON تبدیل می‌کند.
+    /// </summary>
+    /// <returns>JSON دو فهرست TopByRam و TopByCpu.</returns>
     private string GetTopProcesses()
     {
         try
@@ -496,6 +545,10 @@ public class AdvancedMetricsCollector
         }
     }
 
+    /// <summary>
+    /// مدل دیسک‌های فیزیکی را از Win32_DiskDrive می‌خواند.
+    /// </summary>
+    /// <returns>JSON فهرست مدل‌ها.</returns>
     private string GetDiskModels()
     {
         var models = new List<string>();
@@ -515,6 +568,10 @@ public class AdvancedMetricsCollector
         return JsonSerializer.Serialize(models, _jsonOptions);
     }
 
+    /// <summary>
+    /// شماره سریال معتبر مادربرد یا BIOS را از WMI استخراج می‌کند.
+    /// </summary>
+    /// <returns>سریال معتبر یا Unknown.</returns>
     private string GetMotherboardSerial()
     {
         try
@@ -542,6 +599,11 @@ public class AdvancedMetricsCollector
         return "Unknown";
     }
 
+    /// <summary>
+    /// سریال‌های ساختگی یا پیش‌فرض OEM را رد می‌کند.
+    /// </summary>
+    /// <param name="serial">رشته سریال خام.</param>
+    /// <returns>اگر سریال قابل استفاده باشد true است.</returns>
     private bool IsValidSerial(string serial)
     {
         if (string.IsNullOrWhiteSpace(serial)) return false;
@@ -552,6 +614,10 @@ public class AdvancedMetricsCollector
         return true;
     }
 
+    /// <summary>
+    /// یک traceroute محدود با TTL افزایشی به IP هدف انجام می‌دهد و پرش‌ها را به JSON تبدیل می‌کند.
+    /// </summary>
+    /// <returns>JSON فهرست پرش‌های شبکه.</returns>
     private string PerformNetworkTrace()
     {
         var hops = new List<object>();
@@ -586,6 +652,11 @@ public class AdvancedMetricsCollector
         return JsonSerializer.Serialize(hops, _jsonOptions);
     }
 
+    /// <summary>
+    /// نام محصول آنتی‌ویروس یا فایروال را از SecurityCenter2 می‌خواند.
+    /// </summary>
+    /// <param name="productType">نام کلاس WMI مانند AntiVirusProduct.</param>
+    /// <returns>نام محصول یا پیام نبود دسترسی.</returns>
     private string GetSecurityStatus(string productType)
     {
         try
@@ -601,6 +672,10 @@ public class AdvancedMetricsCollector
         return "Not Found / No Permission";
     }
 
+    /// <summary>
+    /// تلاش‌های ناموفق ورود (EventID 4625) را در دو ساعت گذشته از لاگ Security می‌شمارد.
+    /// </summary>
+    /// <returns>تعداد تلاش‌ها یا منفی‌یک در صورت نبود دسترسی.</returns>
     private int GetFailedLoginsCount()
     {
         try
@@ -619,6 +694,10 @@ public class AdvancedMetricsCollector
         catch { return -1; }
     }
 
+    /// <summary>
+    /// تعداد دستگاه‌های متصل به کنترلر USB را از WMI می‌شمارد.
+    /// </summary>
+    /// <returns>تعداد دستگاه‌ها یا صفر در صورت خطا.</returns>
     private int GetUsbDevicesCount()
     {
         try
@@ -631,6 +710,10 @@ public class AdvancedMetricsCollector
         catch { return 0; }
     }
 
+    /// <summary>
+    /// زمان روشن شدن سیستم را از TickCount64 محاسبه می‌کند.
+    /// </summary>
+    /// <returns>زمان بوت تقریبی.</returns>
     private DateTime GetBootTime()
     {
         try
@@ -644,6 +727,10 @@ public class AdvancedMetricsCollector
         }
     }
 
+    /// <summary>
+    /// مجموع نخ‌های همه فرایندهای در حال اجرا را می‌شمارد.
+    /// </summary>
+    /// <returns>تعداد کل نخ‌ها.</returns>
     private int GetTotalThreads()
     {
         int threads = 0;
@@ -651,6 +738,10 @@ public class AdvancedMetricsCollector
         return threads;
     }
 
+    /// <summary>
+    /// مجموع handleهای باز همه فرایندها را می‌شمارد.
+    /// </summary>
+    /// <returns>تعداد کل handleها.</returns>
     private int GetTotalHandles()
     {
         int handles = 0;
@@ -658,6 +749,10 @@ public class AdvancedMetricsCollector
         return handles;
     }
 
+    /// <summary>
+    /// سریال و ظرفیت دیسک‌ها را از Win32_DiskDrive برای الحاق به داده‌های LibreHardwareMonitor می‌خواند.
+    /// </summary>
+    /// <returns>نگاشت مدل دیسک به سریال و ظرفیت.</returns>
     private Dictionary<string, (string Serial, double CapacityGb)> GetDiskWmiInfo()
     {
         var dict = new Dictionary<string, (string, double)>();
@@ -684,6 +779,10 @@ public class AdvancedMetricsCollector
         return dict;
     }
 
+    /// <summary>
+    /// مدل و حافظه کارت‌های گرافیک را از Win32_VideoController می‌خواند.
+    /// </summary>
+    /// <returns>JSON فهرست GPUها.</returns>
     private string GetGpuDetails()
     {
         var gpus = new List<object>();
@@ -712,6 +811,11 @@ public class AdvancedMetricsCollector
         return JsonSerializer.Serialize(gpus, _jsonOptions);
     }
 
+    /// <summary>
+    /// تاریخچه ۲۴ ساعت گذشته مرورگرهای Chromium و Firefox همه پروفایل‌های کاربری را جمع می‌کند.
+    /// این متد در مسیر Collect فعلی فراخوانی نمی‌شود و برای توسعه بعدی نگه داشته شده است.
+    /// </summary>
+    /// <returns>JSON فهرست بازدیدها.</returns>
     private string GetAllBrowsersHistoryLast24Hours()
     {
         var historyList = new List<object>();
@@ -749,6 +853,10 @@ public class AdvancedMetricsCollector
     }
 
 
+    /// <summary>
+    /// مسیر پروفایل‌های واقعی کاربران را از C:\Users بدون پوشه‌های سیستمی برمی‌گرداند.
+    /// </summary>
+    /// <returns>فهرست مسیر پروفایل‌ها.</returns>
     private List<string> GetWindowsUserProfiles()
     {
         var result = new List<string>();
@@ -785,6 +893,12 @@ public class AdvancedMetricsCollector
         return result;
     }
     
+    /// <summary>
+    /// فایل History مرورگر Chromium را کپی کرده و بازدیدهای ۲۴ ساعت گذشته را از SQLite فقط‌خواندنی استخراج می‌کند.
+    /// </summary>
+    /// <param name="browserUserDataPath">مسیر User Data مرورگر.</param>
+    /// <param name="browserName">نام مرورگر برای برچسب خروجی.</param>
+    /// <param name="historyList">فهرست تجمعی بازدیدها.</param>
     private void CollectChromiumHistory(
     string browserUserDataPath,
     string browserName,
@@ -881,6 +995,12 @@ public class AdvancedMetricsCollector
         }
     }
 
+    /// <summary>
+    /// فایل places.sqlite فایرفاکس را کپی کرده و بازدیدهای ۲۴ ساعت گذشته را می‌خواند.
+    /// </summary>
+    /// <param name="firefoxProfilesPath">مسیر پوشه Profiles فایرفاکس.</param>
+    /// <param name="browserName">نام مرورگر برای برچسب خروجی.</param>
+    /// <param name="historyList">فهرست تجمعی بازدیدها.</param>
     private void CollectFirefoxHistory(
         string firefoxProfilesPath,
         string browserName,
@@ -968,8 +1088,12 @@ public class AdvancedMetricsCollector
         {
         }
     }
-    
 
+    /// <summary>
+    /// فایل پایگاه مرورگر و همراهان WAL/SHM را در صورت وجود به مسیر موقت کپی می‌کند.
+    /// </summary>
+    /// <param name="source">مسیر مبدأ.</param>
+    /// <param name="destination">مسیر مقصد موقت.</param>
     private void CopyIfExists(string source, string destination)
     {
         try
@@ -990,8 +1114,27 @@ public class AdvancedMetricsCollector
 
 public class UpdateVisitor : IVisitor
 {
+    /// <summary>
+    /// پیمایش سخت‌افزارهای رایانه را در LibreHardwareMonitor آغاز می‌کند.
+    /// </summary>
+    /// <param name="computer">ریشه درخت سخت‌افزار.</param>
     public void VisitComputer(IComputer computer) { computer.Traverse(this); }
+
+    /// <summary>
+    /// حسگرهای یک قطعه سخت‌افزاری را به‌روز کرده و زیرقطعات را پیمایش می‌کند.
+    /// </summary>
+    /// <param name="hardware">قطعه سخت‌افزاری جاری.</param>
     public void VisitHardware(IHardware hardware) { hardware.Update(); foreach (IHardware subHardware in hardware.SubHardware) subHardware.Accept(this); }
+
+    /// <summary>
+    /// بازدید حسگر را بدون پردازش اضافه کامل می‌کند؛ مقدار حسگر قبلاً در Update خوانده شده است.
+    /// </summary>
+    /// <param name="sensor">حسگر جاری.</param>
     public void VisitSensor(ISensor sensor) { }
+
+    /// <summary>
+    /// پارامتر حسگر را نادیده می‌گیرد چون در جمع‌آوری فعلی استفاده نمی‌شود.
+    /// </summary>
+    /// <param name="parameter">پارامتر حسگر.</param>
     public void VisitParameter(IParameter parameter) { }
 }
