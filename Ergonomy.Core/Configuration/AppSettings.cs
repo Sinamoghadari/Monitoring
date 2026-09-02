@@ -70,6 +70,21 @@ namespace Ergonomy.Configuration
         public string AppLogsTopic { get; set; } = "app_logs";
 
         /// <summary>
+        /// Alias used by the Control API payload (<c>"AppLogs": "app_logs"</c>).
+        /// Writing either property updates the same backing topic name.
+        /// </summary>
+        [JsonPropertyName("AppLogs")]
+        public string AppLogs
+        {
+            get => AppLogsTopic;
+            set
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                    AppLogsTopic = value.Trim();
+            }
+        }
+
+        /// <summary>
         /// مقایسه پایدار تنظیمات کافکا برای تصمیم‌گیری درباره بازسازی تولیدکننده.
         /// </summary>
         public bool EquivalentTo(KafkaSettings? other)

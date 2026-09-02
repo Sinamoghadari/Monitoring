@@ -160,7 +160,8 @@ namespace Ergonomy.Services
             bool allowErgonomy = s.AllowErgonomyCollection;
             bool wasRunning = _ergonomyManager.IsRunning;
 
-            string msg = $"[Ergonomy Status] Permission: {allowErgonomy}";
+            string msg =
+                $"[Ergonomy Status] Permission: {allowErgonomy} | Source: {(_settingsService.SettingsSourceIsApi ? "API" : "Bootstrap/Environment")}";
             _log.Log("INFO", msg);
 
             if (allowErgonomy)

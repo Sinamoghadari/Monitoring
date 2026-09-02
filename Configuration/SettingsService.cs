@@ -97,7 +97,10 @@ namespace Ergonomy.Configuration
 
             _logger.LogInformation(
                 "Bootstrap settings loaded from Machine Environment Variables. " +
+                "AllowErgonomyCollection={AllowErgonomy} UpdateEnabled={UpdateEnabled} " +
                 "Enabled metrics count: {EnabledMetricsCount}",
+                _current.AllowErgonomyCollection,
+                _current.Update?.Enabled ?? false,
                 _current.EnabledMetrics?.Count ?? 0);
         }
 
@@ -150,13 +153,23 @@ namespace Ergonomy.Configuration
                 }
 
                 string jsonString = await response.Content.ReadAsStringAsync(cancellationToken);
-                AppSettings? remoteSettings =
-                    JsonSerializer.Deserialize<AppSettings>(jsonString, SettingsJson.CreateOptions());
+                AppSettings? remoteSettings;
+                try
+                {
+                    remoteSettings = JsonSerializer.Deserialize<AppSettings>(jsonString, SettingsJson.CreateOptions());
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogWarning(LogEvents.SettingsRefreshFailedId, ex,
+                        "Settings API JSON could not be deserialized; retaining bootstrap settings. " +
+                        "PayloadLength={Length}",
+                        jsonString.Length);
+                    return false;
+                }
 
                 if (remoteSettings == null)
                 {
-                    if (logFailures)
-                        _logger.LogWarning("Settings API response could not be deserialized.");
+                    _logger.LogWarning("Settings API response deserialized to null; retaining bootstrap settings.");
                     return false;
                 }
 
@@ -184,13 +197,26 @@ namespace Ergonomy.Configuration
                     _sourceIsApi = true;
                 }
 
-                _logger.LogInformation(LogEvents.SettingsRefreshedId, "Settings updated from API successfully.");
+                _logger.LogInformation(
+                    LogEvents.SettingsRefreshedId,
+                    "Settings updated from API successfully. AllowErgonomyCollection={AllowErgonomy} " +
+                    "UpdateEnabled={UpdateEnabled} LatestVersion={LatestVersion} CheckIntervalSeconds={CheckInterval}",
+                    remoteSettings.AllowErgonomyCollection,
+                    remoteSettings.Update?.Enabled ?? false,
+                    remoteSettings.Update?.LatestVersion,
+                    remoteSettings.SettingsCheckIntervalSeconds);
                 SettingsChanged?.Invoke(remoteSettings);
                 return true;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(LogEvents.SettingsRefreshFailedId, ex,
+                    "Settings refresh failed during JSON parsing; retaining the existing effective settings.");
+                return false;
             }
             catch (Exception ex)
             {

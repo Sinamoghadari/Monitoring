@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -60,10 +61,57 @@ namespace Ergonomy.Configuration
                     return "false";
                 case JsonTokenType.Null:
                     return string.Empty;
+                case JsonTokenType.StartArray:
+                    // Control API / PostgreSQL JSONB often stores Kafka bootstrap as
+                    // ["host:9092"] rather than a comma-separated string.
+                    return ReadArrayAsCsv(ref reader);
+                case JsonTokenType.StartObject:
+                    reader.Skip();
+                    return string.Empty;
                 default:
                     throw new JsonException(
                         $"Cannot convert JSON token '{reader.TokenType}' to a string setting.");
             }
+        }
+
+        /// <summary>
+        /// آرایه JSON را به رشته CSV تبدیل می‌کند (مثلاً bootstrap کافکا).
+        /// </summary>
+        private static string ReadArrayAsCsv(ref Utf8JsonReader reader)
+        {
+            var parts = new List<string>();
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonTokenType.EndArray)
+                    break;
+
+                switch (reader.TokenType)
+                {
+                    case JsonTokenType.String:
+                        string? text = reader.GetString();
+                        if (!string.IsNullOrWhiteSpace(text))
+                            parts.Add(text.Trim());
+                        break;
+                    case JsonTokenType.Number:
+                        if (reader.TryGetInt64(out long integer))
+                            parts.Add(integer.ToString(CultureInfo.InvariantCulture));
+                        else if (reader.TryGetDouble(out double number))
+                            parts.Add(number.ToString(CultureInfo.InvariantCulture));
+                        break;
+                    case JsonTokenType.True:
+                        parts.Add("true");
+                        break;
+                    case JsonTokenType.False:
+                        parts.Add("false");
+                        break;
+                    case JsonTokenType.StartObject:
+                    case JsonTokenType.StartArray:
+                        reader.Skip();
+                        break;
+                }
+            }
+
+            return string.Join(",", parts);
         }
 
         /// <summary>

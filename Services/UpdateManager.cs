@@ -69,6 +69,11 @@ namespace Ergonomy.Services
             _identity = identity ?? throw new ArgumentNullException(nameof(identity));
             _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
             _currentVersion = ResolveCurrentVersion();
+            _settingsService.SettingsChanged += OnSettingsChanged;
+            Logger.LogInformation(
+                LogEvents.UpdateCheckId,
+                "UpdateManager constructed. CurrentVersion={CurrentVersion} Baseline={Baseline}",
+                _currentVersion, BaselineVersion);
         }
 
         protected override string Name => nameof(UpdateManager);
@@ -84,10 +89,40 @@ namespace Ergonomy.Services
         /// </summary>
         protected override TimeSpan GetInterval()
         {
-            int minutes = _settingsService.Current.Update?.CheckIntervalMinutes ?? DefaultCheckIntervalMinutes;
-            if (minutes <= 0)
-                minutes = DefaultCheckIntervalMinutes;
+            AgentUpdateSettings? update = _settingsService.Current.Update;
+            if (update == null || !update.Enabled)
+            {
+                // While waiting for the Control API to enable updates, poll on the
+                // settings-refresh cadence instead of the 60-minute default.
+                int seconds = _settingsService.Current.SettingsCheckIntervalSeconds;
+                return TimeSpan.FromSeconds(seconds > 0 ? seconds : 30);
+            }
+
+            int minutes = update.CheckIntervalMinutes > 0
+                ? update.CheckIntervalMinutes
+                : DefaultCheckIntervalMinutes;
             return TimeSpan.FromMinutes(minutes);
+        }
+
+        /// <summary>
+        /// پس از تازه‌سازی تنظیمات از API، یک بررسی به‌روزرسانی فوری اجرا می‌کند
+        /// تا Enable شدن مانیفست تا تیک بعدی تایمر معطل نماند.
+        /// </summary>
+        private void OnSettingsChanged(AppSettings _)
+        {
+            _ = RunCheckAfterSettingsChangedAsync();
+        }
+
+        private async Task RunCheckAfterSettingsChangedAsync()
+        {
+            try
+            {
+                await DoWorkAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Update check after SettingsChanged failed.");
+            }
         }
 
         /// <summary>
@@ -101,14 +136,31 @@ namespace Ergonomy.Services
                 "Number of agent auto-update checks.",
                 1);
 
+            Logger.LogInformation(
+                LogEvents.UpdateCheckId,
+                "Update check. CurrentVersion={Current} Enabled={Enabled} LatestVersion={Latest} " +
+                "DownloadUrl={Url} SourceIsApi={SourceIsApi}",
+                _currentVersion,
+                manifest?.Enabled ?? false,
+                manifest?.LatestVersion,
+                manifest?.DownloadUrl,
+                _settingsService.SettingsSourceIsApi);
+
             if (manifest == null || !manifest.Enabled)
+            {
+                Logger.LogInformation(
+                    LogEvents.UpdateCheckId,
+                    "Update check skipped: Update.Enabled is false (bootstrap/API has not enabled auto-update).");
                 return;
+            }
 
             if (string.IsNullOrWhiteSpace(manifest.LatestVersion)
                 || string.IsNullOrWhiteSpace(manifest.DownloadUrl)
                 || string.IsNullOrWhiteSpace(manifest.Sha256))
             {
-                Logger.LogDebug("Update manifest is incomplete; skipping.");
+                Logger.LogWarning(
+                    LogEvents.UpdateCheckId,
+                    "Update manifest is incomplete (LatestVersion/DownloadUrl/Sha256 required); skipping.");
                 return;
             }
 
