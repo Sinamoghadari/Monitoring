@@ -108,7 +108,7 @@ namespace Ergonomy.Services
         /// پس از تازه‌سازی تنظیمات از API، یک بررسی به‌روزرسانی فوری اجرا می‌کند
         /// تا Enable شدن مانیفست تا تیک بعدی تایمر معطل نماند.
         /// </summary>
-        private void OnSettingsChanged(AppSettings _)
+        private void OnSettingsChanged(AppSettings settings)
         {
             _ = RunCheckAfterSettingsChangedAsync();
         }
