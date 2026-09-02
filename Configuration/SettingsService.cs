@@ -203,7 +203,7 @@ namespace Ergonomy.Configuration
                     "UpdateEnabled={UpdateEnabled} LatestVersion={LatestVersion} CheckIntervalSeconds={CheckInterval}",
                     remoteSettings.AllowErgonomyCollection,
                     remoteSettings.Update?.Enabled ?? false,
-                    remoteSettings.Update?.LatestVersion,
+                    remoteSettings.Update?.TargetVersion,
                     remoteSettings.SettingsCheckIntervalSeconds);
                 SettingsChanged?.Invoke(remoteSettings);
                 return true;
@@ -309,7 +309,7 @@ namespace Ergonomy.Configuration
                 return env;
 
             bool apiHasManifest = remote.Enabled
-                || !string.IsNullOrWhiteSpace(remote.LatestVersion)
+                || !string.IsNullOrWhiteSpace(remote.TargetVersion)
                 || !string.IsNullOrWhiteSpace(remote.DownloadUrl)
                 || !string.IsNullOrWhiteSpace(remote.Sha256);
 
@@ -319,7 +319,8 @@ namespace Ergonomy.Configuration
             return new AgentUpdateSettings
             {
                 Enabled = remote.Enabled,
-                LatestVersion = FirstNonEmpty(remote.LatestVersion, env.LatestVersion),
+                LatestVersion = FirstNonEmpty(remote.TargetVersion, env.TargetVersion),
+                Version = FirstNonEmpty(remote.Version, env.Version),
                 DownloadUrl = FirstNonEmpty(remote.DownloadUrl, env.DownloadUrl),
                 Sha256 = FirstNonEmpty(remote.Sha256, env.Sha256),
                 ServiceName = FirstNonEmpty(remote.ServiceName, env.ServiceName),

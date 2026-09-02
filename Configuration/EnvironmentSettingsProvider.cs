@@ -260,6 +260,7 @@ namespace Ergonomy.Configuration
                 {
                     Enabled = GetBool("ERGONOMY_UPDATE_ENABLED", false),
                     LatestVersion = GetString("ERGONOMY_UPDATE_LATEST_VERSION"),
+                    Version = GetString("ERGONOMY_UPDATE_VERSION"),
                     DownloadUrl = GetString("ERGONOMY_UPDATE_DOWNLOAD_URL"),
                     Sha256 = GetString("ERGONOMY_UPDATE_SHA256"),
                     ServiceName = GetString(

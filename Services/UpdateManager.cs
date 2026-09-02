@@ -127,8 +127,28 @@ namespace Ergonomy.Services
 
         /// <summary>
         /// یک دور بررسی، دانلود و در صورت نیاز اعمال به‌روزرسانی را اجرا می‌کند.
+        /// Failures are swallowed so Kafka, ergonomy collection, and input hooks keep running.
         /// </summary>
         protected override async Task DoWorkAsync(CancellationToken ct)
+        {
+            try
+            {
+                await CheckDownloadAndApplyAsync(ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(
+                    LogEvents.UpdateDownloadFailedId,
+                    ex,
+                    "Update check/download/apply failed. Other agent tasks will continue.");
+            }
+        }
+
+        private async Task CheckDownloadAndApplyAsync(CancellationToken ct)
         {
             AgentUpdateSettings? manifest = _settingsService.Current.Update;
             _metrics.IncrementCounter(
@@ -136,15 +156,14 @@ namespace Ergonomy.Services
                 "Number of agent auto-update checks.",
                 1);
 
+            string targetVersion = manifest?.TargetVersion ?? string.Empty;
             Logger.LogInformation(
                 LogEvents.UpdateCheckId,
-                "Update check. CurrentVersion={Current} Enabled={Enabled} LatestVersion={Latest} " +
-                "DownloadUrl={Url} SourceIsApi={SourceIsApi}",
-                _currentVersion,
+                "Update check triggered. Enabled: {Enabled}, Server Version: {TargetVersion}, Current App Version: {CurrentVersion}, DownloadUrl: {DownloadUrl}",
                 manifest?.Enabled ?? false,
-                manifest?.LatestVersion,
-                manifest?.DownloadUrl,
-                _settingsService.SettingsSourceIsApi);
+                targetVersion,
+                _currentVersion,
+                manifest?.DownloadUrl);
 
             if (manifest == null || !manifest.Enabled)
             {
@@ -154,17 +173,17 @@ namespace Ergonomy.Services
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(manifest.LatestVersion)
+            if (string.IsNullOrWhiteSpace(targetVersion)
                 || string.IsNullOrWhiteSpace(manifest.DownloadUrl)
                 || string.IsNullOrWhiteSpace(manifest.Sha256))
             {
                 Logger.LogWarning(
                     LogEvents.UpdateCheckId,
-                    "Update manifest is incomplete (LatestVersion/DownloadUrl/Sha256 required); skipping.");
+                    "Update manifest is incomplete (LatestVersion|Version/DownloadUrl/Sha256 required); skipping.");
                 return;
             }
 
-            string latest = manifest.LatestVersion.Trim();
+            string latest = targetVersion;
             if (!SemanticVersion.TryParse(latest, out SemanticVersion latestVersion))
             {
                 Logger.LogWarning(

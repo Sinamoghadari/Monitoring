@@ -122,7 +122,23 @@ namespace Ergonomy.Configuration
     public class AgentUpdateSettings
     {
         public bool Enabled { get; set; } = false;
+
+        [JsonPropertyName("LatestVersion")]
         public string LatestVersion { get; set; } = "";
+
+        /// <summary>
+        /// Alternate Control API key used by some payloads instead of <see cref="LatestVersion"/>.
+        /// </summary>
+        [JsonPropertyName("Version")]
+        public string Version { get; set; } = "";
+
+        /// <summary>
+        /// Effective target version: <see cref="LatestVersion"/> if set, otherwise <see cref="Version"/>.
+        /// </summary>
+        [JsonIgnore]
+        public string TargetVersion =>
+            !string.IsNullOrWhiteSpace(LatestVersion) ? LatestVersion.Trim() : (Version ?? string.Empty).Trim();
+
         public string DownloadUrl { get; set; } = "";
         public string Sha256 { get; set; } = "";
         public string ServiceName { get; set; } = "Ergonomy.Service";
