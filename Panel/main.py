@@ -169,6 +169,50 @@ def get_agent_update():
     finally:
         conn.close()
 
+@app.post("/api/updates/report")
+def report_agent_update(payload: Dict[str, Any]):
+    """ثبت نتیجه اعمال به‌روزرسانی عامل (از apply_update.bat)."""
+    conn = get_pg_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_update_reports (
+                id SERIAL PRIMARY KEY,
+                computer_name TEXT,
+                version TEXT,
+                status TEXT,
+                exit_code INTEGER,
+                source_dir TEXT,
+                target_dir TEXT,
+                log_details TEXT,
+                reported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+        cur.execute(
+            """
+            INSERT INTO agent_update_reports
+                (computer_name, version, status, exit_code, source_dir, target_dir, log_details)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                payload.get("computer_name"),
+                payload.get("version"),
+                payload.get("status"),
+                payload.get("exit_code"),
+                payload.get("source_dir"),
+                payload.get("target_dir"),
+                payload.get("log_details"),
+            ),
+        )
+        conn.commit()
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
+
 # ==========================================
 # API نمودار برای داشبورد وب
 # ==========================================
