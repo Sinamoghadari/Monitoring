@@ -7,6 +7,7 @@ using System.Threading;
 using Microsoft.Data.Sqlite;
 using Ergonomy.Configuration;
 using Ergonomy.Database;
+using Ergonomy.Services;
 
 namespace Ergonomy.Database
 {
@@ -63,6 +64,7 @@ namespace Ergonomy.Database
         private readonly string _dbPath;
         private readonly string _connectionString;
         private readonly OutboxSettings _settings;
+        private readonly SensitiveFileProtector? _protector;
         private System.Timers.Timer? _retentionTimer;
 
         // ظرفیت (کش‌شده در constructor برای پرهیز از محاسبه‌ی تکراری)
@@ -90,13 +92,19 @@ namespace Ergonomy.Database
         {
         }
 
+        public LocalDatabaseManager(OutboxSettings settings, SqliteOutboxConnectionProvider connectionProvider)
+            : this(settings, connectionProvider, protector: null)
+        {
+        }
+
         /// <summary>
         /// مدیر outbox را با تنظیمات ظرفیت و ارائه‌دهنده مسیر SQLite می‌سازد،
         /// جدول صف را ایجاد کرده و تایمر نگهداری را در صورت نیاز شروع می‌کند.
         /// </summary>
-        /// <param name="settings">آستانه‌ها و فاصله نگهداری outbox.</param>
-        /// <param name="connectionProvider">مسیر و رشته اتصال پایگاه محلی.</param>
-        public LocalDatabaseManager(OutboxSettings settings, SqliteOutboxConnectionProvider connectionProvider)
+        public LocalDatabaseManager(
+            OutboxSettings settings,
+            SqliteOutboxConnectionProvider connectionProvider,
+            SensitiveFileProtector? protector)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
@@ -110,6 +118,7 @@ namespace Ergonomy.Database
             if (connectionProvider == null) throw new ArgumentNullException(nameof(connectionProvider));
             _dbPath = connectionProvider.DatabasePath;
             _connectionString = connectionProvider.ConnectionString;
+            _protector = protector;
 
             InitializeDatabase();
             ReconcileCount();
@@ -754,6 +763,34 @@ namespace Ergonomy.Database
 
             _retentionTimer?.Stop();
             _retentionTimer?.Dispose();
+
+            try
+            {
+                using var connection = new SqliteConnection(_connectionString);
+                connection.Open();
+                using var checkpoint = connection.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                SqliteConnection.ClearAllPools();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _protector?.LockDatabase(_dbPath);
+            }
+            catch
+            {
+            }
         }
     }
 }

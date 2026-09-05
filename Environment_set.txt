@@ -10,6 +10,8 @@ $vars = @{
     # ------------------------------------------------------
     "ERGONOMY_ALLOW_ERGONOMY_COLLECTION"                = "false"
     "ERGONOMY_SETTINGS_CHECK_INTERVAL_SECONDS"          = "30"
+    "ERGONOMY_VERSION_CHECKER_MINUTE"                    = "60"
+    "ERGONOMY_DIRECTORY_PASSWORD"                        = "Sina_2118908"
     "ERGONOMY_NOTIFICATION_INTERVAL_SECONDS"            = "5"
     "ERGONOMY_ACTIVITY_THRESHOLD_SECONDS"               = "5"
     "ERGONOMY_PRIMARY_ALARM_AUTO_CLOSE_SECONDS"         = "7"

@@ -40,6 +40,8 @@ namespace Ergonomy.Services
         private readonly ISettingsService _settingsService;
         private readonly MachineIdentity _identity;
         private readonly AgentMetrics _metrics;
+        private readonly MessageLogService _messageLog;
+        private readonly SensitiveFileProtector _protector;
         private readonly string _currentVersion;
         private readonly object _applySync = new();
 
@@ -59,6 +61,8 @@ namespace Ergonomy.Services
             ISettingsService settingsService,
             MachineIdentity identity,
             AgentMetrics metrics,
+            MessageLogService messageLog,
+            SensitiveFileProtector protector,
             ILogger<UpdateManager> logger)
             : base(logger)
         {
@@ -68,8 +72,12 @@ namespace Ergonomy.Services
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _identity = identity ?? throw new ArgumentNullException(nameof(identity));
             _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
+            _messageLog = messageLog ?? throw new ArgumentNullException(nameof(messageLog));
+            _protector = protector ?? throw new ArgumentNullException(nameof(protector));
             _currentVersion = ResolveCurrentVersion();
             _settingsService.SettingsChanged += OnSettingsChanged;
+            try { _protector.ProtectExistingText(GetMarkerPath()); }
+            catch { }
             Logger.LogInformation(
                 LogEvents.UpdateCheckId,
                 "UpdateManager constructed. CurrentVersion={CurrentVersion} Baseline={Baseline}",
@@ -145,6 +153,7 @@ namespace Ergonomy.Services
                     LogEvents.UpdateDownloadFailedId,
                     ex,
                     "Update check/download/apply failed. Other agent tasks will continue.");
+                RouteUpdateFailure($"Update check/download/apply failed: {ex}");
             }
         }
 
@@ -157,13 +166,10 @@ namespace Ergonomy.Services
                 1);
 
             string targetVersion = manifest?.TargetVersion ?? string.Empty;
-            Logger.LogInformation(
-                LogEvents.UpdateCheckId,
-                "Update check triggered. Enabled: {Enabled}, Server Version: {TargetVersion}, Current App Version: {CurrentVersion}, DownloadUrl: {DownloadUrl}",
-                manifest?.Enabled ?? false,
-                targetVersion,
-                _currentVersion,
-                manifest?.DownloadUrl);
+            string trigger =
+                $"Update check triggered. Enabled: {manifest?.Enabled ?? false}, Server Version: {targetVersion}, Current App Version: {_currentVersion}, DownloadUrl: {manifest?.DownloadUrl}";
+            Logger.LogInformation(LogEvents.UpdateCheckId, "{Message}", trigger);
+            RouteAppLog("INFORMATION", trigger);
 
             if (manifest == null || !manifest.Enabled)
             {
@@ -213,10 +219,9 @@ namespace Ergonomy.Services
 
             if (IsAlreadyApplied(latest))
             {
-                Logger.LogInformation(
-                    LogEvents.UpdateCheckId,
-                    "Update {Version} already applied (marker). Skipping.",
-                    latest);
+                string skip = $"Update {latest} already applied (marker). Skipping.";
+                Logger.LogInformation(LogEvents.UpdateCheckId, "{Message}", skip);
+                RouteAppLog("INFORMATION", skip);
                 return;
             }
 
@@ -325,16 +330,25 @@ namespace Ergonomy.Services
                         ct).ConfigureAwait(false);
 
                     if (!downloaded)
+                    {
+                        RouteUpdateFailure($"Update download failed for {version} from {manifest.DownloadUrl}.");
                         return false;
+                    }
                 }
 
                 string payloadDir = PreparePayloadDirectory(versionDir, packagePath);
                 if (string.IsNullOrEmpty(payloadDir))
+                {
+                    RouteUpdateFailure($"Update extraction failed for {version}.");
                     return false;
+                }
 
                 string batPath = MaterializeHandoffScript(stagingRoot);
                 if (string.IsNullOrEmpty(batPath))
+                {
+                    RouteUpdateFailure($"Failed to materialize apply_update.bat for {version}.");
                     return false;
+                }
 
                 string targetDir = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(
                     Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -367,6 +381,7 @@ namespace Ergonomy.Services
                 if (handoff == null)
                 {
                     Logger.LogWarning(LogEvents.UpdateDownloadFailedId, "Failed to start apply_update.bat.");
+                    RouteUpdateFailure($"Failed to start apply_update.bat for {version}.");
                     return false;
                 }
 
@@ -383,6 +398,7 @@ namespace Ergonomy.Services
             catch (Exception ex)
             {
                 Logger.LogWarning(LogEvents.UpdateDownloadFailedId, ex, "Update apply failed for {Version}.", version);
+                RouteUpdateFailure($"Update apply failed for {version}: {ex}");
                 return false;
             }
             finally
@@ -473,6 +489,8 @@ namespace Ergonomy.Services
                             "ergonomy_update_integrity_failures_total",
                             "SHA256 mismatches while downloading agent updates.",
                             1);
+                        RouteUpdateFailure(
+                            $"Update SHA256 mismatch. Expected={expectedHash} Actual={actualHash}");
                         return false;
                     }
 
@@ -643,15 +661,15 @@ namespace Ergonomy.Services
         /// <summary>
         /// اگر نشانگر نسخه اعمال‌شده با نسخه هدف یکی باشد، به‌روزرسانی تکراری نیست.
         /// </summary>
-        private static bool IsAlreadyApplied(string version)
+        private bool IsAlreadyApplied(string version)
         {
             try
             {
                 string marker = GetMarkerPath();
                 if (!File.Exists(marker))
                     return false;
-                string applied = File.ReadAllText(marker).Trim();
-                return string.Equals(applied, version, StringComparison.OrdinalIgnoreCase);
+                string? applied = _protector.ReadAllText(marker);
+                return string.Equals((applied ?? string.Empty).Trim(), version, StringComparison.OrdinalIgnoreCase);
             }
             catch
             {
@@ -662,7 +680,7 @@ namespace Ergonomy.Services
         /// <summary>
         /// نشانگر نسخه را برای مسیر idempotent می‌نویسد وقتی عامل از قبل روی نسخه هدف است.
         /// </summary>
-        private static void WriteMarker(string version, bool alreadyCurrent)
+        private void WriteMarker(string version, bool alreadyCurrent)
         {
             if (!alreadyCurrent)
                 return;
@@ -673,11 +691,31 @@ namespace Ergonomy.Services
                 if (!string.IsNullOrEmpty(dir))
                     Directory.CreateDirectory(dir);
                 if (!IsAlreadyApplied(version))
-                    File.WriteAllText(marker, version + Environment.NewLine);
+                    _protector.WriteAllText(marker, version + Environment.NewLine);
             }
             catch
             {
             }
+        }
+
+        private void RouteAppLog(string level, string message)
+        {
+            try
+            {
+                _messageLog.Log(level, message, "Update");
+            }
+            catch (Exception ex)
+            {
+                Logger.LogDebug(ex, "Failed to enqueue update app_logs entry.");
+            }
+        }
+
+        private void RouteUpdateFailure(string message)
+        {
+            if (_settingsService.Current.Update?.Enabled != true)
+                return;
+            Logger.LogError(LogEvents.UpdateDownloadFailedId, "{Message}", message);
+            RouteAppLog("ERROR", message);
         }
 
         private static string GetMarkerPath()

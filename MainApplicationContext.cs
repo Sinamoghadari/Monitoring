@@ -31,6 +31,7 @@ namespace Ergonomy
         private readonly HealthMonitorWorker _healthMonitorWorker;
         private readonly PermissionMonitorWorker _permissionMonitorWorker;
         private readonly AdvancedMetricsWorker _advancedMetricsWorker;
+        private readonly VersionHeartbeatWorker _versionHeartbeatWorker;
         private readonly MetricsEndpoint _metricsEndpoint;
         private readonly MachineIdentity _identity;
         private readonly WakeUpScheduler _wakeUpScheduler;
@@ -75,6 +76,7 @@ namespace Ergonomy
             MessageLogService messageLog,
             PermissionsEvaluator permissions,
             AdvancedMetricsWorker advancedMetricsWorker,
+            VersionHeartbeatWorker versionHeartbeatWorker,
             SettingsRefreshWorker settingsRefreshWorker,
             HealthMonitorWorker healthMonitorWorker,
             PermissionMonitorWorker permissionMonitorWorker,
@@ -95,6 +97,7 @@ namespace Ergonomy
             _messageLog = messageLog;
             _permissions = permissions;
             _advancedMetricsWorker = advancedMetricsWorker;
+            _versionHeartbeatWorker = versionHeartbeatWorker ?? throw new ArgumentNullException(nameof(versionHeartbeatWorker));
             _settingsRefreshWorker = settingsRefreshWorker;
             _healthMonitorWorker = healthMonitorWorker;
             _permissionMonitorWorker = permissionMonitorWorker;
@@ -153,6 +156,7 @@ namespace Ergonomy
 
             _updateManager.OnShutdownRequested = RequestUpdateShutdown;
             _updateManager.Start();
+            _versionHeartbeatWorker.Start();
 
             // Internal Prometheus scrape endpoint (no new Kafka/SQLite pipeline).
             StartMetricsEndpoint();
@@ -242,6 +246,7 @@ namespace Ergonomy
             _healthMonitorWorker.Stop();
             _permissionMonitorWorker.Stop();
             _updateManager.Stop();
+            _versionHeartbeatWorker.Stop();
 
             double sleepMinutes = _settingsService.Current.ConnectionFailureSleepMinutes;
             _wakeUpScheduler.Schedule(TimeSpan.FromMinutes(sleepMinutes), WakeUpAsync);
@@ -262,6 +267,7 @@ namespace Ergonomy
             _permissionMonitorWorker.Start();
             _commandManager.Start();
             _updateManager.Start();
+            _versionHeartbeatWorker.Start();
         }
 
         /// <summary>
@@ -273,19 +279,23 @@ namespace Ergonomy
         {
             try
             {
+                string? processPath = Environment.ProcessPath;
+                if (!string.IsNullOrWhiteSpace(processPath) && System.IO.File.Exists(processPath))
+                {
+                    var associated = System.Drawing.Icon.ExtractAssociatedIcon(processPath);
+                    if (associated != null)
+                        return associated;
+                }
+
                 string icoPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "app_icon.ico");
                 if (System.IO.File.Exists(icoPath))
-                {
                     return new System.Drawing.Icon(icoPath);
-                }
 
                 string pngPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "app_icon.png");
                 if (System.IO.File.Exists(pngPath))
                 {
-                    using (var bmp = new System.Drawing.Bitmap(pngPath))
-                    {
-                        return System.Drawing.Icon.FromHandle(bmp.GetHicon());
-                    }
+                    using var bmp = new System.Drawing.Bitmap(pngPath);
+                    return System.Drawing.Icon.FromHandle(bmp.GetHicon());
                 }
             }
             catch { }
@@ -307,6 +317,7 @@ namespace Ergonomy
                 _healthMonitorWorker.Stop();
                 _permissionMonitorWorker.Stop();
                 _advancedMetricsWorker.Stop();
+                _versionHeartbeatWorker.Stop();
                 _updateManager.OnShutdownRequested = null;
                 _updateManager.Stop();
 

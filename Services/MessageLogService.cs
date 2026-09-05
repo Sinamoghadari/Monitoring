@@ -20,12 +20,6 @@ namespace Ergonomy.Services
         private readonly ILogger<MessageLogService> _logger;
         private int _disposed;
 
-        /// <summary>
-        /// کانال لاگ تشخیصی را با صف SQLite، هویت ماشین و ثبت‌کننده ساختاریافته می‌سازد.
-        /// </summary>
-        /// <param name="localDb">صف محلی برای ذخیره رکوردهای app_logs.</param>
-        /// <param name="identity">هویت کاربر و ماشین برای برچسب لاگ.</param>
-        /// <param name="logger">ثبت‌کننده کنسول.</param>
         public MessageLogService(
             LocalDatabaseManager localDb,
             MachineIdentity identity,
@@ -36,85 +30,59 @@ namespace Ergonomy.Services
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
-        /// <summary>
-        /// یک ورودی تشخیصی را در کنسول می‌نویسد و همان را در صف SQLite با هدف app_logs ذخیره می‌کند.
-        /// </summary>
-        /// <param name="level">سطح لاگ مانند INFO یا ERROR.</param>
-        /// <param name="message">متن پیام تشخیصی.</param>
         public void Log(string level, string message)
         {
             Log(level, message, "General");
         }
 
         /// <summary>
-        /// یک ورودی تشخیصی را با دسته مشخص در کنسول و outbox app_logs ثبت می‌کند.
-        /// اگر دسته خالی باشد مقدار General استفاده می‌شود.
+        /// Enqueues a schema-compliant app_logs payload (UTC ISO 8601 CollectedAt, Shamsi,
+        /// identity fields) and mirrors it to the structured console logger.
         /// </summary>
         public void Log(string level, string message, string category)
         {
             if (string.IsNullOrWhiteSpace(category))
                 category = "General";
 
+            string normalized = NormalizeLevel(level);
+
             _logger.LogInformation(
                 "AgentLog Level={LogLevel} Category={Category} Message={Message}",
-                level,
+                normalized,
                 category,
                 message);
 
-            DateTime currentTime = DateTime.Now;
-            PersianCalendar pc = new PersianCalendar();
-
-            var logEntry = new
-            {
-                CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                CollectedAt_Shamsi =
-                    $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/" +
-                    $"{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
-                LogLevel = level,
-                Message = message,
-                Category = category,
-                WindowsUsername = _identity.WindowsUsername,
-                WindowsSid = _identity.WindowsSid,
-                MachineName = _identity.MachineName
-            };
-
-            try
-            {
-                _localDb.SaveUserActivity(QueueTargets.AppLogs, logEntry);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to enqueue app_logs entry.");
-            }
+            Enqueue(normalized, message, category, reportConsole: false);
         }
 
-        /// <summary>
-        /// نتیجه یک پروب سلامت را با دسته مشخص در outbox ثبت کرده و در صورت نیاز در کنسول گزارش می‌دهد.
-        /// </summary>
-        /// <param name="logLevel">سطح نتیجه پروب.</param>
-        /// <param name="message">شرح وضعیت سلامت.</param>
-        /// <param name="category">دسته پروب مانند ApiHealth یا SqliteHealth.</param>
-        /// <param name="reportConsole">اگر true باشد نتیجه در کنسول هم نوشته می‌شود.</param>
         public void LogHealth(
             string logLevel,
             string message,
             string category,
             bool reportConsole = true)
         {
-            DateTime currentTime = DateTime.Now;
+            Enqueue(NormalizeLevel(logLevel), message, category, reportConsole);
+        }
+
+        private void Enqueue(string logLevel, string message, string category, bool reportConsole)
+        {
+            DateTime utc = DateTime.UtcNow;
+            DateTime local = utc.ToLocalTime();
             PersianCalendar pc = new PersianCalendar();
 
-            var logObj = new
+            var logEntry = new
             {
-                CollectedAt = currentTime.ToString("yyyy-MM-dd HH:mm:ss"),
+                CollectedAt = utc.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
                 CollectedAt_Shamsi =
-                    $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/" +
-                    $"{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}",
+                    $"{pc.GetYear(local):0000}/{pc.GetMonth(local):00}/" +
+                    $"{pc.GetDayOfMonth(local):00} {local:HH:mm:ss}",
                 LogLevel = logLevel,
-                Message = message,
+                Message = message ?? string.Empty,
                 WindowsUsername = _identity.WindowsUsername,
                 WindowsSid = _identity.WindowsSid,
-                MachineName = Environment.MachineName,
+                MachineName = _identity.MachineName,
+                ComputerName = _identity.MachineName,
+                WindowsUsername_RunAdmin = _identity.WindowsUsernameRunAdmin,
                 Category = category
             };
 
@@ -123,21 +91,33 @@ namespace Ergonomy.Services
 
             try
             {
-                var result = _localDb.SaveUserActivity(QueueTargets.AppLogs, logObj);
+                var result = _localDb.SaveUserActivity(QueueTargets.AppLogs, logEntry);
                 if (result != OutboxSaveResult.Saved)
                     _logger.LogWarning(
-                        "Health log for {Category} not saved. Result: {Result}",
+                        "app_logs entry for {Category} not saved. Result: {Result}",
                         category, result);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to enqueue health log for {Category}.", category);
+                _logger.LogError(ex, "Failed to enqueue app_logs entry for {Category}.", category);
             }
         }
 
-        /// <summary>
-        /// وضعیت آزادسازی را علامت می‌زند؛ این سرویس منبع خارجی مستقلی ندارد.
-        /// </summary>
+        internal static string NormalizeLevel(string? level)
+        {
+            if (string.IsNullOrWhiteSpace(level))
+                return "INFORMATION";
+
+            return level.Trim().ToUpperInvariant() switch
+            {
+                "INFO" or "INFORMATION" => "INFORMATION",
+                "WARN" or "WARNING" => "WARNING",
+                "ERR" or "ERROR" => "ERROR",
+                "FATAL" or "CRIT" or "CRITICAL" => "CRITICAL",
+                _ => level.Trim().ToUpperInvariant()
+            };
+        }
+
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0)

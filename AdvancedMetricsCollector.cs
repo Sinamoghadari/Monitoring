@@ -60,31 +60,18 @@ public class AdvancedMetricsCollector
         
         var EnabledMetrics = new Dictionary<string, object>();
 
-        DateTime currentTime = DateTime.Now;
+        DateTime utcNow = DateTime.UtcNow;
+        DateTime currentTime = utcNow.ToLocalTime();
 
-        EnabledMetrics["CollectedAt"] = currentTime.ToString("yyyy-MM-dd HH:mm:ss");
+        EnabledMetrics["CollectedAt"] = utcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
 
         PersianCalendar pc = new PersianCalendar();
         EnabledMetrics["CollectedAt_Shamsi"] = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}";
-        
+
         EnabledMetrics["ComputerName"] = Environment.MachineName;
-
-        if (_enabledMetrics.Contains("WindowsSid")) EnabledMetrics["WindowsSid"] = WindowsIdentity.GetCurrent().User?.Value ?? "Unknown";
-        
-        // --- تغییرات مربوط به WindowsUsername و WindowsUsername_RunAdmin ---
-         EnabledMetrics["WindowsUsername_RunAdmin"] = WindowsIdentity.GetCurrent().Name ?? "";
-
-        if (_enabledMetrics.Contains("WindowsUsername")) 
-        {
-            // ابتدا تلاش برای یافتن کاربر explorer.exe، سپس WMI، و در نهایت بازگشت به کاربر فعلی پراسس
-            EnabledMetrics["WindowsUsername"] = GetExplorerUser() ?? GetInteractiveWindowsUsername() ?? WindowsIdentity.GetCurrent().Name;
-        }
-        else 
-        {
-            // اگر در تنظیمات فعال نبود هم کلید آن را با مقدار خالی می‌فرستیم تا ساختار حفظ شود
-            EnabledMetrics["WindowsUsername"] = "";
-        }
-        // ----------------------------------------------------------------------
+        EnabledMetrics["WindowsSid"] = WindowsIdentity.GetCurrent().User?.Value ?? "Unknown";
+        EnabledMetrics["WindowsUsername_RunAdmin"] = WindowsIdentity.GetCurrent().Name ?? "";
+        EnabledMetrics["WindowsUsername"] = GetExplorerUser() ?? GetInteractiveWindowsUsername() ?? WindowsIdentity.GetCurrent().Name ?? "";
 
         if (_enabledMetrics.Contains("MotherboardSerial")) EnabledMetrics["MotherboardSerial"] = GetMotherboardSerial();
 

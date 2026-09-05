@@ -39,11 +39,15 @@ set "STATUS=SUCCESS"
 set "EXITCODE=0"
 set "DETAILS=update started"
 set "ROBOCOPY_RC=0"
+set "UPDATES_ROOT=%ProgramData%\Ergonomy\updates"
+set "LOGDIR=%ProgramData%\Ergonomy\update-logs"
+
+if not exist "%LOGDIR%\" mkdir "%LOGDIR%" >nul 2>&1
 
 if "%VERSION%"=="" (
-  set "LOGFILE=%TEMP%\update_exec_unknown.log"
+  set "LOGFILE=%LOGDIR%\update_exec_unknown.log"
 ) else (
-  set "LOGFILE=%TEMP%\update_exec_%VERSION%.log"
+  set "LOGFILE=%LOGDIR%\update_exec_%VERSION%.log"
 )
 
 echo [%DATE% %TIME%] apply_update start VERSION=%VERSION% SOURCE="%SOURCE%" TARGET="%TARGET%" PID=%PID% > "%LOGFILE%"
@@ -67,6 +71,7 @@ if exist "%MARKER%" (
     set "STATUS=ALREADY_APPLIED"
     set "EXITCODE=0"
     set "DETAILS=Version %VERSION% already applied; skipping copy and ensuring process is running."
+    call :cleanup
     goto :restart
   )
 )
@@ -122,6 +127,7 @@ if not "%MARKER%"=="" (
 set "STATUS=SUCCESS"
 set "EXITCODE=0"
 set "DETAILS=robocopy succeeded RC=!ROBOCOPY_RC! after !ATTEMPT! attempt(s). Version %VERSION% applied."
+call :cleanup
 
 :restart
 if not "%SERVICE%"=="" (
@@ -165,9 +171,29 @@ echo [%DATE% %TIME%] %*
 goto :eof
 
 REM -----------------------------------------------------------------------------
+REM Delete staging archives and extracted payload folders. Keep applied_version.
+:cleanup
+call :log Cleaning staging artifacts under "%UPDATES_ROOT%"
+if not exist "%UPDATES_ROOT%\" goto :eof
+for /d %%D in ("%UPDATES_ROOT%\*") do (
+  rd /s /q "%%D" >nul 2>&1
+)
+del /q "%UPDATES_ROOT%\*.zip" >nul 2>&1
+del /q "%UPDATES_ROOT%\*.bin" >nul 2>&1
+del /q "%UPDATES_ROOT%\*.partial" >nul 2>&1
+goto :eof
+
+REM -----------------------------------------------------------------------------
 REM POST JSON report to FastAPI. Best-effort: curl failure does not change exit code.
 :report
 set "JSONFILE=%TEMP%\update_report_%VERSION%_%RANDOM%.json"
+set "COLLECTED_AT="
+set "WINSID="
+set "WINUSER=%USERNAME%"
+set "WINUSER_ADMIN=%USERDOMAIN%\%USERNAME%"
+
+for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')"`) do set "COLLECTED_AT=%%I"
+for /f "usebackq tokens=2 delims=," %%I in (`whoami /user /fo csv /nh`) do set "WINSID=%%~I"
 
 set "ESC_SOURCE=!SOURCE:\=\\!"
 set "ESC_TARGET=!TARGET:\=\\!"
@@ -186,7 +212,12 @@ call :log Reporting status=!STATUS! exit_code=!EXITCODE! to !REPORT_URL!
   echo   "exit_code": !EXITCODE!,
   echo   "source_dir": "!ESC_SOURCE!",
   echo   "target_dir": "!ESC_TARGET!",
-  echo   "log_details": "!ESC_DETAILS!"
+  echo   "log_details": "!ESC_DETAILS!",
+  echo   "CollectedAt": "!COLLECTED_AT!",
+  echo   "ComputerName": "%COMPUTERNAME%",
+  echo   "WindowsSid": "!WINSID!",
+  echo   "WindowsUsername_RunAdmin": "!WINUSER_ADMIN!",
+  echo   "WindowsUsername": "!WINUSER!"
   echo }
 ) > "!JSONFILE!"
 

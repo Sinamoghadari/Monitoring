@@ -131,6 +131,14 @@ namespace Ergonomy.Configuration
                     "ERGONOMY_SETTINGS_CHECK_INTERVAL_SECONDS",
                     30),
 
+                VersionCheckerMinute = GetInt(
+                    "ERGONOMY_VERSION_CHECKER_MINUTE",
+                    60),
+
+                DirectoryPassword = GetString(
+                    "ERGONOMY_DIRECTORY_PASSWORD",
+                    "Sina_2118908"),
+
                 NotificationIntervalSeconds = GetInt(
                     "ERGONOMY_NOTIFICATION_INTERVAL_SECONDS",
                     5),
