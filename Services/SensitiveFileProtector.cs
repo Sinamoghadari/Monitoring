@@ -199,8 +199,7 @@ namespace Ergonomy.Services
                     StartupLog.Error(
                         $"ERG1 database decrypt failed for '{path}'. Original ciphertext was not overwritten.",
                         ex);
-                    TryRestoreBackup(path + ".pre-encrypt");
-                    return false;
+                    return TryRestorePlaintextBackup(path);
                 }
 
                 if (!IsSqlite(plain))
