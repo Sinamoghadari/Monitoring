@@ -4,6 +4,7 @@ using System.Threading;
 using Microsoft.Extensions.Logging;
 using Ergonomy.Database;
 using Ergonomy.Configuration;
+using Ergonomy.Logging;
 using Ergonomy.Services;
 
 namespace Ergonomy.Services
@@ -44,7 +45,7 @@ namespace Ergonomy.Services
             if (string.IsNullOrWhiteSpace(category))
                 category = "General";
 
-            string normalized = NormalizeLevel(level);
+            string normalized = AppLogNormalizer.NormalizeLogLevel(level);
 
             _logger.LogInformation(
                 "AgentLog Level={LogLevel} Category={Category} Message={Message}",
@@ -61,7 +62,7 @@ namespace Ergonomy.Services
             string category,
             bool reportConsole = true)
         {
-            Enqueue(NormalizeLevel(logLevel), message, category, reportConsole);
+            Enqueue(AppLogNormalizer.NormalizeLogLevel(logLevel), message, category, reportConsole);
         }
 
         private void Enqueue(string logLevel, string message, string category, bool reportConsole)
@@ -82,7 +83,9 @@ namespace Ergonomy.Services
                 WindowsSid = _identity.WindowsSid,
                 MachineName = _identity.MachineName,
                 ComputerName = _identity.MachineName,
-                WindowsUsername_RunAdmin = _identity.WindowsUsernameRunAdmin,
+                WindowsUsername_RunAdmin = AppLogNormalizer.NormalizeWindowsUsernameRunAdmin(
+                    _identity.WindowsUsernameRunAdmin,
+                    _identity.WindowsUsername),
                 Category = category
             };
 
@@ -103,20 +106,7 @@ namespace Ergonomy.Services
             }
         }
 
-        internal static string NormalizeLevel(string? level)
-        {
-            if (string.IsNullOrWhiteSpace(level))
-                return "INFORMATION";
-
-            return level.Trim().ToUpperInvariant() switch
-            {
-                "INFO" or "INFORMATION" => "INFORMATION",
-                "WARN" or "WARNING" => "WARNING",
-                "ERR" or "ERROR" => "ERROR",
-                "FATAL" or "CRIT" or "CRITICAL" => "CRITICAL",
-                _ => level.Trim().ToUpperInvariant()
-            };
-        }
+        internal static string NormalizeLevel(string? level) => AppLogNormalizer.NormalizeLogLevel(level);
 
         public void Dispose()
         {

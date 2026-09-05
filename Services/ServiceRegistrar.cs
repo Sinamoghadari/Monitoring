@@ -166,21 +166,18 @@ namespace Ergonomy.Services
         }
 
         /// <summary>
-        /// Process identity plus elevation flag, matching AdvancedMetricsCollector's
-        /// <c>WindowsUsername_RunAdmin</c> payload field.
+        /// Windows username for <c>WindowsUsername_RunAdmin</c>. Elevation is not included;
+        /// that field is a username only.
         /// </summary>
         private static string GetWindowsUsernameRunAdmin()
         {
             try
             {
-                var identity = WindowsIdentity.GetCurrent();
-                bool elevated = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
-                string name = identity.Name ?? Environment.UserName;
-                return $"{name}|Elevated={elevated}";
+                return WindowsIdentity.GetCurrent()?.Name ?? Environment.UserName;
             }
             catch
             {
-                return $"{Environment.UserName}|Elevated=False";
+                return Environment.UserName;
             }
         }
     }

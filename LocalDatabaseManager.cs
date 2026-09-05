@@ -7,6 +7,7 @@ using System.Threading;
 using Microsoft.Data.Sqlite;
 using Ergonomy.Configuration;
 using Ergonomy.Database;
+using Ergonomy.Logging;
 using Ergonomy.Services;
 
 namespace Ergonomy.Database
@@ -414,6 +415,11 @@ namespace Ergonomy.Database
             try
             {
                 string jsonData = SerializePayload(dataObject);
+                bool isAppLogs = string.Equals(
+                    normalizedTargetTable,
+                    QueueTargets.AppLogs,
+                    StringComparison.OrdinalIgnoreCase);
+                jsonData = AppLogNormalizer.NormalizePayloadJson(jsonData, normalizeLogLevel: isAppLogs);
 
                 string recordId = Guid.NewGuid().ToString();
                 string messageId = recordId;

@@ -384,6 +384,7 @@ namespace Ergonomy.Database
                     if (metrics == null)
                         throw new JsonException("Advanced system metrics payload was null.");
 
+                    AppLogNormalizer.NormalizeDictionary(metrics, normalizeLogLevel: false);
                     await _kafkaConnect.SendSystemMetricsAsync(record.MessageId, metrics, cancellationToken).ConfigureAwait(false);
                     break;
                 }
@@ -408,6 +409,7 @@ namespace Ergonomy.Database
                     if (logData == null)
                         throw new JsonException("App log payload was null.");
 
+                    AppLogNormalizer.NormalizeDictionary(logData, normalizeLogLevel: true);
                     await _kafkaConnect.SendAppLogAsync(record.MessageId, logData, cancellationToken).ConfigureAwait(false);
                     break;
                 }

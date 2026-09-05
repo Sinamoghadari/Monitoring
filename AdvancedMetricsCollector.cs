@@ -71,11 +71,11 @@ public class AdvancedMetricsCollector
         EnabledMetrics["ComputerName"] = Environment.MachineName;
         var processIdentity = WindowsIdentity.GetCurrent();
         EnabledMetrics["WindowsSid"] = processIdentity.User?.Value ?? "Unknown";
-        bool elevated = false;
-        try { elevated = new WindowsPrincipal(processIdentity).IsInRole(WindowsBuiltInRole.Administrator); }
-        catch { }
-        EnabledMetrics["WindowsUsername_RunAdmin"] = $"{processIdentity.Name ?? ""}|Elevated={elevated}";
-        EnabledMetrics["WindowsUsername"] = GetExplorerUser() ?? GetInteractiveWindowsUsername() ?? processIdentity.Name ?? "";
+        string windowsUsername = GetExplorerUser() ?? GetInteractiveWindowsUsername() ?? processIdentity.Name ?? "";
+        EnabledMetrics["WindowsUsername"] = windowsUsername;
+        EnabledMetrics["WindowsUsername_RunAdmin"] = Ergonomy.Logging.AppLogNormalizer.NormalizeWindowsUsernameRunAdmin(
+            processIdentity.Name ?? windowsUsername,
+            windowsUsername);
 
         if (_enabledMetrics.Contains("MotherboardSerial")) EnabledMetrics["MotherboardSerial"] = GetMotherboardSerial();
 

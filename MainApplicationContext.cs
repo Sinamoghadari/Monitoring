@@ -266,13 +266,7 @@ namespace Ergonomy
             if (!isUpdatePipeline)
                 return;
 
-            string mapped = level switch
-            {
-                LogLevel.Critical => "CRITICAL",
-                LogLevel.Error => "ERROR",
-                LogLevel.Warning => "WARNING",
-                _ => "INFORMATION"
-            };
+            string mapped = AppLogNormalizer.FromMicrosoftLogLevel(level);
 
             if (exception != null)
                 message = string.IsNullOrWhiteSpace(message)
@@ -376,7 +370,7 @@ namespace Ergonomy
             try
             {
                 StartupLog.Error("Critical runtime error: " + errorMessage);
-                _messageLog.Log("FATAL", $"Critical error occurred: {errorMessage}. Forcing system to sleep state.");
+                _messageLog.Log("ERROR", $"Critical error occurred: {errorMessage}. Forcing system to sleep state.");
                 GoToSleepAndRetry();
             }
             catch (Exception ex)

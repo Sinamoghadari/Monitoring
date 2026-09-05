@@ -1,4 +1,5 @@
 using System;
+using Ergonomy.Logging;
 
 namespace Ergonomy.Services
 {
@@ -26,9 +27,9 @@ namespace Ergonomy.Services
         {
             WindowsSid = windowsSid;
             WindowsUsername = windowsUsername;
-            WindowsUsernameRunAdmin = string.IsNullOrWhiteSpace(windowsUsernameRunAdmin)
-                ? windowsUsername
-                : windowsUsernameRunAdmin;
+            WindowsUsernameRunAdmin = AppLogNormalizer.NormalizeWindowsUsernameRunAdmin(
+                windowsUsernameRunAdmin,
+                windowsUsername);
             MachineName = machineName;
             SessionGuid = Guid.NewGuid().ToString();
         }

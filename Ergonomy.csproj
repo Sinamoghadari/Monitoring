@@ -29,10 +29,10 @@
     globs must not compile them into this legacy assembly.
   -->
   <ItemGroup>
-    <Compile Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**" />
-    <EmbeddedResource Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**" />
-    <None Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**" />
-    <Content Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**" />
+    <Compile Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**;Ergonomy.Core.Tests\**" />
+    <EmbeddedResource Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**;Ergonomy.Core.Tests\**" />
+    <None Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**;Ergonomy.Core.Tests\**" />
+    <Content Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**;Ergonomy.Core.Tests\**" />
   </ItemGroup>
 
   <ItemGroup>

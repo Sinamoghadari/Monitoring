@@ -76,7 +76,7 @@ namespace Ergonomy.Services
 
             string msg =
                 $"[SQLite Status] Permission: {allowSqlite} | Checking continuously every {intervalHours} hour(s).";
-            _log.Log("INFO", msg);
+            _log.Log("INFORMATION", msg);
 
             if (allowSqlite)
             {
@@ -121,7 +121,7 @@ namespace Ergonomy.Services
 
             string msg =
                 $"[Kafka Sync Status] Permission: {allowKafka} | Checking continuously every {intervalHours} hour(s).";
-            _log.Log("INFO", msg);
+            _log.Log("INFORMATION", msg);
 
             if (allowSqlite && allowKafka)
             {
@@ -131,7 +131,7 @@ namespace Ergonomy.Services
                     {
                         _syncEngine.Start();
                         _syncRunning = true;
-                        _log.Log("INFO", "Sync Engine Started (Kafka Allowed).");
+                        _log.Log("INFORMATION", "Sync Engine Started (Kafka Allowed).");
                     }
                 }
             }
@@ -162,13 +162,13 @@ namespace Ergonomy.Services
 
             string msg =
                 $"[Ergonomy Status] Permission: {allowErgonomy} | Source: {(_settingsService.SettingsSourceIsApi ? "API" : "Bootstrap/Environment")}";
-            _log.Log("INFO", msg);
+            _log.Log("INFORMATION", msg);
 
             if (allowErgonomy)
             {
                 _ergonomyManager.Start();
                 _log.Log(
-                    "INFO",
+                    "INFORMATION",
                     _ergonomyManager.IsRunning
                         ? "ErgonomyCollection: manager started successfully (hooks/timers active)."
                         : "ErgonomyCollection: permission true but manager did NOT start.");
@@ -196,7 +196,7 @@ namespace Ergonomy.Services
             _advancedMetricsWorker.Stop();
             _advancedMetricsWorker.Start();
             lock (_sync) _localCollectionRunning = true;
-            _log.Log("INFO", "Local System Metrics Collection Started.");
+            _log.Log("INFORMATION", "Local System Metrics Collection Started.");
         }
 
         /// <summary>
