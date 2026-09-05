@@ -70,13 +70,30 @@ namespace Ergonomy.Logging
 
         /// <summary>
         /// Normalizes LogLevel and WindowsUsername_RunAdmin on a mutable payload dictionary
-        /// (anonymous objects serialized to JSON, or JsonElement dictionaries from the outbox).
+        /// (JsonElement dictionaries from the outbox, or metrics payloads).
+        /// object? and object dictionary overloads cannot coexist: nullable annotation
+        /// erasure makes them the same CLR signature (CS0111).
         /// </summary>
-        public static void NormalizeDictionary(IDictionary<string, object?> payload, bool normalizeLogLevel = true)
+        public static void NormalizeDictionary(IDictionary<string, object> payload, bool normalizeLogLevel = true)
         {
             if (payload == null)
                 return;
 
+            var boxed = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kv in payload)
+                boxed[kv.Key] = kv.Value;
+
+            Apply(boxed, normalizeLogLevel);
+
+            foreach (var kv in boxed)
+            {
+                if (kv.Value != null)
+                    payload[kv.Key] = kv.Value;
+            }
+        }
+
+        private static void Apply(Dictionary<string, object?> payload, bool normalizeLogLevel)
+        {
             if (normalizeLogLevel)
                 SetString(payload, "LogLevel", NormalizeLogLevel(GetString(payload, "LogLevel")));
 
@@ -88,28 +105,6 @@ namespace Ergonomy.Logging
                     NormalizeWindowsUsernameRunAdmin(
                         GetString(payload, "WindowsUsername_RunAdmin"),
                         GetString(payload, "WindowsUsername")));
-            }
-        }
-
-        /// <summary>
-        /// Same as <see cref="NormalizeDictionary"/> for non-nullable object dictionaries
-        /// produced by <c>JsonSerializer.Deserialize&lt;Dictionary&lt;string, object&gt;&gt;</c>.
-        /// </summary>
-        public static void NormalizeDictionary(IDictionary<string, object> payload, bool normalizeLogLevel = true)
-        {
-            if (payload == null)
-                return;
-
-            var boxed = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var kv in payload)
-                boxed[kv.Key] = kv.Value;
-
-            NormalizeDictionary(boxed, normalizeLogLevel);
-
-            foreach (var kv in boxed)
-            {
-                if (kv.Value != null)
-                    payload[kv.Key] = kv.Value;
             }
         }
 
