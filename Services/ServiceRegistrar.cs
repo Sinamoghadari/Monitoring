@@ -67,8 +67,16 @@ namespace Ergonomy.Services
 
             services.AddSingleton<KafkaConnect>(sp =>
             {
-                KafkaSettings k = sp.GetRequiredService<AppSettings>().Kafka!;
-                return new KafkaConnect(k);
+                try
+                {
+                    KafkaSettings? k = sp.GetRequiredService<AppSettings>().Kafka;
+                    return new KafkaConnect(k ?? new KafkaSettings());
+                }
+                catch (Exception ex)
+                {
+                    StartupLog.Error("KafkaConnect factory failed; using a fail-safe instance so the tray can start.", ex);
+                    return new KafkaConnect(new KafkaSettings());
+                }
             });
 
             // Observability (Prometheus scrape endpoint; no new Kafka/SQLite pipeline).

@@ -120,8 +120,20 @@ namespace Ergonomy.Database
             _connectionString = connectionProvider.ConnectionString;
             _protector = protector;
 
-            InitializeDatabase();
-            ReconcileCount();
+            try
+            {
+                InitializeDatabase();
+                ReconcileCount();
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] SQLite outbox initialized.");
+                StartupLog.Info("local DB initialized");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ❌ SQLite outbox initialization failed; tray will continue. {ex.Message}");
+                StartupLog.Error("local DB initialization failed; tray will continue.", ex);
+            }
 
             if (_settings.RetentionCheckIntervalSeconds > 0)
             {
@@ -133,9 +145,6 @@ namespace Ergonomy.Database
                 _retentionTimer.Elapsed += OnRetentionTimerElapsed;
                 _retentionTimer.Start();
             }
-
-            Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss}] SQLite outbox initialized.");
         }
 
         /// <summary>

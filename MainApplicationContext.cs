@@ -43,6 +43,10 @@ namespace Ergonomy
         private readonly UpdateManager _updateManager;
 
         private NotifyIcon? _notifyIcon;
+        private Icon? _ownedIcon;
+        private Form? _keepAliveForm;
+        private bool _messageLoopEntered;
+        private bool _backgroundStarted;
         private bool _isDisposed;
 
         /// <summary>
@@ -136,34 +140,110 @@ namespace Ergonomy
 
             ConsoleStructuredLogProvider.AppLogsSink = ForwardConsoleLogToAppLogs;
 
+            _keepAliveForm = CreateKeepAliveForm();
+            MainForm = _keepAliveForm;
+
+            _ownedIcon = LoadAppIcon();
             _notifyIcon = new NotifyIcon
             {
-                Icon = LoadAppIcon(),
+                Icon = _ownedIcon,
                 Visible = true,
                 Text = "Ergonomy"
             };
+            StartupLog.Info("NotifyIcon initialized");
 
             _settingsService.SettingsChanged += OnSettingsChanged;
-
-            // SettingsRefreshWorker performs the initial API refresh off the UI thread.
-
-            // Initial permission evaluation (starts local/sync/ergonomics as permitted).
-            _permissions.EvaluateAll();
-
-            // Start the extracted periodic workers.
-            _settingsRefreshWorker.Start();
-            _healthMonitorWorker.Start();
-            _permissionMonitorWorker.Start();
-            _commandManager.Start();
-
             _updateManager.OnShutdownRequested = RequestUpdateShutdown;
-            _updateManager.Start();
-            _versionHeartbeatWorker.Start();
 
-            // Internal Prometheus scrape endpoint (no new Kafka/SQLite pipeline).
-            StartMetricsEndpoint();
+            // Workers, Kafka probes, update checks, and permission evaluation run after the
+            // WinForms message loop is pumping so a failure or ExitThread cannot abort startup.
+            Application.Idle += OnApplicationIdle;
+
+            _logger.LogInformation("MainApplicationContext created. Background workers will start after Application.Run.");
+        }
+
+        private Form CreateKeepAliveForm()
+        {
+            var form = new Form
+            {
+                FormBorderStyle = FormBorderStyle.FixedToolWindow,
+                ShowInTaskbar = false,
+                StartPosition = FormStartPosition.Manual,
+                Location = new Point(-32000, -32000),
+                Size = new Size(1, 1),
+                Opacity = 0,
+                ShowIcon = false,
+                Text = "Ergonomy",
+                WindowState = FormWindowState.Minimized
+            };
+            form.Shown += (_, _) =>
+            {
+                try { form.Hide(); }
+                catch { }
+            };
+            form.FormClosing += (_, e) =>
+            {
+                if (!_isDisposed)
+                {
+                    e.Cancel = true;
+                    try { form.Hide(); }
+                    catch { }
+                }
+            };
+            return form;
+        }
+
+        private void OnApplicationIdle(object? sender, EventArgs e)
+        {
+            Application.Idle -= OnApplicationIdle;
+            _messageLoopEntered = true;
+            StartBackgroundServices();
+        }
+
+        private void StartBackgroundServices()
+        {
+            if (_backgroundStarted)
+                return;
+            _backgroundStarted = true;
+
+            try
+            {
+                _permissions.EvaluateAll();
+            }
+            catch (Exception ex)
+            {
+                StartupLog.Error("Initial permission evaluation failed; tray will continue.", ex);
+            }
+
+            TryStartWorker("settings-refresh", () => _settingsRefreshWorker.Start());
+            TryStartWorker("health-monitor", () => _healthMonitorWorker.Start());
+            TryStartWorker("permission-monitor", () => _permissionMonitorWorker.Start());
+            TryStartWorker("command-manager", () => _commandManager.Start());
+            TryStartWorker("update-manager", () => _updateManager.Start());
+            TryStartWorker("version-heartbeat", () => _versionHeartbeatWorker.Start());
+
+            try
+            {
+                StartMetricsEndpoint();
+            }
+            catch (Exception ex)
+            {
+                StartupLog.Error("Metrics endpoint failed to start; tray will continue.", ex);
+            }
 
             _logger.LogInformation("MainApplicationContext started. Workers: settings, health, permission, advanced-metrics.");
+        }
+
+        private void TryStartWorker(string name, Action start)
+        {
+            try
+            {
+                start();
+            }
+            catch (Exception ex)
+            {
+                StartupLog.Error($"Background worker '{name}' failed to start; tray will continue.", ex);
+            }
         }
 
         /// <summary>
@@ -215,17 +295,35 @@ namespace Ergonomy
         private void OnSettingsChanged(AppSettings newSettings)
         {
             _logger.LogInformation(LogEvents.SettingsRefreshedId, "Settings updated from API; reconfiguring runtime.");
-            if (newSettings.Kafka != null && _kafkaConnect.Reconfigure(newSettings.Kafka))
+            try
             {
-                _logger.LogInformation(
-                    LogEvents.KafkaReconfiguredId,
-                    "Kafka producer re-initialized after SettingsChanged.");
+                if (newSettings.Kafka != null && _kafkaConnect.Reconfigure(newSettings.Kafka))
+                {
+                    _logger.LogInformation(
+                        LogEvents.KafkaReconfiguredId,
+                        "Kafka producer re-initialized after SettingsChanged.");
+                }
             }
-            _syncEngine.UpdateSyncInterval(newSettings.SyncEngineIntervalMinutes);
-            _commandManager.UpdateSettings(newSettings);
-            _ergonomyManager.UpdateSettings(newSettings);
-            _ergonomyManager.SettingsSourceIsApi = _settingsService.SettingsSourceIsApi;
-            _permissions.EvaluateAll();
+            catch (Exception ex)
+            {
+                StartupLog.Error("Kafka reconfigure after settings change failed; tray will continue.", ex);
+            }
+
+            try { _syncEngine.UpdateSyncInterval(newSettings.SyncEngineIntervalMinutes); }
+            catch (Exception ex) { StartupLog.Error("Sync interval update failed.", ex); }
+
+            try { _commandManager.UpdateSettings(newSettings); }
+            catch (Exception ex) { StartupLog.Error("CommandManager settings update failed.", ex); }
+
+            try
+            {
+                _ergonomyManager.UpdateSettings(newSettings);
+                _ergonomyManager.SettingsSourceIsApi = _settingsService.SettingsSourceIsApi;
+            }
+            catch (Exception ex) { StartupLog.Error("ErgonomyManager settings update failed.", ex); }
+
+            try { _permissions.EvaluateAll(); }
+            catch (Exception ex) { StartupLog.Error("Permission re-evaluation failed.", ex); }
         }
 
         /// <summary>
@@ -234,8 +332,15 @@ namespace Ergonomy
         /// </summary>
         private void RequestUpdateShutdown()
         {
+            if (!_messageLoopEntered)
+            {
+                StartupLog.Warn("Update shutdown requested before the message loop started; ignoring so the tray can come up.");
+                return;
+            }
+
             void Exit()
             {
+                StartupLog.Info("shutdown started");
                 try { ExitThread(); }
                 catch { Application.Exit(); }
             }
@@ -245,6 +350,12 @@ namespace Ergonomy
                 if (_uiAnchor.IsHandleCreated)
                 {
                     _uiAnchor.BeginInvoke(new Action(Exit));
+                    return;
+                }
+
+                if (_keepAliveForm != null && _keepAliveForm.IsHandleCreated)
+                {
+                    _keepAliveForm.BeginInvoke(new Action(Exit));
                     return;
                 }
             }
@@ -262,8 +373,16 @@ namespace Ergonomy
         /// <param name="errorMessage">شرح خطای بحرانی رخ‌داده.</param>
         private void HandleCriticalFailure(string errorMessage)
         {
-            _messageLog.Log("FATAL", $"Critical error occurred: {errorMessage}. Forcing system to sleep state.");
-            GoToSleepAndRetry();
+            try
+            {
+                StartupLog.Error("Critical runtime error: " + errorMessage);
+                _messageLog.Log("FATAL", $"Critical error occurred: {errorMessage}. Forcing system to sleep state.");
+                GoToSleepAndRetry();
+            }
+            catch (Exception ex)
+            {
+                StartupLog.Error("Critical-failure handler itself failed; tray will stay alive.", ex);
+            }
         }
 
         /// <summary>
@@ -329,12 +448,17 @@ namespace Ergonomy
                 if (System.IO.File.Exists(pngPath))
                 {
                     using var bmp = new System.Drawing.Bitmap(pngPath);
-                    return System.Drawing.Icon.FromHandle(bmp.GetHicon());
+                    IntPtr handle = bmp.GetHicon();
+                    using var fromHandle = System.Drawing.Icon.FromHandle(handle);
+                    return (System.Drawing.Icon)fromHandle.Clone();
                 }
             }
-            catch { }
+            catch (Exception ex)
+            {
+                StartupLog.Error("Tray icon resource missing or invalid; restoring SystemIcons.Application.", ex);
+            }
 
-            return System.Drawing.SystemIcons.Application;
+            return (System.Drawing.Icon)System.Drawing.SystemIcons.Application.Clone();
         }
 
         protected override void Dispose(bool disposing)
@@ -342,7 +466,9 @@ namespace Ergonomy
             if (disposing && !_isDisposed)
             {
                 _isDisposed = true;
+                StartupLog.Info("shutdown started");
                 ConsoleStructuredLogProvider.AppLogsSink = null;
+                Application.Idle -= OnApplicationIdle;
 
                 _settingsService.SettingsChanged -= OnSettingsChanged;
 
@@ -363,8 +489,19 @@ namespace Ergonomy
                 _metricsEndpoint.Dispose();
                 _wakeUpScheduler.Dispose();
                 _kafkaConnect.Dispose();
-                _notifyIcon?.Dispose();
+                if (_notifyIcon != null)
+                {
+                    _notifyIcon.Visible = false;
+                    _notifyIcon.Icon = null;
+                    _notifyIcon.Dispose();
+                    _notifyIcon = null;
+                }
+                _ownedIcon?.Dispose();
+                _ownedIcon = null;
+                _keepAliveForm?.Dispose();
+                _keepAliveForm = null;
                 _uiAnchor.Dispose();
+                StartupLog.Info("shutdown completed");
             }
 
             base.Dispose(disposing);

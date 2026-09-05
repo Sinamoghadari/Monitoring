@@ -44,10 +44,20 @@ namespace Ergonomy.Database
         public KafkaConnect(KafkaSettings settings)
         {
             ArgumentNullException.ThrowIfNull(settings);
-            KafkaSettings normalized = NormalizeOrThrow(settings);
-            _settings = normalized;
-            _producer = BuildProducer(normalized);
-            Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Kafka producer initialized.");
+            _settings = settings.Clone();
+            try
+            {
+                KafkaSettings normalized = NormalizeOrThrow(settings);
+                _settings = normalized;
+                _producer = BuildProducer(normalized);
+                Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] Kafka producer initialized.");
+            }
+            catch (Exception ex)
+            {
+                _producer = null;
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka producer initialization failed; tray will continue. {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -85,7 +95,7 @@ namespace Ergonomy.Database
             {
                 ThrowIfDisposed();
 
-                if (_settings.EquivalentTo(normalized))
+                if (_settings.EquivalentTo(normalized) && _producer != null)
                     return false;
 
                 IProducer<string, string> next;
@@ -321,7 +331,8 @@ namespace Ergonomy.Database
             lock (_sync)
             {
                 ThrowIfDisposed();
-                return _producer ?? throw new ObjectDisposedException(nameof(KafkaConnect));
+                return _producer ?? throw new InvalidOperationException(
+                    "Kafka producer is not initialized. Check bootstrap servers and topic settings.");
             }
         }
 

@@ -25,7 +25,16 @@ namespace Ergonomy.Database
             string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "Ergonomy");
             Directory.CreateDirectory(directory);
             DatabasePath = Path.Combine(directory, "ergonomy_local.db");
-            protector?.UnlockDatabase(DatabasePath);
+            try
+            {
+                protector?.UnlockDatabase(DatabasePath);
+            }
+            catch (Exception ex)
+            {
+                StartupLog.Error(
+                    $"UnlockDatabase failed for '{DatabasePath}'. Original file was not overwritten; SQLite open may fail.",
+                    ex);
+            }
             ConnectionString = new SqliteConnectionStringBuilder
             {
                 DataSource = DatabasePath,
