@@ -69,9 +69,13 @@ public class AdvancedMetricsCollector
         EnabledMetrics["CollectedAt_Shamsi"] = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}";
 
         EnabledMetrics["ComputerName"] = Environment.MachineName;
-        EnabledMetrics["WindowsSid"] = WindowsIdentity.GetCurrent().User?.Value ?? "Unknown";
-        EnabledMetrics["WindowsUsername_RunAdmin"] = WindowsIdentity.GetCurrent().Name ?? "";
-        EnabledMetrics["WindowsUsername"] = GetExplorerUser() ?? GetInteractiveWindowsUsername() ?? WindowsIdentity.GetCurrent().Name ?? "";
+        var processIdentity = WindowsIdentity.GetCurrent();
+        EnabledMetrics["WindowsSid"] = processIdentity.User?.Value ?? "Unknown";
+        bool elevated = false;
+        try { elevated = new WindowsPrincipal(processIdentity).IsInRole(WindowsBuiltInRole.Administrator); }
+        catch { }
+        EnabledMetrics["WindowsUsername_RunAdmin"] = $"{processIdentity.Name ?? ""}|Elevated={elevated}";
+        EnabledMetrics["WindowsUsername"] = GetExplorerUser() ?? GetInteractiveWindowsUsername() ?? processIdentity.Name ?? "";
 
         if (_enabledMetrics.Contains("MotherboardSerial")) EnabledMetrics["MotherboardSerial"] = GetMotherboardSerial();
 

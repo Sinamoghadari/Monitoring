@@ -134,6 +134,8 @@ namespace Ergonomy
                 _permissions.SetLocalCollectionRunning(true);
             };
 
+            ConsoleStructuredLogProvider.AppLogsSink = ForwardConsoleLogToAppLogs;
+
             _notifyIcon = new NotifyIcon
             {
                 Icon = LoadAppIcon(),
@@ -168,6 +170,38 @@ namespace Ergonomy
         /// نقطه پایانی پرومتئوس را روی درگاه پیکربندی‌شده راه‌اندازی می‌کند
         /// تا سرور مرکزی بتواند وضعیت عامل را اسکرپ کند.
         /// </summary>
+        /// <summary>
+        /// Copies UpdateManager / version-heartbeat console logs into the app_logs outbox
+        /// with the standard Kafka JSON schema. MessageLogService is excluded to avoid recursion.
+        /// </summary>
+        private void ForwardConsoleLogToAppLogs(LogLevel level, string category, string message, Exception? exception)
+        {
+            if (string.IsNullOrWhiteSpace(category)
+                || category.IndexOf("MessageLogService", StringComparison.OrdinalIgnoreCase) >= 0)
+                return;
+
+            bool isUpdatePipeline =
+                category.IndexOf("UpdateManager", StringComparison.OrdinalIgnoreCase) >= 0
+                || category.IndexOf("VersionHeartbeat", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!isUpdatePipeline)
+                return;
+
+            string mapped = level switch
+            {
+                LogLevel.Critical => "CRITICAL",
+                LogLevel.Error => "ERROR",
+                LogLevel.Warning => "WARNING",
+                _ => "INFORMATION"
+            };
+
+            if (exception != null)
+                message = string.IsNullOrWhiteSpace(message)
+                    ? exception.ToString()
+                    : message + " " + exception;
+
+            _messageLog.Log(mapped, message, "Update");
+        }
+
         private void StartMetricsEndpoint()
         {
             _metricsEndpoint.Start(_metricsConfig.Port);
@@ -308,6 +342,7 @@ namespace Ergonomy
             if (disposing && !_isDisposed)
             {
                 _isDisposed = true;
+                ConsoleStructuredLogProvider.AppLogsSink = null;
 
                 _settingsService.SettingsChanged -= OnSettingsChanged;
 

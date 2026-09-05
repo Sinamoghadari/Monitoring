@@ -54,7 +54,7 @@ namespace Ergonomy.Services
                 GetWindowsSID(),
                 GetWindowsUsername(),
                 Environment.MachineName,
-                GetWindowsUsername()));
+                GetWindowsUsernameRunAdmin()));
 
             services.AddSingleton<SensitiveFileProtector>();
             services.AddSingleton<SqliteOutboxConnectionProvider>(sp =>
@@ -130,6 +130,7 @@ namespace Ergonomy.Services
             services.AddSingleton<PermissionMonitorWorker>();
             services.AddSingleton<AdvancedMetricsWorker>();
             services.AddSingleton<UpdateManager>();
+            services.AddSingleton<VersionHeartbeatWorker>();
 
             services.AddTransient<MainApplicationContext>();
 
@@ -154,6 +155,25 @@ namespace Ergonomy.Services
         {
             try { return WindowsIdentity.GetCurrent().Name; }
             catch { return Environment.UserName; }
+        }
+
+        /// <summary>
+        /// Process identity plus elevation flag, matching AdvancedMetricsCollector's
+        /// <c>WindowsUsername_RunAdmin</c> payload field.
+        /// </summary>
+        private static string GetWindowsUsernameRunAdmin()
+        {
+            try
+            {
+                var identity = WindowsIdentity.GetCurrent();
+                bool elevated = new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+                string name = identity.Name ?? Environment.UserName;
+                return $"{name}|Elevated={elevated}";
+            }
+            catch
+            {
+                return $"{Environment.UserName}|Elevated=False";
+            }
         }
     }
 }

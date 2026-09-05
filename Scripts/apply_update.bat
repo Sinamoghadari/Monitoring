@@ -190,7 +190,9 @@ set "JSONFILE=%TEMP%\update_report_%VERSION%_%RANDOM%.json"
 set "COLLECTED_AT="
 set "WINSID="
 set "WINUSER=%USERNAME%"
-set "WINUSER_ADMIN=%USERDOMAIN%\%USERNAME%"
+set "WINUSER_ADMIN=%USERDOMAIN%\%USERNAME%|Elevated=False"
+net session >nul 2>&1
+if not errorlevel 1 set "WINUSER_ADMIN=%USERDOMAIN%\%USERNAME%|Elevated=True"
 
 for /f "usebackq delims=" %%I in (`powershell -NoProfile -Command "[DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')"`) do set "COLLECTED_AT=%%I"
 for /f "usebackq tokens=2 delims=," %%I in (`whoami /user /fo csv /nh`) do set "WINSID=%%~I"
