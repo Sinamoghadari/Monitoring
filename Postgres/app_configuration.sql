@@ -34,7 +34,6 @@ VALUES (
   "ConnectionFailureSleepMinutes": 5,
   "HeartbeatIntervalMinutes": 1,
   "VersionCheckerMinute": 60,
-  "DirectoryPassword": "Sina_2118908",
   "Kafka": {
     "BootstrapServers": "172.17.214.38:9092",
     "UserActivityTopic": "user_activity",

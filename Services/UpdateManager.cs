@@ -41,7 +41,6 @@ namespace Ergonomy.Services
         private readonly MachineIdentity _identity;
         private readonly AgentMetrics _metrics;
         private readonly MessageLogService _messageLog;
-        private readonly SensitiveFileProtector _protector;
         private readonly string _currentVersion;
         private readonly object _applySync = new();
 
@@ -62,7 +61,6 @@ namespace Ergonomy.Services
             MachineIdentity identity,
             AgentMetrics metrics,
             MessageLogService messageLog,
-            SensitiveFileProtector protector,
             ILogger<UpdateManager> logger)
             : base(logger)
         {
@@ -73,11 +71,8 @@ namespace Ergonomy.Services
             _identity = identity ?? throw new ArgumentNullException(nameof(identity));
             _metrics = metrics ?? throw new ArgumentNullException(nameof(metrics));
             _messageLog = messageLog ?? throw new ArgumentNullException(nameof(messageLog));
-            _protector = protector ?? throw new ArgumentNullException(nameof(protector));
             _currentVersion = ResolveCurrentVersion();
             _settingsService.SettingsChanged += OnSettingsChanged;
-            try { _protector.ProtectExistingText(GetMarkerPath()); }
-            catch { }
             Logger.LogInformation(
                 LogEvents.UpdateCheckId,
                 "UpdateManager constructed. CurrentVersion={CurrentVersion} Baseline={Baseline}",
@@ -668,8 +663,8 @@ namespace Ergonomy.Services
                 string marker = GetMarkerPath();
                 if (!File.Exists(marker))
                     return false;
-                string? applied = _protector.ReadAllText(marker);
-                return string.Equals((applied ?? string.Empty).Trim(), version, StringComparison.OrdinalIgnoreCase);
+                string applied = File.ReadAllText(marker);
+                return string.Equals(applied.Trim(), version, StringComparison.OrdinalIgnoreCase);
             }
             catch
             {
@@ -691,7 +686,7 @@ namespace Ergonomy.Services
                 if (!string.IsNullOrEmpty(dir))
                     Directory.CreateDirectory(dir);
                 if (!IsAlreadyApplied(version))
-                    _protector.WriteAllText(marker, version + Environment.NewLine);
+                    File.WriteAllText(marker, version + Environment.NewLine);
             }
             catch
             {

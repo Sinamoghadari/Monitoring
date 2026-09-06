@@ -128,16 +128,14 @@ namespace Ergonomy
 
                 var settings = provider.GetRequiredService<ISettingsService>().Current;
                 Console.WriteLine("Config loaded: yes");
-                Console.WriteLine("DirectoryPassword set: " + (!string.IsNullOrWhiteSpace(settings.DirectoryPassword)));
+                Console.WriteLine("SQLCipher key: " + (File.Exists(SqlCipherKeyStore.KeyFilePath) ? "present" : "missing"));
                 Console.WriteLine("Kafka bootstrap: " + (string.IsNullOrWhiteSpace(settings.Kafka?.BootstrapServers) ? "(empty)" : settings.Kafka!.BootstrapServers));
                 Console.WriteLine("Kafka topics: activity=" + (settings.Kafka?.UserActivityTopic ?? "") +
                                   " metrics=" + (settings.Kafka?.SystemMetricsTopic ?? "") +
                                   " logs=" + (settings.Kafka?.AppLogsTopic ?? ""));
                 Console.WriteLine("Update enabled: " + (settings.Update?.Enabled ?? false));
-
-                var protector = provider.GetRequiredService<SensitiveFileProtector>();
-                Console.WriteLine("DB kind: " + protector.Describe(StartupLog.DatabasePath));
-                Console.WriteLine("Marker kind: " + protector.Describe(StartupLog.AppliedVersionPath));
+                Console.WriteLine("DB exists: " + File.Exists(StartupLog.DatabasePath));
+                Console.WriteLine("Marker exists: " + File.Exists(StartupLog.AppliedVersionPath));
 
                 string icoPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "app_icon.ico");
                 string pngPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Assets", "app_icon.png");

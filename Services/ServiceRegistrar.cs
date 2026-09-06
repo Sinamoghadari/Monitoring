@@ -56,14 +56,11 @@ namespace Ergonomy.Services
                 Environment.MachineName,
                 GetWindowsUsernameRunAdmin()));
 
-            services.AddSingleton<SensitiveFileProtector>();
-            services.AddSingleton<SqliteOutboxConnectionProvider>(sp =>
-                new SqliteOutboxConnectionProvider(sp.GetRequiredService<SensitiveFileProtector>()));
+            services.AddSingleton<SqliteOutboxConnectionProvider>();
             services.AddSingleton<LocalDatabaseManager>(sp =>
                 new LocalDatabaseManager(
                     sp.GetRequiredService<AppSettings>().Outbox,
-                    sp.GetRequiredService<SqliteOutboxConnectionProvider>(),
-                    sp.GetRequiredService<SensitiveFileProtector>()));
+                    sp.GetRequiredService<SqliteOutboxConnectionProvider>()));
 
             services.AddSingleton<KafkaConnect>(sp =>
             {

@@ -50,9 +50,6 @@ namespace Ergonomy.Configuration
             settings.VersionCheckerMinute = Normalize(
                 settings.VersionCheckerMinute, 60, 0);
 
-            if (string.IsNullOrWhiteSpace(settings.DirectoryPassword))
-                settings.DirectoryPassword = "Sina_2118908";
-
             settings.PermissionSqliteRetryIntervalHours = Normalize(
                 settings.PermissionSqliteRetryIntervalHours, 1, 0);
 

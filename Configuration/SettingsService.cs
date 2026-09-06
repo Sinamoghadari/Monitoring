@@ -252,11 +252,6 @@ namespace Ergonomy.Configuration
             remoteSettings.Kafka = MergeKafkaSettings(bootstrap.Kafka, remoteSettings.Kafka);
             remoteSettings.Update = MergeUpdateSettings(bootstrap.Update, remoteSettings.Update);
 
-            remoteSettings.DirectoryPassword = FirstNonEmpty(
-                remoteSettings.DirectoryPassword, bootstrap.DirectoryPassword);
-            if (string.IsNullOrWhiteSpace(remoteSettings.DirectoryPassword))
-                remoteSettings.DirectoryPassword = "Sina_2118908";
-
             if (remoteSettings.VersionCheckerMinute <= 0)
             {
                 remoteSettings.VersionCheckerMinute = bootstrap.VersionCheckerMinute > 0

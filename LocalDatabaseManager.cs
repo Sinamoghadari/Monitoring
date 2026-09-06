@@ -65,7 +65,6 @@ namespace Ergonomy.Database
         private readonly string _dbPath;
         private readonly string _connectionString;
         private readonly OutboxSettings _settings;
-        private readonly SensitiveFileProtector? _protector;
         private System.Timers.Timer? _retentionTimer;
 
         // ظرفیت (کش‌شده در constructor برای پرهیز از محاسبه‌ی تکراری)
@@ -93,19 +92,11 @@ namespace Ergonomy.Database
         {
         }
 
-        public LocalDatabaseManager(OutboxSettings settings, SqliteOutboxConnectionProvider connectionProvider)
-            : this(settings, connectionProvider, protector: null)
-        {
-        }
-
         /// <summary>
         /// مدیر outbox را با تنظیمات ظرفیت و ارائه‌دهنده مسیر SQLite می‌سازد،
         /// جدول صف را ایجاد کرده و تایمر نگهداری را در صورت نیاز شروع می‌کند.
         /// </summary>
-        public LocalDatabaseManager(
-            OutboxSettings settings,
-            SqliteOutboxConnectionProvider connectionProvider,
-            SensitiveFileProtector? protector)
+        public LocalDatabaseManager(OutboxSettings settings, SqliteOutboxConnectionProvider connectionProvider)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
@@ -119,7 +110,6 @@ namespace Ergonomy.Database
             if (connectionProvider == null) throw new ArgumentNullException(nameof(connectionProvider));
             _dbPath = connectionProvider.DatabasePath;
             _connectionString = connectionProvider.ConnectionString;
-            _protector = protector;
 
             try
             {
@@ -794,14 +784,6 @@ namespace Ergonomy.Database
             try
             {
                 SqliteConnection.ClearAllPools();
-            }
-            catch
-            {
-            }
-
-            try
-            {
-                _protector?.LockDatabase(_dbPath);
             }
             catch
             {

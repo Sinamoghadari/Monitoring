@@ -33,7 +33,6 @@ namespace Ergonomy.Configuration
         public int TopProcessesCount { get; set; }
         public int SettingsCheckIntervalSeconds { get; set; }
         public int VersionCheckerMinute { get; set; } = 60;
-        public string DirectoryPassword { get; set; } = "Sina_2118908";
         public double CommandCheckIntervalSeconds { get; set; }
         public double SyncEngineIntervalMinutes { get; set; }
         public double PermissionPostgresRetryIntervalHours { get; set; } = 1;
