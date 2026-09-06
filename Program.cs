@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Ergonomy.Configuration;
 using Ergonomy.Services;
 
@@ -55,6 +56,8 @@ namespace Ergonomy
                 SynchronizationContext.SetSynchronizationContext(null);
 
                 using var provider = ServiceRegistrar.Build(uiAnchor);
+                provider.GetRequiredService<ILoggerFactory>().AddProvider(
+                    new ErrorOnlyAppLogLoggerProvider(provider.GetRequiredService<MessageLogService>()));
 
                 var settingsService = provider.GetRequiredService<ISettingsService>();
                 settingsService.LoadBootstrap();

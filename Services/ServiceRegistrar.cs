@@ -120,6 +120,7 @@ namespace Ergonomy.Services
             // Services + workers.
             services.AddSingleton<MessageLogService>();
             services.AddSingleton<HealthCheckService>();
+            services.AddSingleton<ICollectionGate, UiCollectionGate>();
             services.AddSingleton<PermissionsEvaluator>();
             services.AddSingleton<WakeUpScheduler>();
             services.AddSingleton<CommandManager>(sp =>

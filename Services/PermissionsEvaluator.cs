@@ -1,7 +1,6 @@
 using System;
 using Microsoft.Extensions.Logging;
 using Ergonomy.Configuration;
-using Ergonomy.Core;
 using Ergonomy.Database;
 using Ergonomy.Logging;
 
@@ -18,8 +17,7 @@ namespace Ergonomy.Services
         private readonly ISettingsService _settingsService;
         private readonly LocalDatabaseManager _localDb;
         private readonly SyncEngine _syncEngine;
-        private readonly ErgonomyManager _ergonomyManager;
-        private readonly AdvancedMetricsWorker _advancedMetricsWorker;
+        private readonly ICollectionGate _collection;
         private readonly MessageLogService _log;
         private readonly ILogger<PermissionsEvaluator> _logger;
 
@@ -41,16 +39,14 @@ namespace Ergonomy.Services
             ISettingsService settingsService,
             LocalDatabaseManager localDb,
             SyncEngine syncEngine,
-            ErgonomyManager ergonomyManager,
-            AdvancedMetricsWorker advancedMetricsWorker,
+            ICollectionGate collection,
             MessageLogService log,
             ILogger<PermissionsEvaluator> logger)
         {
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
             _localDb = localDb ?? throw new ArgumentNullException(nameof(localDb));
             _syncEngine = syncEngine ?? throw new ArgumentNullException(nameof(syncEngine));
-            _ergonomyManager = ergonomyManager ?? throw new ArgumentNullException(nameof(ergonomyManager));
-            _advancedMetricsWorker = advancedMetricsWorker ?? throw new ArgumentNullException(nameof(advancedMetricsWorker));
+            _collection = collection ?? throw new ArgumentNullException(nameof(collection));
             _log = log ?? throw new ArgumentNullException(nameof(log));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
@@ -158,7 +154,7 @@ namespace Ergonomy.Services
         {
             AppSettings s = _settingsService.Current;
             bool allowErgonomy = s.AllowErgonomyCollection;
-            bool wasRunning = _ergonomyManager.IsRunning;
+            bool wasRunning = _collection.IsErgonomyRunning;
 
             string msg =
                 $"[Ergonomy Status] Permission: {allowErgonomy} | Source: {(_settingsService.SettingsSourceIsApi ? "API" : "Bootstrap/Environment")}";
@@ -166,16 +162,16 @@ namespace Ergonomy.Services
 
             if (allowErgonomy)
             {
-                _ergonomyManager.Start();
+                _collection.StartErgonomy();
                 _log.Log(
                     "INFORMATION",
-                    _ergonomyManager.IsRunning
+                    _collection.IsErgonomyRunning
                         ? "ErgonomyCollection: manager started successfully (hooks/timers active)."
                         : "ErgonomyCollection: permission true but manager did NOT start.");
             }
             else
             {
-                _ergonomyManager.Stop("AllowErgonomyCollection is false");
+                _collection.StopErgonomy("AllowErgonomyCollection is false");
                 _log.Log("WARNING", "Ergonomy Collection: Access DENIED or Disabled. Process is STOPPED.");
             }
 
@@ -192,9 +188,7 @@ namespace Ergonomy.Services
         /// </summary>
         public void StartLocalDataCollection()
         {
-            // Restart the advanced metrics worker so a changed interval takes effect.
-            _advancedMetricsWorker.Stop();
-            _advancedMetricsWorker.Start();
+            _collection.StartLocalMetrics();
             lock (_sync) _localCollectionRunning = true;
             _log.Log("INFORMATION", "Local System Metrics Collection Started.");
         }
@@ -204,8 +198,8 @@ namespace Ergonomy.Services
         /// </summary>
         public void StopAllDataCollection()
         {
-            _advancedMetricsWorker.Stop();
-            _ergonomyManager.Stop("local data collection stopped");
+            _collection.StopLocalMetrics();
+            _collection.StopErgonomy("local data collection stopped");
             lock (_sync) _localCollectionRunning = false;
         }
 

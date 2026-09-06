@@ -51,6 +51,22 @@ namespace Ergonomy.Logging
         }
 
         /// <summary>
+        /// True only for WARNING / ERROR after normalization. INFORMATION (including
+        /// DEBUG/TRACE aliases and unknown values) is not a problem record.
+        /// </summary>
+        public static bool IsProblemLevel(string? level)
+        {
+            string normalized = NormalizeLogLevel(level);
+            return normalized == Warning || normalized == Error;
+        }
+
+        /// <summary>
+        /// True for <see cref="LogLevel.Warning"/> and above. Healthy Information/Debug emit nothing.
+        /// </summary>
+        public static bool IsProblemLogLevel(LogLevel level)
+            => level >= LogLevel.Warning;
+
+        /// <summary>
         /// Returns only the Windows username. Strips <c>|Elevated=True</c> / <c>|Elevated=False</c>
         /// and any other <c>|Elevated=...</c> metadata. Does not invent a value from elevation flags.
         /// </summary>

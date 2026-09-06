@@ -1,11 +1,16 @@
 using System;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.Versioning;
 using System.Threading.Tasks;
+using Ergonomy.Configuration;
 using Ergonomy.Core.Ipc;
+using Ergonomy.Database;
 using Ergonomy.Logging;
+using Ergonomy.Observability;
 using Ergonomy.Service.Hosting;
 using Ergonomy.Service.Ipc;
+using Ergonomy.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -62,20 +67,56 @@ namespace Ergonomy.Service
                 })
                 .ConfigureServices((context, services) =>
                 {
-                    // Named Pipe server (singleton): accepts connections from every interactive
-                    // Task process on this machine.
+                    services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(15) });
+                    services.AddSingleton<ISettingsService, SettingsService>();
+                    services.AddSingleton(sp =>
+                    {
+                        var settings = sp.GetRequiredService<ISettingsService>();
+                        settings.LoadBootstrap();
+                        return settings.Current;
+                    });
+                    services.AddSingleton(_ => ServiceRuntimeHostedService.CreateMachineIdentity());
+
+                    services.AddSingleton<SqliteOutboxConnectionProvider>();
+                    services.AddSingleton<LocalDatabaseManager>(sp =>
+                        new LocalDatabaseManager(
+                            sp.GetRequiredService<AppSettings>().Outbox,
+                            sp.GetRequiredService<SqliteOutboxConnectionProvider>()));
+                    services.AddSingleton<MessageLogService>();
+
+                    services.AddSingleton<AgentMetrics>();
+                    services.AddSingleton<KafkaConnect>(sp =>
+                    {
+                        try
+                        {
+                            KafkaSettings? k = sp.GetRequiredService<AppSettings>().Kafka;
+                            return new KafkaConnect(k ?? new KafkaSettings());
+                        }
+                        catch (Exception ex)
+                        {
+                            StartupLog.Error("KafkaConnect factory failed; using a fail-safe instance.", ex);
+                            return new KafkaConnect(new KafkaSettings());
+                        }
+                    });
+                    services.AddSingleton<SyncEngine>(sp =>
+                        new SyncEngine(
+                            sp.GetRequiredService<KafkaConnect>(),
+                            sp.GetRequiredService<LocalDatabaseManager>(),
+                            sp.GetRequiredService<ILogger<SyncEngine>>(),
+                            sp.GetRequiredService<AgentMetrics>(),
+                            sp.GetRequiredService<AppSettings>().SyncEngineIntervalMinutes));
+
                     services.AddSingleton<NamedPipeIpcServer>(sp => new NamedPipeIpcServer(
                         sp.GetRequiredService<ILogger<NamedPipeIpcServer>>()));
-
-                    // Service-side IPC router: message catalogue, hello/settings push, activity sink.
                     services.AddSingleton<ServiceIpcHost>();
+                    services.AddSingleton<ICollectionGate, IpcCollectionGate>();
+                    services.AddSingleton<PermissionsEvaluator>();
+                    services.AddSingleton<SettingsRefreshWorker>();
+                    services.AddSingleton<PermissionMonitorWorker>();
+                    services.AddSingleton<UpdateManager>();
 
-                    // Bridges ServiceIpcHost into the Generic Host start/stop lifecycle.
                     services.AddHostedService<IpcHostedService>();
-
-                    // Migration seam: the SQLite outbox, SyncEngine, metrics, settings refresh,
-                    // health and command workers move here from the legacy Ergonomy project.
-                    // Each will be registered as an additional IHostedService when it arrives.
+                    services.AddHostedService<ServiceRuntimeHostedService>();
                 })
                 .Build();
 

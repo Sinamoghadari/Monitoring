@@ -67,6 +67,11 @@ namespace Ergonomy.Services
 
         private void Enqueue(string logLevel, string message, string category, bool reportConsole)
         {
+            // Observability contract: app_logs receives only actual problems.
+            // Healthy Information/Debug records must not inflate the outbox or Kafka.
+            if (!AppLogNormalizer.IsProblemLevel(logLevel))
+                return;
+
             DateTime utc = DateTime.UtcNow;
             DateTime local = utc.ToLocalTime();
             PersianCalendar pc = new PersianCalendar();

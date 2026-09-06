@@ -52,6 +52,34 @@ namespace Ergonomy.Core.Tests
         }
 
         [Theory]
+        [InlineData("WARNING", true)]
+        [InlineData("WARN", true)]
+        [InlineData("ERROR", true)]
+        [InlineData("FATAL", true)]
+        [InlineData("CRITICAL", true)]
+        [InlineData("INFORMATION", false)]
+        [InlineData("INFO", false)]
+        [InlineData("DEBUG", false)]
+        [InlineData("banana", false)]
+        [InlineData(null, false)]
+        [InlineData("", false)]
+        public void IsProblemLevel_is_true_only_for_warning_and_error(string? input, bool expected)
+        {
+            Assert.Equal(expected, AppLogNormalizer.IsProblemLevel(input));
+        }
+
+        [Fact]
+        public void IsProblemLogLevel_skips_information_and_debug()
+        {
+            Assert.False(AppLogNormalizer.IsProblemLogLevel(LogLevel.Trace));
+            Assert.False(AppLogNormalizer.IsProblemLogLevel(LogLevel.Debug));
+            Assert.False(AppLogNormalizer.IsProblemLogLevel(LogLevel.Information));
+            Assert.True(AppLogNormalizer.IsProblemLogLevel(LogLevel.Warning));
+            Assert.True(AppLogNormalizer.IsProblemLogLevel(LogLevel.Error));
+            Assert.True(AppLogNormalizer.IsProblemLogLevel(LogLevel.Critical));
+        }
+
+        [Theory]
         [InlineData(@"SISCO\s.moghadarii|Elevated=False", @"SISCO\s.moghadarii")]
         [InlineData(@"SISCO\s.moghadarii|Elevated=True", @"SISCO\s.moghadarii")]
         [InlineData(@"SISCO\s.moghadarii|elevated=false", @"SISCO\s.moghadarii")]
