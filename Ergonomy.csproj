@@ -47,9 +47,9 @@
     <PackageReference Include="FastMember" Version="1.5.0" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
     <!-- SQLCipher TDE: Core provider + e_sqlcipher bundle. Do NOT restore Microsoft.Data.Sqlite (stock sqlite). -->
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="9.0.0" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlcipher" Version="2.1.11" />
-    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="9.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.5" />
 
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.0" />
