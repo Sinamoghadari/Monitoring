@@ -15,6 +15,7 @@ publish/
 
 # Local environment files
 .env
+Environment_set.txt
 
 # Logs
 *.log

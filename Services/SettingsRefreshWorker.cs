@@ -50,7 +50,7 @@ namespace Ergonomy.Services
         /// <returns>وظیفه تازه‌سازی.</returns>
         protected override async Task DoWorkAsync(CancellationToken ct)
         {
-            await _settingsService.RefreshFromApiAsync(logFailures: false, cancellationToken: ct).ConfigureAwait(false);
+            await _settingsService.RefreshFromApiAsync(logFailures: true, cancellationToken: ct).ConfigureAwait(false);
         }
     }
 }

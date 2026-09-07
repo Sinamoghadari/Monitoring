@@ -3,14 +3,9 @@
   <!--
     Ergonomy.Task - interactive (user session) process.
 
-    Launched per logged-on user (Task Scheduler / logon trigger). Owns everything that needs
-    the interactive desktop: the low-level input hooks, ActivityMonitor and the alarm forms.
-    It holds the Named Pipe CLIENT and never talks to Kafka, SQLite, Postgres or the
-    Settings API directly - the Service is the only owner of those.
-
-    Naming note: the ROOT NAMESPACE is Ergonomy.TaskAgent even though the assembly is
-    Ergonomy.Task, because a namespace literally called `Ergonomy.Task` makes the identifier
-    `Task` ambiguous with System.Threading.Tasks.Task inside every file of this project.
+    Owns only what needs the interactive desktop: low-level input hooks, ActivityMonitor
+    and alarm forms. Named Pipe CLIENT. Never talks to Kafka, SQLite, Postgres or the
+    Settings API — Ergonomy.Service is the only owner of those.
   -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -32,6 +27,17 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Ergonomy.Core\Ergonomy.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\Hooks\GlobalInputHook.cs" Link="Hooks\GlobalInputHook.cs" />
+    <Compile Include="..\Hooks\ActivityMonitor.cs" Link="Hooks\ActivityMonitor.cs" />
+    <Compile Include="..\AlarmManager.cs" Link="AlarmManager.cs" />
+    <Compile Include="..\UI\PrimaryAlarmForm.cs" Link="UI\PrimaryAlarmForm.cs" />
+    <Compile Include="..\UI\PrimaryAlarmForm.Designer.cs" Link="UI\PrimaryAlarmForm.Designer.cs" />
+    <Compile Include="..\UI\SecondaryAlarmForm.cs" Link="UI\SecondaryAlarmForm.cs" />
+    <Compile Include="..\UI\SecondaryAlarmForm.Designer.cs" Link="UI\SecondaryAlarmForm.Designer.cs" />
+    <Compile Include="..\UI\MessageAlarmForm.cs" Link="UI\MessageAlarmForm.cs" />
   </ItemGroup>
 
 </Project>

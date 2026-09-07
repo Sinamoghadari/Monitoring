@@ -12,6 +12,7 @@ namespace Ergonomy.Core.Ipc
         public const string Heartbeat = "task.heartbeat";
         public const string ActivityReport = "task.activity";
         public const string AlarmAck = "task.alarm.ack";
+        public const string ProblemLog = "task.problem";
         public const string Goodbye = "task.goodbye";
 
         // Service -> Task

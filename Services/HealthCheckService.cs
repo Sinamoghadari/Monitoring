@@ -70,11 +70,11 @@ namespace Ergonomy.Services
                 using var response = await client.GetAsync(apiUrl).ConfigureAwait(false);
                 if (response.IsSuccessStatusCode)
                 {
-                    _log.LogHealth("INFO", "Settings API is healthy and accessible.", "ApiHealth");
+                    _log.LogHealth("INFORMATION", "Settings API is healthy and accessible.", "ApiHealth");
                 }
                 else
                 {
-                    _log.LogHealth("WARN", $"Settings API returned status code: {response.StatusCode}", "ApiHealth");
+                    _log.LogHealth("WARNING", $"Settings API returned status code: {response.StatusCode}", "ApiHealth");
                 }
             }
             catch (Exception ex)
@@ -107,7 +107,7 @@ namespace Ergonomy.Services
                 cmd.ExecuteScalar();
 
                 statusMessage = "SQLite database is healthy and accessible.";
-                logLevel = "INFO";
+                logLevel = "INFORMATION";
             }
             catch (Exception ex)
             {
@@ -135,7 +135,7 @@ namespace Ergonomy.Services
 
                 string statusMessage =
                     $"Agent Performance: Memory Usage is {memoryUsedMB} MB. Thread Count: {process.Threads.Count}";
-                string logLevel = memoryUsedMB > 500 ? "WARN" : "INFO";
+                string logLevel = memoryUsedMB > 500 ? "WARNING" : "INFORMATION";
 
                 _log.LogHealth(logLevel, statusMessage, "AgentPerformance");
             }

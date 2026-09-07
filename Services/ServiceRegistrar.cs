@@ -53,16 +53,27 @@ namespace Ergonomy.Services
             services.AddSingleton<MachineIdentity>(_ => new MachineIdentity(
                 GetWindowsSID(),
                 GetWindowsUsername(),
-                Environment.MachineName));
+                Environment.MachineName,
+                GetWindowsUsernameRunAdmin()));
 
             services.AddSingleton<SqliteOutboxConnectionProvider>();
             services.AddSingleton<LocalDatabaseManager>(sp =>
-                new LocalDatabaseManager(sp.GetRequiredService<AppSettings>().Outbox, sp.GetRequiredService<SqliteOutboxConnectionProvider>()));
+                new LocalDatabaseManager(
+                    sp.GetRequiredService<AppSettings>().Outbox,
+                    sp.GetRequiredService<SqliteOutboxConnectionProvider>()));
 
             services.AddSingleton<KafkaConnect>(sp =>
             {
-                KafkaSettings k = sp.GetRequiredService<AppSettings>().Kafka!;
-                return new KafkaConnect(k.BootstrapServers, k.UserActivityTopic, k.SystemMetricsTopic, k.AppLogsTopic);
+                try
+                {
+                    KafkaSettings? k = sp.GetRequiredService<AppSettings>().Kafka;
+                    return new KafkaConnect(k ?? new KafkaSettings());
+                }
+                catch (Exception ex)
+                {
+                    StartupLog.Error("KafkaConnect factory failed; using a fail-safe instance so the tray can start.", ex);
+                    return new KafkaConnect(new KafkaSettings());
+                }
             });
 
             // Observability (Prometheus scrape endpoint; no new Kafka/SQLite pipeline).
@@ -109,6 +120,7 @@ namespace Ergonomy.Services
             // Services + workers.
             services.AddSingleton<MessageLogService>();
             services.AddSingleton<HealthCheckService>();
+            services.AddSingleton<ICollectionGate, UiCollectionGate>();
             services.AddSingleton<PermissionsEvaluator>();
             services.AddSingleton<WakeUpScheduler>();
             services.AddSingleton<CommandManager>(sp =>
@@ -123,6 +135,8 @@ namespace Ergonomy.Services
             services.AddSingleton<HealthMonitorWorker>();
             services.AddSingleton<PermissionMonitorWorker>();
             services.AddSingleton<AdvancedMetricsWorker>();
+            services.AddSingleton<UpdateManager>();
+            services.AddSingleton<VersionHeartbeatWorker>();
 
             services.AddTransient<MainApplicationContext>();
 
@@ -147,6 +161,22 @@ namespace Ergonomy.Services
         {
             try { return WindowsIdentity.GetCurrent().Name; }
             catch { return Environment.UserName; }
+        }
+
+        /// <summary>
+        /// Windows username for <c>WindowsUsername_RunAdmin</c>. Elevation is not included;
+        /// that field is a username only.
+        /// </summary>
+        private static string GetWindowsUsernameRunAdmin()
+        {
+            try
+            {
+                return WindowsIdentity.GetCurrent()?.Name ?? Environment.UserName;
+            }
+            catch
+            {
+                return Environment.UserName;
+            }
         }
     }
 }

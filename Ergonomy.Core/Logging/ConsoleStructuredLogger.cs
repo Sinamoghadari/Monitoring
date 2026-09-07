@@ -14,6 +14,12 @@ namespace Ergonomy.Logging
     /// </summary>
     public sealed class ConsoleStructuredLogProvider : ILoggerProvider
     {
+        /// <summary>
+        /// Optional sink that copies console/ILogger lines into the Kafka app_logs outbox.
+        /// Wired after <c>MessageLogService</c> is constructed to avoid a DI cycle.
+        /// </summary>
+        public static Action<LogLevel, string, string, Exception?>? AppLogsSink { get; set; }
+
         private readonly ConcurrentDictionary<string, ConsoleStructuredLogger> _loggers =
             new(StringComparer.Ordinal);
 
@@ -84,6 +90,14 @@ namespace Ergonomy.Logging
                 lock (_lock)
                 {
                     Console.WriteLine(line);
+                }
+
+                try
+                {
+                    AppLogsSink?.Invoke(logLevel, _category, message, exception);
+                }
+                catch
+                {
                 }
             }
 

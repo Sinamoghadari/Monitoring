@@ -7,6 +7,8 @@ using System.Threading;
 using Microsoft.Data.Sqlite;
 using Ergonomy.Configuration;
 using Ergonomy.Database;
+using Ergonomy.Logging;
+using Ergonomy.Services;
 
 namespace Ergonomy.Database
 {
@@ -94,8 +96,6 @@ namespace Ergonomy.Database
         /// مدیر outbox را با تنظیمات ظرفیت و ارائه‌دهنده مسیر SQLite می‌سازد،
         /// جدول صف را ایجاد کرده و تایمر نگهداری را در صورت نیاز شروع می‌کند.
         /// </summary>
-        /// <param name="settings">آستانه‌ها و فاصله نگهداری outbox.</param>
-        /// <param name="connectionProvider">مسیر و رشته اتصال پایگاه محلی.</param>
         public LocalDatabaseManager(OutboxSettings settings, SqliteOutboxConnectionProvider connectionProvider)
         {
             _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -111,8 +111,20 @@ namespace Ergonomy.Database
             _dbPath = connectionProvider.DatabasePath;
             _connectionString = connectionProvider.ConnectionString;
 
-            InitializeDatabase();
-            ReconcileCount();
+            try
+            {
+                InitializeDatabase();
+                ReconcileCount();
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] SQLite outbox initialized.");
+                StartupLog.Info("local DB initialized");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(
+                    $"[{DateTime.Now:HH:mm:ss}] ❌ SQLite outbox initialization failed; tray will continue. {ex.Message}");
+                StartupLog.Error("local DB initialization failed; tray will continue.", ex);
+            }
 
             if (_settings.RetentionCheckIntervalSeconds > 0)
             {
@@ -124,9 +136,6 @@ namespace Ergonomy.Database
                 _retentionTimer.Elapsed += OnRetentionTimerElapsed;
                 _retentionTimer.Start();
             }
-
-            Console.WriteLine(
-                $"[{DateTime.Now:HH:mm:ss}] SQLite outbox initialized.");
         }
 
         /// <summary>
@@ -396,6 +405,11 @@ namespace Ergonomy.Database
             try
             {
                 string jsonData = SerializePayload(dataObject);
+                bool isAppLogs = string.Equals(
+                    normalizedTargetTable,
+                    QueueTargets.AppLogs,
+                    StringComparison.OrdinalIgnoreCase);
+                jsonData = AppLogNormalizer.NormalizePayloadJson(jsonData, normalizeLogLevel: isAppLogs);
 
                 string recordId = Guid.NewGuid().ToString();
                 string messageId = recordId;
@@ -754,6 +768,26 @@ namespace Ergonomy.Database
 
             _retentionTimer?.Stop();
             _retentionTimer?.Dispose();
+
+            try
+            {
+                using var connection = new SqliteConnection(_connectionString);
+                connection.Open();
+                using var checkpoint = connection.CreateCommand();
+                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
+                checkpoint.ExecuteNonQuery();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                SqliteConnection.ClearAllPools();
+            }
+            catch
+            {
+            }
         }
     }
 }

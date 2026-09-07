@@ -3,7 +3,10 @@ using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Threading;
 using System.Windows.Forms;
+using Ergonomy;
+using Ergonomy.Configuration;
 using Ergonomy.Core.Ipc;
+using Ergonomy.Hooks;
 using Ergonomy.Logging;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -41,6 +44,10 @@ namespace Ergonomy.TaskAgent
             ApplicationConfiguration.Initialize();
 
             using ServiceProvider provider = BuildServiceProvider();
+            var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
+            loggerFactory.AddProvider(new TaskProblemIpcLoggerProvider(
+                provider.GetRequiredService<NamedPipeIpcClient>()));
+
             ILogger<object> logger = provider.GetRequiredService<ILogger<object>>();
             logger.LogInformation("Ergonomy.Task starting. Pid={Pid} WindowsSession={Session}",
                 Environment.ProcessId, Process.GetCurrentProcess().SessionId);
@@ -68,8 +75,9 @@ namespace Ergonomy.TaskAgent
             services.AddSingleton<NamedPipeIpcClient>(sp => new NamedPipeIpcClient(
                 sp.GetRequiredService<ILogger<NamedPipeIpcClient>>()));
 
-            // Migration seam: GlobalInputHook, ActivityMonitor, AlarmManager and the alarm forms
-            // move here from the legacy Ergonomy project and publish through TaskApplicationContext.
+            services.AddSingleton<GlobalInputHook>();
+            services.AddSingleton<ActivityMonitor>();
+            services.AddSingleton(_ => new AlarmManager(new AppSettings()));
             services.AddSingleton<TaskApplicationContext>();
 
             return services.BuildServiceProvider();

@@ -5,7 +5,9 @@ using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Ergonomy;
 using Ergonomy.Core.Ipc;
+using Ergonomy.Hooks;
 using Microsoft.Extensions.Logging;
 using Timer = System.Timers.Timer;
 
@@ -31,22 +33,35 @@ namespace Ergonomy.TaskAgent
         private readonly ILogger<TaskApplicationContext> _logger;
         private readonly Control _uiAnchor;
         private readonly Timer _heartbeatTimer;
+        private readonly InteractiveSession _session;
         private volatile SettingsSnapshotPayload? _settings;
-        private volatile bool _collectionEnabled;
         private int _disposed;
 
         /// <summary>
         /// پوسته چرخه حیات Task را می‌سازد، کنترل پنهان UI را ایجاد کرده و کلاینت پایپ و تایمر heartbeat را شروع می‌کند.
         /// </summary>
-        /// <param name="client">کلاینت Named Pipe به سرویس.</param>
-        /// <param name="logger">ثبت‌کننده اتصال، تنظیمات و هشدار.</param>
-        public TaskApplicationContext(NamedPipeIpcClient client, ILogger<TaskApplicationContext> logger)
+        public TaskApplicationContext(
+            NamedPipeIpcClient client,
+            ILogger<TaskApplicationContext> logger,
+            GlobalInputHook hook,
+            ActivityMonitor monitor,
+            AlarmManager alarms,
+            ILogger<InteractiveSession> sessionLogger)
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
             _uiAnchor = new Control();
             _uiAnchor.CreateControl();
+
+            Func<ActivityReportPayload, Task<bool>> reportActivity = SendActivityToServiceAsync;
+            _session = new InteractiveSession(
+                hook,
+                monitor,
+                alarms,
+                _uiAnchor,
+                sessionLogger,
+                reportActivity);
 
             _client.MessageReceived = OnMessageAsync;
             _client.Connected = OnConnected;
@@ -61,6 +76,16 @@ namespace Ergonomy.TaskAgent
 
         /// <summary>Latest settings pushed by the Service (null until the first snapshot arrives).</summary>
         public SettingsSnapshotPayload? Settings => _settings;
+
+        /// <summary>
+        /// Matches InteractiveSession's callback exactly: one payload argument, Task&lt;bool&gt;.
+        /// ReportActivityAsync cannot be passed as a method group because it also takes CancellationToken.
+        /// </summary>
+        private Task<bool> SendActivityToServiceAsync(ActivityReportPayload report)
+        {
+            if (report is null) throw new ArgumentNullException(nameof(report));
+            return _client.TrySendAsync(IpcMessage.Create(IpcMessageTypes.ActivityReport, report));
+        }
 
         /// <summary>
         /// فعالیت تجمعی را به‌صورت ناهمگام به سرویس گزارش می‌دهد و نخ فراخواننده را مسدود نمی‌کند.
@@ -111,12 +136,7 @@ namespace Ergonomy.TaskAgent
         {
             try
             {
-                var beat = new HeartbeatPayload
-                {
-                    CollectionEnabled = _collectionEnabled,
-                    HooksInstalled = false, // set once GlobalInputHook is migrated into this process
-                    WorkingSetBytes = Environment.WorkingSet
-                };
+                HeartbeatPayload beat = _session.CreateHeartbeat();
 
                 await _client.TrySendAsync(IpcMessage.Create(IpcMessageTypes.Heartbeat, beat)).ConfigureAwait(false);
             }
@@ -147,31 +167,23 @@ namespace Ergonomy.TaskAgent
                     if (snapshot != null)
                     {
                         _settings = snapshot;
-                        _collectionEnabled = snapshot.AllowErgonomyCollection;
-                        _logger.LogInformation(
-                            "Settings snapshot applied. Allow={Allow} Threshold={Threshold}s Interval={Interval}s Source={Source}",
-                            snapshot.AllowErgonomyCollection, snapshot.ActivityThresholdSeconds,
-                            snapshot.NotificationIntervalSeconds, snapshot.Source);
+                        _session.ApplySettings(snapshot);
                     }
 
                     break;
 
                 case IpcMessageTypes.StartCollection:
-                    _collectionEnabled = true;
-                    _logger.LogInformation("Collection enabled by the service.");
+                    _session.SetCollectionEnabled(true);
                     break;
 
                 case IpcMessageTypes.StopCollection:
-                    _collectionEnabled = false;
-                    _logger.LogInformation("Collection disabled by the service.");
+                    _session.SetCollectionEnabled(false);
                     break;
 
                 case IpcMessageTypes.ShowAlarm:
                     ShowAlarmPayload? alarm = message.GetPayload<ShowAlarmPayload>();
                     if (alarm != null)
-                    {
-                        MarshalToUi(() => ShowAlarm(alarm));
-                    }
+                        _session.ShowAlarmOnUiThread(alarm);
 
                     break;
 
@@ -187,33 +199,6 @@ namespace Ergonomy.TaskAgent
             }
 
             return Task.CompletedTask;
-        }
-
-        /// <summary>
-        /// درخواست نمایش هشدار را روی نخ UI پردازش می‌کند.
-        /// تا مهاجرت فرم‌ها، فقط تأیید «هنوز مهاجرت نشده» به سرویس بازگردانده می‌شود.
-        /// </summary>
-        /// <param name="alarm">مشخصات هشدار درخواستی سرویس.</param>
-        private void ShowAlarm(ShowAlarmPayload alarm)
-        {
-            var ack = new AlarmAckPayload { Kind = alarm.Kind, Shown = false };
-
-            try
-            {
-                _logger.LogInformation("Alarm requested. Kind={Kind} AutoClose={AutoClose}s Image={Image}",
-                    alarm.Kind, alarm.AutoCloseSeconds, alarm.ImagePath ?? "(none)");
-
-                // TODO(migration): construct and show the real alarm form here.
-                ack.Shown = false;
-                ack.Error = "alarm-forms-not-yet-migrated";
-            }
-            catch (Exception ex)
-            {
-                ack.Error = ex.Message;
-                _logger.LogError(ex, "Alarm rendering failed. Kind={Kind}", alarm.Kind);
-            }
-
-            _ = _client.TrySendAsync(IpcMessage.Create(IpcMessageTypes.AlarmAck, ack));
         }
 
         /// <summary>
@@ -281,6 +266,7 @@ namespace Ergonomy.TaskAgent
                     _logger.LogDebug(ex, "Goodbye could not be delivered.");
                 }
 
+                _session.Dispose();
                 _client.Dispose();
                 _uiAnchor.Dispose();
             }

@@ -47,6 +47,9 @@ namespace Ergonomy.Configuration
             settings.SettingsCheckIntervalSeconds = Normalize(
                 settings.SettingsCheckIntervalSeconds, 60, 0);
 
+            settings.VersionCheckerMinute = Normalize(
+                settings.VersionCheckerMinute, 60, 0);
+
             settings.PermissionSqliteRetryIntervalHours = Normalize(
                 settings.PermissionSqliteRetryIntervalHours, 1, 0);
 
@@ -55,6 +58,16 @@ namespace Ergonomy.Configuration
 
             settings.ConnectionFailureSleepMinutes = Normalize(
                 settings.ConnectionFailureSleepMinutes, 5, 0);
+
+            settings.Update ??= new AgentUpdateSettings();
+            settings.Update.CheckIntervalMinutes = Normalize(
+                settings.Update.CheckIntervalMinutes, 60, 0);
+            settings.Update.MaxJitterSeconds = Normalize(
+                settings.Update.MaxJitterSeconds, 900, 0);
+            settings.Update.DownloadRetryCount = Normalize(
+                settings.Update.DownloadRetryCount, 5, 0);
+            if (string.IsNullOrWhiteSpace(settings.Update.ServiceName))
+                settings.Update.ServiceName = "Ergonomy.Service";
         }
 
         /// <summary>

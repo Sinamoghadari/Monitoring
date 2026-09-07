@@ -4,16 +4,8 @@
     Ergonomy.Service - background (session 0) process.
 
     Owns everything that must survive user logoff and must NOT touch the interactive desktop:
-    SQLite outbox, SyncEngine/Kafka, advanced metrics, settings refresh, health checks and the
-    remote-command policy. It hosts the Named Pipe SERVER; it opens no new TCP/UDP listener.
-
-    Hosting: Generic Host with UseWindowsService. When launched by the SCM the process runs under
-    WindowsServiceLifetime (session 0, no console); when launched interactively from a command
-    prompt it runs under ConsoleLifetime (Ctrl+C stops it) so the same binary works for dev/test.
-
-    Migration status: this project currently hosts the IPC endpoint only. The service-side
-    workers are still compiled by the legacy Ergonomy.csproj and are moved over incrementally
-    (see ARCHITECTURE_SPLIT.md).
+    SQLite outbox (SQLCipher TDE), SyncEngine/Kafka, UpdateManager, settings refresh and
+    permission evaluation. Hosts the Named Pipe SERVER. Opens no new TCP/UDP listener.
   -->
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -27,13 +19,40 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Generic Host + Windows Service lifetime. Transitively brings Hosting, DI, Configuration, Logging. -->
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
+    <PackageReference Include="Confluent.Kafka" Version="2.14.0" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="9.0.0" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlcipher" Version="2.1.11" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.5" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\Ergonomy.Core\Ergonomy.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Machine-bound types still live next to the legacy project during migration. -->
+  <ItemGroup>
+    <Compile Include="..\LocalDatabaseManager.cs" Link="Database\LocalDatabaseManager.cs" />
+    <Compile Include="..\SqliteOutboxConnectionProvider.cs" Link="Database\SqliteOutboxConnectionProvider.cs" />
+    <Compile Include="..\Database\LegacyErg1Migrator.cs" Link="Database\LegacyErg1Migrator.cs" />
+    <Compile Include="..\SyncEngine.cs" Link="Database\SyncEngine.cs" />
+    <Compile Include="..\KafkaConnect.cs" Link="Database\KafkaConnect.cs" />
+    <Compile Include="..\Observability\AgentMetrics.cs" Link="Observability\AgentMetrics.cs" />
+    <Compile Include="..\Configuration\AppDefaults.cs" Link="Configuration\AppDefaults.cs" />
+    <Compile Include="..\Configuration\EnvironmentSettingsProvider.cs" Link="Configuration\EnvironmentSettingsProvider.cs" />
+    <Compile Include="..\Configuration\SettingsService.cs" Link="Configuration\SettingsService.cs" />
+    <Compile Include="..\Services\WorkerBase.cs" Link="Services\WorkerBase.cs" />
+    <Compile Include="..\Services\StartupLog.cs" Link="Services\StartupLog.cs" />
+    <Compile Include="..\Services\SqlCipherKeyStore.cs" Link="Services\SqlCipherKeyStore.cs" />
+    <Compile Include="..\Services\MachineIdentity.cs" Link="Services\MachineIdentity.cs" />
+    <Compile Include="..\Services\MessageLogService.cs" Link="Services\MessageLogService.cs" />
+    <Compile Include="..\Services\ErrorOnlyAppLogLoggerProvider.cs" Link="Services\ErrorOnlyAppLogLoggerProvider.cs" />
+    <Compile Include="..\Services\ICollectionGate.cs" Link="Services\ICollectionGate.cs" />
+    <Compile Include="..\Services\PermissionsEvaluator.cs" Link="Services\PermissionsEvaluator.cs" />
+    <Compile Include="..\Services\PermissionMonitorWorker.cs" Link="Services\PermissionMonitorWorker.cs" />
+    <Compile Include="..\Services\SettingsRefreshWorker.cs" Link="Services\SettingsRefreshWorker.cs" />
+    <Compile Include="..\Services\UpdateManager.cs" Link="Services\UpdateManager.cs" />
   </ItemGroup>
 
 </Project>

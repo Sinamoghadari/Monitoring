@@ -7,6 +7,12 @@
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <Version>1.0.0</Version>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    <FileVersion>1.0.0.0</FileVersion>
+    <InformationalVersion>1.0.0</InformationalVersion>
+    <ApplicationIcon>Assets\app_icon.ico</ApplicationIcon>
 
     <!-- Publish settings -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
@@ -23,10 +29,10 @@
     globs must not compile them into this legacy assembly.
   -->
   <ItemGroup>
-    <Compile Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**" />
-    <EmbeddedResource Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**" />
-    <None Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**" />
-    <Content Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**" />
+    <Compile Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**;Ergonomy.Core.Tests\**" />
+    <EmbeddedResource Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**;Ergonomy.Core.Tests\**" />
+    <None Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**;Ergonomy.Core.Tests\**" />
+    <Content Remove="Ergonomy.Core\**;Ergonomy.Service\**;Ergonomy.Task\**;Ergonomy.Core.Tests\**" />
   </ItemGroup>
 
   <ItemGroup>
@@ -40,7 +46,10 @@
     <PackageReference Include="EPPlus" Version="7.1.2" />
     <PackageReference Include="FastMember" Version="1.5.0" />
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.5" />
+    <!-- SQLCipher TDE: Core provider + e_sqlcipher bundle. Do NOT restore Microsoft.Data.Sqlite (stock sqlite). -->
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="9.0.0" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlcipher" Version="2.1.11" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="10.0.5" />
 
     <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.0" />
     <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.0" />
@@ -59,10 +68,16 @@
     <Content Include="assets\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <Content Include="Assets\**">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
   <ItemGroup>
     <None Update="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Update="Scripts\apply_update.bat">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

@@ -131,6 +131,10 @@ namespace Ergonomy.Configuration
                     "ERGONOMY_SETTINGS_CHECK_INTERVAL_SECONDS",
                     30),
 
+                VersionCheckerMinute = GetInt(
+                    "ERGONOMY_VERSION_CHECKER_MINUTE",
+                    60),
+
                 NotificationIntervalSeconds = GetInt(
                     "ERGONOMY_NOTIFICATION_INTERVAL_SECONDS",
                     5),
@@ -254,7 +258,28 @@ namespace Ergonomy.Configuration
 
 
                 EnabledMetrics = ParseEnabledMetrics(
-                    GetString("ERGONOMY_ENABLED_METRICS"))
+                    GetString("ERGONOMY_ENABLED_METRICS")),
+
+                Update = new AgentUpdateSettings
+                {
+                    Enabled = GetBool("ERGONOMY_UPDATE_ENABLED", false),
+                    LatestVersion = GetString("ERGONOMY_UPDATE_LATEST_VERSION"),
+                    Version = GetString("ERGONOMY_UPDATE_VERSION"),
+                    DownloadUrl = GetString("ERGONOMY_UPDATE_DOWNLOAD_URL"),
+                    Sha256 = GetString("ERGONOMY_UPDATE_SHA256"),
+                    ServiceName = GetString(
+                        "ERGONOMY_UPDATE_SERVICE_NAME",
+                        "Ergonomy.Service"),
+                    CheckIntervalMinutes = GetInt(
+                        "ERGONOMY_UPDATE_CHECK_INTERVAL_MINUTES",
+                        60),
+                    MaxJitterSeconds = GetInt(
+                        "ERGONOMY_UPDATE_MAX_JITTER_SECONDS",
+                        900),
+                    DownloadRetryCount = GetInt(
+                        "ERGONOMY_UPDATE_DOWNLOAD_RETRY_COUNT",
+                        5)
+                }
             };
         }
 
