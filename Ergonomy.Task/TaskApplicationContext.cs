@@ -54,13 +54,14 @@ namespace Ergonomy.TaskAgent
             _uiAnchor = new Control();
             _uiAnchor.CreateControl();
 
+            Func<ActivityReportPayload, Task<bool>> reportActivity = SendActivityToServiceAsync;
             _session = new InteractiveSession(
                 hook,
                 monitor,
                 alarms,
                 _uiAnchor,
                 sessionLogger,
-                ReportActivityAsync);
+                reportActivity);
 
             _client.MessageReceived = OnMessageAsync;
             _client.Connected = OnConnected;
@@ -75,6 +76,16 @@ namespace Ergonomy.TaskAgent
 
         /// <summary>Latest settings pushed by the Service (null until the first snapshot arrives).</summary>
         public SettingsSnapshotPayload? Settings => _settings;
+
+        /// <summary>
+        /// Matches InteractiveSession's callback exactly: one payload argument, Task&lt;bool&gt;.
+        /// ReportActivityAsync cannot be passed as a method group because it also takes CancellationToken.
+        /// </summary>
+        private Task<bool> SendActivityToServiceAsync(ActivityReportPayload report)
+        {
+            if (report is null) throw new ArgumentNullException(nameof(report));
+            return _client.TrySendAsync(IpcMessage.Create(IpcMessageTypes.ActivityReport, report));
+        }
 
         /// <summary>
         /// فعالیت تجمعی را به‌صورت ناهمگام به سرویس گزارش می‌دهد و نخ فراخواننده را مسدود نمی‌کند.
