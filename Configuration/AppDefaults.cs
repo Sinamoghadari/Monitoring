@@ -68,6 +68,11 @@ namespace Ergonomy.Configuration
                 settings.Update.DownloadRetryCount, 5, 0);
             if (string.IsNullOrWhiteSpace(settings.Update.ServiceName))
                 settings.Update.ServiceName = "Ergonomy.Service";
+
+            // Machine env and old PostgreSQL rows still carry :8082 / :9092.
+            // Rewrite at the shared boundary so KafkaConnect is built with :9094
+            // and Settings refresh uses the HTTPS reverse proxy.
+            LegacyEndpointRewriter.Rewrite(settings);
         }
 
         /// <summary>
