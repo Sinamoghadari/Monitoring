@@ -11,6 +11,9 @@ namespace Ergonomy.Logging
         public const int SettingsRefreshed = 1010;
         public const int SettingsRefreshFailed = 1011;
         public const int SettingsValidationFailed = 1012;
+        public const int AlarmAssetReload = 1013;
+        public const int AlarmAssetRecovered = 1014;
+        public const int AlarmAssetFailed = 1015;
 
         public const int WorkerStarted = 2000;
         public const int WorkerStopped = 2010;
@@ -49,6 +52,9 @@ namespace Ergonomy.Logging
         public static readonly EventId SettingsRefreshedId = new(SettingsRefreshed, "SettingsRefreshed");
         public static readonly EventId SettingsRefreshFailedId = new(SettingsRefreshFailed, "SettingsRefreshFailed");
         public static readonly EventId SettingsValidationFailedId = new(SettingsValidationFailed, "SettingsValidationFailed");
+        public static readonly EventId AlarmAssetReloadId = new(AlarmAssetReload, "AlarmAssetReload");
+        public static readonly EventId AlarmAssetRecoveredId = new(AlarmAssetRecovered, "AlarmAssetRecovered");
+        public static readonly EventId AlarmAssetFailedId = new(AlarmAssetFailed, "AlarmAssetFailed");
         public static readonly EventId PermissionEvaluatedId = new(PermissionEvaluated, "PermissionEvaluated");
         public static readonly EventId HealthCheckedId = new(HealthChecked, "HealthChecked");
         public static readonly EventId HealthFailedId = new(HealthFailed, "HealthFailed");

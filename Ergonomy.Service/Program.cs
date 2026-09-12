@@ -111,6 +111,7 @@ namespace Ergonomy.Service
                     services.AddSingleton<ServiceIpcHost>();
                     services.AddSingleton<ICollectionGate, IpcCollectionGate>();
                     services.AddSingleton<PermissionsEvaluator>();
+                    services.AddSingleton<IAlarmImageLoader, NoOpAlarmImageLoader>();
                     services.AddSingleton<SettingsRefreshWorker>();
                     services.AddSingleton<PermissionMonitorWorker>();
                     services.AddSingleton<UpdateManager>();

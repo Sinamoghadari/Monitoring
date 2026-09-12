@@ -97,7 +97,10 @@ namespace Ergonomy.Services
             services.AddSingleton<ActivityMonitor>(sp =>
                 new ActivityMonitor(sp.GetRequiredService<GlobalInputHook>()));
             services.AddSingleton<AlarmManager>(sp =>
-                new AlarmManager(sp.GetRequiredService<AppSettings>()));
+                new AlarmManager(
+                    sp.GetRequiredService<AppSettings>(),
+                    sp.GetRequiredService<ILogger<AlarmManager>>()));
+            services.AddSingleton<IAlarmImageLoader>(sp => sp.GetRequiredService<AlarmManager>());
             services.AddSingleton<DataLogger>(sp =>
                 new DataLogger(
                     sp.GetRequiredService<ActivityMonitor>(),

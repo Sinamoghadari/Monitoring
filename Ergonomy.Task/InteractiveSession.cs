@@ -72,6 +72,8 @@ namespace Ergonomy.TaskAgent
                 Start("settings-allow");
             else
                 Stop("AllowErgonomyCollection is false");
+
+            _ = _alarms.EnsureLoadedAsync();
         }
 
         public void SetCollectionEnabled(bool enabled)

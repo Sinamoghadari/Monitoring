@@ -77,7 +77,10 @@ namespace Ergonomy.TaskAgent
 
             services.AddSingleton<GlobalInputHook>();
             services.AddSingleton<ActivityMonitor>();
-            services.AddSingleton(_ => new AlarmManager(new AppSettings()));
+            services.AddSingleton<AlarmManager>(sp => new AlarmManager(
+                new AppSettings(),
+                sp.GetRequiredService<ILogger<AlarmManager>>()));
+            services.AddSingleton<IAlarmImageLoader>(sp => sp.GetRequiredService<AlarmManager>());
             services.AddSingleton<TaskApplicationContext>();
 
             return services.BuildServiceProvider();

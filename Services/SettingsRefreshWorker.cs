@@ -15,18 +15,19 @@ namespace Ergonomy.Services
     public sealed class SettingsRefreshWorker : WorkerBase
     {
         private readonly ISettingsService _settingsService;
+        private readonly IAlarmImageLoader _alarmImages;
 
         /// <summary>
-        /// کارگر تازه‌سازی تنظیمات را به سرویس تنظیمات متصل می‌کند.
+        /// کارگر تازه‌سازی تنظیمات را به سرویس تنظیمات و بارگذار تصاویر هشدار متصل می‌کند.
         /// </summary>
-        /// <param name="settingsService">سرویس خواندن API تنظیمات.</param>
-        /// <param name="logger">ثبت‌کننده چرخه کارگر.</param>
         public SettingsRefreshWorker(
             ISettingsService settingsService,
-            ILogger<SettingsRefreshWorker> logger)
+            ILogger<SettingsRefreshWorker> logger,
+            IAlarmImageLoader alarmImages)
             : base(logger)
         {
             _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
+            _alarmImages = alarmImages ?? NoOpAlarmImageLoader.Instance;
         }
 
         protected override string Name => nameof(SettingsRefreshWorker);
@@ -51,6 +52,9 @@ namespace Ergonomy.Services
         protected override async Task DoWorkAsync(CancellationToken ct)
         {
             await _settingsService.RefreshFromApiAsync(logFailures: true, cancellationToken: ct).ConfigureAwait(false);
+            // Re-evaluate assets even when the JSON payload did not change: a previous
+            // transient fetch failure must be able to recover without an app restart.
+            await _alarmImages.EnsureLoadedAsync(ct).ConfigureAwait(false);
         }
     }
 }
