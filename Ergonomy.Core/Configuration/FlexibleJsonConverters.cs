@@ -63,7 +63,7 @@ namespace Ergonomy.Configuration
                     return string.Empty;
                 case JsonTokenType.StartArray:
                     // Control API / PostgreSQL JSONB often stores Kafka bootstrap as
-                    // ["host:9092"] rather than a comma-separated string.
+                    // ["host:9094"] rather than a comma-separated string.
                     return ReadArrayAsCsv(ref reader);
                 case JsonTokenType.StartObject:
                     reader.Skip();

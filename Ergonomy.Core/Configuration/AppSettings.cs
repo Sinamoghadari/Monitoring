@@ -6,9 +6,9 @@ namespace Ergonomy.Configuration
 {
     public class ApiSettings
     {
-        public string Settings { get; set; } = "";
-        public string LoadImages { get; set; } = "";
-        public string Commands { get; set; } = "";
+        public string Settings { get; set; } = AgentEndpoints.ApiSettings;
+        public string LoadImages { get; set; } = AgentEndpoints.ApiImages;
+        public string Commands { get; set; } = AgentEndpoints.ApiCommands;
     }
 
     public class AppSettings
@@ -65,7 +65,7 @@ namespace Ergonomy.Configuration
 
     public class KafkaSettings
     {
-        public string BootstrapServers { get; set; } = "localhost:9092";
+        public string BootstrapServers { get; set; } = AgentEndpoints.KafkaBootstrap;
         public string UserActivityTopic { get; set; } = "user_activity";
         public string SystemMetricsTopic { get; set; } = "system_metrics";
         public string AppLogsTopic { get; set; } = "app_logs";

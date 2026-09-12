@@ -70,9 +70,9 @@ namespace Ergonomy
             try
             {
                 // خواندن آدرس از تنظیمات. اگر خالی بود از مقدار پیش‌فرض استفاده می‌شود
-                string apiUrl = !string.IsNullOrEmpty(_appSettings?.API?.LoadImages) 
-                    ? _appSettings.API.LoadImages 
-                    : "http://172.17.214.38:8082/api/images";
+                string apiUrl = !string.IsNullOrEmpty(_appSettings?.API?.LoadImages)
+                    ? _appSettings.API.LoadImages
+                    : AgentEndpoints.ApiImages;
 
                 var response = await _httpClient.GetStringAsync(apiUrl);
                 var imagesData = JsonSerializer.Deserialize<List<ImageApiResponse>>(response);

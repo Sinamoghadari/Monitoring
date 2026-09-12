@@ -205,16 +205,16 @@ namespace Ergonomy.Configuration
 
                 API = new ApiSettings
                 {
-                    Settings = GetString("ERGONOMY_API_SETTINGS"),
-                    LoadImages = GetString("ERGONOMY_API_LOAD_IMAGES"),
-                    Commands = GetString("ERGONOMY_API_COMMANDS")
+                    Settings = GetString("ERGONOMY_API_SETTINGS", AgentEndpoints.ApiSettings),
+                    LoadImages = GetString("ERGONOMY_API_LOAD_IMAGES", AgentEndpoints.ApiImages),
+                    Commands = GetString("ERGONOMY_API_COMMANDS", AgentEndpoints.ApiCommands)
                 },
 
                 Kafka = new KafkaSettings
                 {
                     BootstrapServers = GetString(
                         "ERGONOMY_KAFKA_BOOTSTRAP_SERVERS",
-                        "localhost:9092"),
+                        AgentEndpoints.KafkaBootstrap),
 
                     UserActivityTopic = GetString(
                         "ERGONOMY_KAFKA_USER_ACTIVITY_TOPIC",
