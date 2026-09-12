@@ -1,7 +1,11 @@
-DROP VIEW IF EXISTS MV_UserActivities_To_Target;
-DROP TABLE IF EXISTS Kafka_UserActivities;
+CREATE DATABASE IF NOT EXISTS Monitoring;
 
-CREATE TABLE IF NOT EXISTS Kafka_UserActivities
+DROP VIEW IF EXISTS MV_UserActivities_To_Target;
+DROP VIEW IF EXISTS Monitoring.MV_UserActivities_To_Target;
+DROP TABLE IF EXISTS Kafka_UserActivities;
+DROP TABLE IF EXISTS Monitoring.Kafka_UserActivities;
+
+CREATE TABLE IF NOT EXISTS Monitoring.Kafka_UserActivities
 (
     SessionId UUID,
     WindowsSid String,

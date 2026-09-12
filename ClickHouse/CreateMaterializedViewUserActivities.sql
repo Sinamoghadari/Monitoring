@@ -1,6 +1,11 @@
-DROP VIEW IF EXISTS MV_UserActivities_To_Target;
+CREATE DATABASE IF NOT EXISTS Monitoring;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS MV_UserActivities_To_Target TO UserActivities AS
+DROP VIEW IF EXISTS MV_UserActivities_To_Target;
+DROP VIEW IF EXISTS Monitoring.MV_UserActivities_To_Target;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS Monitoring.MV_UserActivities_To_Target
+TO Monitoring.UserActivities
+AS
 SELECT
     SessionId,
     WindowsSid,
@@ -14,4 +19,4 @@ SELECT
     SecondaryAlarmCount,
     parseDateTime64BestEffort(Timestamp, 7, 'UTC') AS Timestamp,
     Timestamp_Shamsi -- انتقال فیلد شمسی به جدول اصلی
-FROM Kafka_UserActivities;
+FROM Monitoring.Kafka_UserActivities;

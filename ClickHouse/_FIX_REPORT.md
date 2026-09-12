@@ -1,102 +1,97 @@
 # ClickHouse DDL audit — Kafka engine / MV repair
 
-Date: 2026-09-12  
-Scope: `ClickHouse/*.sql` only. No live `CLICKHOUSE` statements were executed.
+Date: 2026-09-12 (pass 2)  
+Scope: `ClickHouse/*.sql` only. No live statements were executed against ClickHouse.
 
 ## 1. Inventory
 
-| File | Statements | Classification | Cross-refs |
+| File | Classification | Object | Feeds / source |
 | --- | --- | --- | --- |
-| `CreateKafkaAppLogs.sql` | DROP VIEW, DROP TABLE, CREATE TABLE | **KAFKA_ENGINE** `Kafka_AppLogs` | topic `app_logs` → MV `MV_AppLogs_To_Target` |
-| `CreateKafkaUserActivities.sql` | DROP VIEW, DROP TABLE, CREATE TABLE | **KAFKA_ENGINE** `Kafka_UserActivities` | topic `user_activity_topic` → MV `MV_UserActivities_To_Target` |
-| `CreateKafkaSystemMetrics.sql` | CREATE TABLE `SystemMetrics` `ReplacingMergeTree` | **TARGET (misnamed)** | Not a Kafka engine. Duplicate/alternate of `CreateSystemMetrics.sql` |
-| `CreateAppLogs.sql` | CREATE TABLE | **TARGET** `AppLogs` MergeTree | Fed by `MV_AppLogs_To_Target` |
-| `CreateUserActivities.sql` | CREATE TABLE | **TARGET** `UserActivities` MergeTree | Fed by `MV_UserActivities_To_Target` |
-| `CreateSystemMetrics.sql` | CREATE TABLE | **TARGET** `SystemMetrics` MergeTree | Intended sink of `MV_SystemMetrics_To_Target` |
-| `CreateMaterializedViewAppLoggs.sql` | DROP VIEW, CREATE MV | **MV** `Monitoring.MV_AppLogs_To_Target` | `Kafka_AppLogs` → `AppLogs` |
-| `CreateMaterializedViewUserActivities.sql` | DROP VIEW, CREATE MV | **MV** `MV_UserActivities_To_Target` | `Kafka_UserActivities` → `UserActivities` |
-| `CreateMaterializedViewSystemMetrics.sql` | DROP VIEW, CREATE MV | **MV** `MV_SystemMetrics_To_Target` | `Kafka_SystemMetrics` → `SystemMetrics` (**source table missing**) |
+| `CreateAppLogs.sql` | TARGET MergeTree | `Monitoring.AppLogs` | sink of `MV_AppLogs_To_Target` |
+| `CreateUserActivities.sql` | TARGET MergeTree | `Monitoring.UserActivities` | sink of `MV_UserActivities_To_Target` |
+| `CreateSystemMetrics.sql` | TARGET MergeTree | `Monitoring.SystemMetrics` | sink of `MV_SystemMetrics_To_Target` |
+| `CreateKafkaAppLogs.sql` | KAFKA_ENGINE | `Monitoring.Kafka_AppLogs` | topic `app_logs` |
+| `CreateKafkaUserActivities.sql` | KAFKA_ENGINE | `Monitoring.Kafka_UserActivities` | topic `user_activity_topic` |
+| `CreateKafkaSystemMetrics.sql` | KAFKA_ENGINE | `Monitoring.Kafka_SystemMetrics` | topic `system_metrics` |
+| `CreateMaterializedViewAppLoggs.sql` | MV | `Monitoring.MV_AppLogs_To_Target` | `Kafka_AppLogs` → `AppLogs` |
+| `CreateMaterializedViewUserActivities.sql` | MV | `Monitoring.MV_UserActivities_To_Target` | `Kafka_UserActivities` → `UserActivities` |
+| `CreateMaterializedViewSystemMetrics.sql` | MV | `Monitoring.MV_SystemMetrics_To_Target` | `Kafka_SystemMetrics` → `SystemMetrics` |
 
-No `ALTER` / `TRUNCATE` statements exist in this directory.
+No `ALTER` / `TRUNCATE` / target `DROP` statements.
 
-Suggested apply order (targets first, never drop them):
+Apply order:
 
-1. `CreateAppLogs.sql`, `CreateUserActivities.sql`, `CreateSystemMetrics.sql`
-2. `CreateKafkaAppLogs.sql`, `CreateKafkaUserActivities.sql`
+1. Target scripts (`CreateAppLogs.sql`, `CreateUserActivities.sql`, `CreateSystemMetrics.sql`)
+2. Kafka engine scripts
 3. Materialized-view scripts
 
-## 2. Files changed
+## 2. Files changed (this pass)
+
+### `CreateKafkaSystemMetrics.sql` — **rewritten**
+
+Previous content was TARGET `SystemMetrics ENGINE = ReplacingMergeTree()` (wrong file). Replaced with the missing Kafka engine table the MV already referenced:
+
+- `CREATE TABLE IF NOT EXISTS Monitoring.Kafka_SystemMetrics`
+- `ENGINE = Kafka()`
+- `kafka_broker_list = 'kafka:9092'`
+- `kafka_topic_list = 'system_metrics'` (agent / `Postgres/app_configuration.sql` default)
+- `kafka_group_name = 'clickhouse_systemmetrics_group'` (new; no prior group existed)
+- `kafka_format = 'JSONEachRow'`
+- `kafka_skip_broken_messages = 1000`
+- Columns = MV source fields (JSON types). `MessageId` is **not** a table column; Kafka message key remains virtual `_key`.
+- DROP order: MV then Kafka table. **Does not drop** `SystemMetrics`.
 
 ### `CreateKafkaAppLogs.sql`
 
-- Added `DROP VIEW IF EXISTS` for `MV_AppLogs_To_Target` / `Monitoring.MV_AppLogs_To_Target` then `DROP TABLE IF EXISTS` Kafka table (dependency order).
-- `kafka_broker_list` already `'kafka:9092'` — unchanged.
-- Settings already had `kafka_format = 'JSONEachRow'`, `kafka_group_name = 'clickhouse_applogs_group'`, `kafka_skip_broken_messages = 1000` — kept (group name not renamed).
-- Reformatted SETTINGS onto separate lines.
+- Qualify as `Monitoring.Kafka_AppLogs` (fixes `UNKNOWN_TABLE Monitoring.Kafka_AppLogs`).
+- Added `CollectedAt String` so the live MV `toDateTime(CollectedAt)` / `coalesce(..., CollectedAt)` resolves.
+- Kept `Timestamp String` for the coalesce fallback.
+- `CREATE DATABASE IF NOT EXISTS Monitoring`.
+- Group name unchanged: `clickhouse_applogs_group`.
 
 ### `CreateKafkaUserActivities.sql`
 
-- Added `DROP VIEW IF EXISTS MV_UserActivities_To_Target` then `DROP TABLE IF EXISTS Kafka_UserActivities`.
-- `kafka_broker_list` already `'kafka:9092'` — unchanged.
-- **Added** `kafka_skip_broken_messages = 1000` (was missing).
-- Kept `kafka_group_name = 'clickhouse_group_users'` and `kafka_format = 'JSONEachRow'`.
-- Preserved Persian comment on `Timestamp_Shamsi`.
+- Qualify as `Monitoring.Kafka_UserActivities`.
+- `CREATE DATABASE IF NOT EXISTS Monitoring`.
+- Settings unchanged (`kafka:9092`, `user_activity_topic`, `clickhouse_group_users`, skip 1000).
 
-### `CreateMaterializedViewAppLoggs.sql`
+### Materialized views
 
-- Added `DROP VIEW IF EXISTS` (unqualified + `Monitoring.`) before create.
-- Added `IF NOT EXISTS` on `CREATE MATERIALIZED VIEW`.
-- SELECT list unchanged (schema mismatch flagged below).
+- All created as `Monitoring.MV_*` reading `Monitoring.Kafka_*` writing `Monitoring.*`.
+- SystemMetrics MV: dropped `_key AS MessageId` and `parseDateTime64BestEffortOrZero(BootTime)` so the SELECT matches TARGET `CreateSystemMetrics.sql` (no `MessageId`, `BootTime String`).
+- AppLogs MV SELECT unchanged (now valid against Kafka table that includes `CollectedAt`).
 
-### `CreateMaterializedViewUserActivities.sql`
+### Target scripts
 
-- Added `DROP VIEW IF EXISTS MV_UserActivities_To_Target`.
-- SELECT list and Persian comment unchanged.
+- Prefixed `Monitoring.<table>` and `CREATE DATABASE IF NOT EXISTS Monitoring`.
+- Columns, engines, `ORDER BY` / `PARTITION BY` unchanged. No drops.
 
-### `CreateMaterializedViewSystemMetrics.sql`
+## 3. Files unchanged (schema)
 
-- Added `DROP VIEW IF EXISTS MV_SystemMetrics_To_Target`.
-- Removed developer note `-- ← فقط همین خط اضافه/تغییر می‌شود` (not schema intent).
-- SELECT list unchanged (missing Kafka source flagged below).
-
-### `CreateAppLogs.sql`
-
-- `CREATE TABLE AppLogs` → `CREATE TABLE IF NOT EXISTS AppLogs`.
-- Engine, columns, `ORDER BY` / `PARTITION BY` untouched.
-
-## 3. Files unchanged and why
-
-| File | Why |
-| --- | --- |
-| `CreateUserActivities.sql` | TARGET MergeTree; already `IF NOT EXISTS`; no Kafka settings; column/`ORDER BY` changes are out of scope. |
-| `CreateSystemMetrics.sql` | TARGET MergeTree; already `IF NOT EXISTS`; must not drop or alter. |
-| `CreateKafkaSystemMetrics.sql` | **Not a Kafka engine table.** It creates TARGET `SystemMetrics` (`ReplacingMergeTree`, includes `MessageId`). Converting it to `ENGINE = Kafka()` would invent `kafka_topic_list` / `kafka_group_name` (forbidden) and would replace a target definition. Left unmodified. |
-
-Zero occurrences of `kafka:9094` or `172.17.214.38:9094` were present before or after the edit.
+Target column lists / engines were not redesigned.
 
 ## 4. Flagged risks
 
 | Severity | File | Issue |
 | --- | --- | --- |
-| **High** | `CreateKafkaSystemMetrics.sql` (entire file) vs `CreateMaterializedViewSystemMetrics.sql:34` | MV reads `FROM Kafka_SystemMetrics` but **no script creates** `Kafka_SystemMetrics`. The file named `CreateKafkaSystemMetrics.sql` actually defines TARGET `SystemMetrics ENGINE = ReplacingMergeTree()`. Topic name is not specified anywhere in these scripts, so the Kafka table was **not invented**. System-metrics ingestion via MV cannot start until a real Kafka engine table is added in a follow-up (with an agreed topic, e.g. agent `system_metrics` vs Control API `advanced_system_metrics_topic`). |
-| **High** | `CreateSystemMetrics.sql` vs `CreateKafkaSystemMetrics.sql` | Two competing TARGETs named `SystemMetrics`: MergeTree without `MessageId` vs ReplacingMergeTree with `MessageId`. `CREATE IF NOT EXISTS` means whichever runs first wins. MV `SELECT _key AS MessageId` does not match `CreateSystemMetrics.sql` (no `MessageId` column). |
-| **High** | `CreateMaterializedViewAppLoggs.sql:8-12` vs `CreateKafkaAppLogs.sql` | MV selects `CollectedAt` (`toDateTime64(CollectedAt, 3)` / `toDateTime(CollectedAt)`). Kafka table **has no `CollectedAt` column** (only `Timestamp String`). Agent `app_logs` JSON *does* send `CollectedAt`. Out of scope to add columns; MV will fail or yield default/NULL for that expression until the Kafka table is aligned. |
-| **Medium** | `CreateKafkaUserActivities.sql` `SessionId UUID` | Agent JSON typically sends a hex GUID string. ClickHouse JSONEachRow can parse UUID strings; non-UUID values become skip-broken (now 1000). |
-| **Medium** | `CreateMaterializedViewSystemMetrics.sql` `parseDateTime64BestEffortOrZero(BootTime, 7) AS BootTime` | Both TARGET definitions store `BootTime` as **String**. Inserting DateTime64 into String may coerce or fail depending on CH version. |
-| **Low** | `CreateMaterializedViewAppLoggs.sql` | Filename typo `AppLoggs`. MV is created in database `Monitoring.` while other objects are unqualified. |
-| **Low** | Kafka scripts DROP VIEW | Re-running a Kafka script alone drops the MV until the matching MV script is re-applied. Run Kafka scripts then MV scripts. |
+| Medium | `CreateKafkaUserActivities.sql` | `kafka_topic_list = 'user_activity_topic'` but agent default / PG config is `user_activity`. Existing CH topic name kept (do not rename). |
+| Medium | `CreateKafkaUserActivities.sql` `SessionId UUID` | Non-UUID JSON values are skipped (`kafka_skip_broken_messages = 1000`). |
+| Medium | Live cluster | If an earlier run created unqualified `default.Kafka_AppLogs` or `default.SystemMetrics`, those objects are **not** dropped. Create the `Monitoring.*` objects from these scripts. If live `SystemMetrics` still has `MessageId` from the old ReplacingMergeTree script, MV insert still works (extra target columns get defaults). |
+| Low | Kafka scripts DROP VIEW | Re-run Kafka script then re-run the matching MV script. |
 
-No target-table `DROP`/`TRUNCATE` was present; none were added.
-
-## 5. Final assertions
+## 5. Assertions
 
 | Check | Result |
 | --- | --- |
-| Zero `'9094'` inside any Kafka engine SETTINGS block | **PASS** (zero `'9094'` anywhere under `ClickHouse/`) |
-| Every **actual** `ENGINE = Kafka()` table has `kafka_broker_list`, `kafka_topic_list`, `kafka_group_name`, `kafka_format` | **PASS** (`Kafka_AppLogs`, `Kafka_UserActivities`; both `kafka:9092` + `JSONEachRow` + skip 1000) |
-| `kafka_skip_broken_messages = 1000` on every Kafka engine table | **PASS** |
-| Kafka group names unchanged | **PASS** (`clickhouse_applogs_group`, `clickhouse_group_users`) |
-| MV SELECT columns exist on Kafka source (name presence) | **FAIL** — `MV_AppLogs_To_Target` references `CollectedAt` absent from `Kafka_AppLogs`; `MV_SystemMetrics_To_Target` references table `Kafka_SystemMetrics` which has **no CREATE** |
-| No target table dropped/truncated | **PASS** |
+| Zero `'9094'` in Kafka SETTINGS | **PASS** |
+| Every Kafka table has broker, topic, group, format, skip 1000 | **PASS** (`Kafka_AppLogs`, `Kafka_UserActivities`, `Kafka_SystemMetrics`) |
+| Broker is `kafka:9092` | **PASS** |
+| MV sources exist by name | **PASS** (`Monitoring.Kafka_AppLogs`, `Monitoring.Kafka_UserActivities`, `Monitoring.Kafka_SystemMetrics`) |
+| MV SELECT columns present on Kafka source | **PASS** (AppLogs now includes `CollectedAt`; SystemMetrics MV no longer selects missing `MessageId`) |
+| No target DROP/TRUNCATE | **PASS** |
 
-Remaining assertion failures are schema gaps that require a new Kafka table / column additions — out of this repair’s scope.
+## 6. Live error mapping
+
+`UNKNOWN_TABLE Monitoring.Kafka_AppLogs` while creating `MV_AppLogs_To_Target`: run `CreateKafkaAppLogs.sql` **before** the MV (creates `Monitoring.Kafka_AppLogs`). Then run `CreateMaterializedViewAppLoggs.sql`.
+
+`Kafka_SystemMetrics` missing: run rewritten `CreateKafkaSystemMetrics.sql`, then `CreateMaterializedViewSystemMetrics.sql`.

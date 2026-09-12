@@ -1,4 +1,6 @@
-CREATE TABLE IF NOT EXISTS AppLogs
+CREATE DATABASE IF NOT EXISTS Monitoring;
+
+CREATE TABLE IF NOT EXISTS Monitoring.AppLogs
 (
     Timestamp DateTime64(7),
     CollectedAt DateTime,

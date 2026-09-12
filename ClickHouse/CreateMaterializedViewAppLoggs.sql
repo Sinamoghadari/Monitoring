@@ -1,3 +1,5 @@
+CREATE DATABASE IF NOT EXISTS Monitoring;
+
 DROP VIEW IF EXISTS MV_AppLogs_To_Target;
 DROP VIEW IF EXISTS Monitoring.MV_AppLogs_To_Target;
 

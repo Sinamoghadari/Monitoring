@@ -1,11 +1,14 @@
+CREATE DATABASE IF NOT EXISTS Monitoring;
+
 DROP VIEW IF EXISTS MV_AppLogs_To_Target;
 DROP VIEW IF EXISTS Monitoring.MV_AppLogs_To_Target;
 DROP TABLE IF EXISTS Kafka_AppLogs;
 DROP TABLE IF EXISTS Monitoring.Kafka_AppLogs;
 
-CREATE TABLE IF NOT EXISTS Kafka_AppLogs
+CREATE TABLE IF NOT EXISTS Monitoring.Kafka_AppLogs
 (
     Timestamp String,
+    CollectedAt String,
     CollectedAt_Shamsi String,
     LogLevel String,
     Message String,
