@@ -109,6 +109,17 @@ namespace Ergonomy.Core.Ipc
         public int GraceSeconds { get; set; } = 5;
     }
 
+    /// <summary>
+    /// Task -> Service problem record. The Service writes it to the SQLite outbox and
+    /// SyncEngine forwards it to app_logs. Only WARNING / ERROR are persisted.
+    /// </summary>
+    public sealed class ProblemLogPayload
+    {
+        public string Level { get; set; } = "ERROR";
+        public string Message { get; set; } = string.Empty;
+        public string Category { get; set; } = "Task";
+    }
+
     /// <summary>Task -> Service notice that the process is exiting (best effort).</summary>
     public sealed class GoodbyePayload
     {

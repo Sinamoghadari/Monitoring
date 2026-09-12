@@ -11,6 +11,9 @@ namespace Ergonomy.Logging
         public const int SettingsRefreshed = 1010;
         public const int SettingsRefreshFailed = 1011;
         public const int SettingsValidationFailed = 1012;
+        public const int AlarmAssetReload = 1013;
+        public const int AlarmAssetRecovered = 1014;
+        public const int AlarmAssetFailed = 1015;
 
         public const int WorkerStarted = 2000;
         public const int WorkerStopped = 2010;
@@ -33,7 +36,14 @@ namespace Ergonomy.Logging
         public const int SystemPowerCommandDenied = 6020;
         public const int RemoteCommandFailure = 6030;
         public const int KafkaSendFailure = 6040;
+        public const int KafkaReconfigured = 6050;
         public const int GracefulShutdown = 7000;
+
+        public const int UpdateCheck = 8000;
+        public const int UpdateAvailable = 8010;
+        public const int UpdateDownloadFailed = 8020;
+        public const int UpdateIntegrityFailed = 8030;
+        public const int UpdateApplied = 8040;
 
         public static readonly EventId WorkerStartedId = new(WorkerStarted, "WorkerStarted");
         public static readonly EventId WorkerStoppedId = new(WorkerStopped, "WorkerStopped");
@@ -42,6 +52,9 @@ namespace Ergonomy.Logging
         public static readonly EventId SettingsRefreshedId = new(SettingsRefreshed, "SettingsRefreshed");
         public static readonly EventId SettingsRefreshFailedId = new(SettingsRefreshFailed, "SettingsRefreshFailed");
         public static readonly EventId SettingsValidationFailedId = new(SettingsValidationFailed, "SettingsValidationFailed");
+        public static readonly EventId AlarmAssetReloadId = new(AlarmAssetReload, "AlarmAssetReload");
+        public static readonly EventId AlarmAssetRecoveredId = new(AlarmAssetRecovered, "AlarmAssetRecovered");
+        public static readonly EventId AlarmAssetFailedId = new(AlarmAssetFailed, "AlarmAssetFailed");
         public static readonly EventId PermissionEvaluatedId = new(PermissionEvaluated, "PermissionEvaluated");
         public static readonly EventId HealthCheckedId = new(HealthChecked, "HealthChecked");
         public static readonly EventId HealthFailedId = new(HealthFailed, "HealthFailed");
@@ -55,6 +68,12 @@ namespace Ergonomy.Logging
         public static readonly EventId SystemPowerCommandDeniedId = new(SystemPowerCommandDenied, "SystemPowerCommandDenied");
         public static readonly EventId RemoteCommandFailureId = new(RemoteCommandFailure, "RemoteCommandFailure");
         public static readonly EventId KafkaSendFailureId = new(KafkaSendFailure, "KafkaSendFailure");
+        public static readonly EventId KafkaReconfiguredId = new(KafkaReconfigured, "KafkaReconfigured");
         public static readonly EventId GracefulShutdownId = new(GracefulShutdown, "GracefulShutdown");
+        public static readonly EventId UpdateCheckId = new(UpdateCheck, "UpdateCheck");
+        public static readonly EventId UpdateAvailableId = new(UpdateAvailable, "UpdateAvailable");
+        public static readonly EventId UpdateDownloadFailedId = new(UpdateDownloadFailed, "UpdateDownloadFailed");
+        public static readonly EventId UpdateIntegrityFailedId = new(UpdateIntegrityFailed, "UpdateIntegrityFailed");
+        public static readonly EventId UpdateAppliedId = new(UpdateApplied, "UpdateApplied");
     }
 }
