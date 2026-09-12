@@ -45,10 +45,16 @@ namespace Ergonomy.Services
             // Settings: single source of truth for current + bootstrap settings.
             services.AddSingleton<ISettingsService, SettingsService>();
 
-            // AppSettings singleton = the settings-in-effect at first resolution. Long-lived
-            // services that must react to refresh use ISettingsService + UpdateSettings /
-            // SettingsChanged; they must NOT hold a stale reference across refreshes.
-            services.AddSingleton(sp => sp.GetRequiredService<ISettingsService>().Current);
+            // Explicit <AppSettings>: AddSingleton(sp => ...) without TService can bind to
+            // AddSingleton<T>(T instance) and register the Func itself, so GetRequiredService<AppSettings>()
+            // throws "No service for type AppSettings has been registered".
+            // LoadBootstrap here because MessageLogService/LocalDatabaseManager resolve before Program.Main calls it.
+            services.AddSingleton<AppSettings>(sp =>
+            {
+                ISettingsService settings = sp.GetRequiredService<ISettingsService>();
+                settings.LoadBootstrap();
+                return settings.Current;
+            });
 
             services.AddSingleton<MachineIdentity>(_ => new MachineIdentity(
                 GetWindowsSID(),

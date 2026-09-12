@@ -69,9 +69,9 @@ namespace Ergonomy.Service
                 {
                     services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(15) });
                     services.AddSingleton<ISettingsService, SettingsService>();
-                    services.AddSingleton(sp =>
+                    services.AddSingleton<AppSettings>(sp =>
                     {
-                        var settings = sp.GetRequiredService<ISettingsService>();
+                        ISettingsService settings = sp.GetRequiredService<ISettingsService>();
                         settings.LoadBootstrap();
                         return settings.Current;
                     });
