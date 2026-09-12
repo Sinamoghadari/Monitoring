@@ -45,8 +45,8 @@ namespace Ergonomy.Configuration
         private readonly SemaphoreSlim _refreshLock = new(1, 1);
         private readonly object _sync = new();
 
-        private AppSettings _current = null!;
-        private AppSettings _bootstrap = null!;
+        private AppSettings _current = new();
+        private AppSettings _bootstrap = new();
         private bool _sourceIsApi;
         private bool _disposed;
 
