@@ -1,4 +1,4 @@
-CREATE TABLE AppLogs
+CREATE TABLE IF NOT EXISTS AppLogs
 (
     Timestamp DateTime64(7),
     CollectedAt DateTime,

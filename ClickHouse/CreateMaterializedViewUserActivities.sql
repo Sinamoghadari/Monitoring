@@ -1,3 +1,5 @@
+DROP VIEW IF EXISTS MV_UserActivities_To_Target;
+
 CREATE MATERIALIZED VIEW IF NOT EXISTS MV_UserActivities_To_Target TO UserActivities AS
 SELECT
     SessionId,

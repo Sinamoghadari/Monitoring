@@ -1,6 +1,8 @@
+DROP VIEW IF EXISTS MV_SystemMetrics_To_Target;
+
 CREATE MATERIALIZED VIEW IF NOT EXISTS MV_SystemMetrics_To_Target TO SystemMetrics AS
 SELECT
-    _key AS MessageId,          -- ← فقط همین خط اضافه/تغییر می‌کند
+    _key AS MessageId,
     toDateTime(CollectedAt) AS CollectedAt,
     CollectedAt_Shamsi,
     WindowsSid,
