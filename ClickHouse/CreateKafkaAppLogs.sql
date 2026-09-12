@@ -1,9 +1,9 @@
 CREATE DATABASE IF NOT EXISTS Monitoring;
 
-DROP VIEW IF EXISTS MV_AppLogs_To_Target;
 DROP VIEW IF EXISTS Monitoring.MV_AppLogs_To_Target;
-DROP TABLE IF EXISTS Kafka_AppLogs;
+DROP VIEW IF EXISTS MV_AppLogs_To_Target;
 DROP TABLE IF EXISTS Monitoring.Kafka_AppLogs;
+DROP TABLE IF EXISTS Kafka_AppLogs;
 
 CREATE TABLE IF NOT EXISTS Monitoring.Kafka_AppLogs
 (
@@ -20,6 +20,6 @@ ENGINE = Kafka()
 SETTINGS
     kafka_broker_list = 'kafka:9092',
     kafka_topic_list = 'app_logs',
-    kafka_group_name = 'clickhouse_applogs_group',
+    kafka_group_name = 'clickhouse_applogs_v5',
     kafka_format = 'JSONEachRow',
     kafka_skip_broken_messages = 1000;

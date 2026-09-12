@@ -1,9 +1,9 @@
 CREATE DATABASE IF NOT EXISTS Monitoring;
 
-DROP VIEW IF EXISTS MV_SystemMetrics_To_Target;
 DROP VIEW IF EXISTS Monitoring.MV_SystemMetrics_To_Target;
-DROP TABLE IF EXISTS Kafka_SystemMetrics;
+DROP VIEW IF EXISTS MV_SystemMetrics_To_Target;
 DROP TABLE IF EXISTS Monitoring.Kafka_SystemMetrics;
+DROP TABLE IF EXISTS Kafka_SystemMetrics;
 
 CREATE TABLE IF NOT EXISTS Monitoring.Kafka_SystemMetrics
 (
@@ -15,31 +15,30 @@ CREATE TABLE IF NOT EXISTS Monitoring.Kafka_SystemMetrics
     ComputerName String,
     CPUJson String,
     MotherboardSerial String,
-    TotalRamMb Float64,
-    UsedRamMb Float64,
-    FreeRamMb Float64,
-    SystemUptimeSeconds UInt64,
-    ActiveProcesses UInt32,
-    ActiveThreads UInt32,
-    OpenHandles UInt64,
+    TotalRamMb String,
+    UsedRamMb String,
+    FreeRamMb String,
+    SystemUptimeSeconds String,
+    ActiveProcesses String,
+    ActiveThreads String,
+    OpenHandles String,
     BootTime String,
-    FailedLoginAttempts Int32,
+    FailedLoginAttempts String,
     AntivirusStatus String,
     FirewallStatus String,
-    UsbDevicesCount UInt16,
+    UsbDevicesCount String,
     StorageDetailsJson String,
     NetworkDetailsJson String,
     NetworkTraceJson String,
     DiskModelsJson String,
     TopProcessesJson String,
     DiskHealthStatusJson String,
-    CriticalSystemEventsJson String,
-    ChromeHistoryJson String
+    CriticalSystemEventsJson String
 )
 ENGINE = Kafka()
 SETTINGS
     kafka_broker_list = 'kafka:9092',
-    kafka_topic_list = 'system_metrics',
-    kafka_group_name = 'clickhouse_systemmetrics_group',
+    kafka_topic_list = 'advanced_system_metrics_topic',
+    kafka_group_name = 'clickhouse_systemmetrics_v5',
     kafka_format = 'JSONEachRow',
     kafka_skip_broken_messages = 1000;
