@@ -25,6 +25,7 @@ namespace Ergonomy.Service.Hosting
         private readonly SyncEngine _sync;
         private readonly PermissionsEvaluator _permissions;
         private readonly SettingsRefreshWorker _settingsRefresh;
+        private readonly HealthMonitorWorker _healthMonitor;
         private readonly PermissionMonitorWorker _permissionMonitor;
         private readonly UpdateManager _update;
         private readonly ServiceIpcHost _ipc;
@@ -39,6 +40,7 @@ namespace Ergonomy.Service.Hosting
             SyncEngine sync,
             PermissionsEvaluator permissions,
             SettingsRefreshWorker settingsRefresh,
+            HealthMonitorWorker healthMonitor,
             PermissionMonitorWorker permissionMonitor,
             UpdateManager update,
             ServiceIpcHost ipc,
@@ -52,6 +54,7 @@ namespace Ergonomy.Service.Hosting
             _sync = sync;
             _permissions = permissions;
             _settingsRefresh = settingsRefresh;
+            _healthMonitor = healthMonitor;
             _permissionMonitor = permissionMonitor;
             _update = update;
             _ipc = ipc;
@@ -94,6 +97,7 @@ namespace Ergonomy.Service.Hosting
             }
 
             _settingsRefresh.Start();
+            _healthMonitor.Start();
             _permissionMonitor.Start();
             _update.Start();
 
@@ -106,6 +110,7 @@ namespace Ergonomy.Service.Hosting
         {
             _settings.SettingsChanged -= OnSettingsChanged;
             try { _update.Stop(); } catch { }
+            try { _healthMonitor.Stop(); } catch { }
             try { _permissionMonitor.Stop(); } catch { }
             try { _settingsRefresh.Stop(); } catch { }
             try { _permissions.StopAll(); } catch { }

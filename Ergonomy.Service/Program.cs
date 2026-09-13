@@ -113,6 +113,8 @@ namespace Ergonomy.Service
                     services.AddSingleton<PermissionsEvaluator>();
                     services.AddSingleton<IAlarmImageLoader, NoOpAlarmImageLoader>();
                     services.AddSingleton<SettingsRefreshWorker>();
+                    services.AddSingleton<HealthCheckService>();
+                    services.AddSingleton<HealthMonitorWorker>();
                     services.AddSingleton<PermissionMonitorWorker>();
                     services.AddSingleton<UpdateManager>();
 

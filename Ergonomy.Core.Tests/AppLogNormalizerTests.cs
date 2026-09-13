@@ -145,5 +145,21 @@ namespace Ergonomy.Core.Tests
         {
             Assert.Equal(new[] { "INFORMATION", "WARNING", "ERROR" }, AppLogNormalizer.AllowedLogLevels);
         }
+
+        [Theory]
+        [InlineData("INFORMATION", "AgentPerformance", true)]
+        [InlineData("INFO", "agentperformance", true)]
+        [InlineData("WARNING", "AgentPerformance", true)]
+        [InlineData("ERROR", "AgentPerformance", true)]
+        [InlineData("INFORMATION", "ApiHealth", false)]
+        [InlineData("INFORMATION", "SqliteHealth", false)]
+        [InlineData("INFORMATION", "General", false)]
+        [InlineData("WARNING", "ApiHealth", true)]
+        [InlineData("ERROR", "SqliteHealth", true)]
+        public void ShouldPersistToAppLogs_keeps_agent_performance_and_problems(
+            string level, string category, bool expected)
+        {
+            Assert.Equal(expected, AppLogNormalizer.ShouldPersistToAppLogs(level, category));
+        }
     }
 }

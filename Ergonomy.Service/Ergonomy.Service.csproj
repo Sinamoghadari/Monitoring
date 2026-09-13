@@ -52,6 +52,8 @@
     <Compile Include="..\Services\PermissionsEvaluator.cs" Link="Services\PermissionsEvaluator.cs" />
     <Compile Include="..\Services\PermissionMonitorWorker.cs" Link="Services\PermissionMonitorWorker.cs" />
     <Compile Include="..\Services\SettingsRefreshWorker.cs" Link="Services\SettingsRefreshWorker.cs" />
+    <Compile Include="..\Services\HealthCheckService.cs" Link="Services\HealthCheckService.cs" />
+    <Compile Include="..\Services\HealthMonitorWorker.cs" Link="Services\HealthMonitorWorker.cs" />
     <Compile Include="..\Services\UpdateManager.cs" Link="Services\UpdateManager.cs" />
   </ItemGroup>
 

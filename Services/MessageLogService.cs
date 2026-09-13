@@ -67,9 +67,10 @@ namespace Ergonomy.Services
 
         private void Enqueue(string logLevel, string message, string category, bool reportConsole)
         {
-            // Observability contract: app_logs receives only actual problems.
-            // Healthy Information/Debug records must not inflate the outbox or Kafka.
-            if (!AppLogNormalizer.IsProblemLevel(logLevel))
+            // Observability contract: app_logs receives problems, plus AgentPerformance
+            // resource snapshots (memory / thread counts) which are informational telemetry.
+            // Healthy ApiHealth / SqliteHealth INFORMATION still does not inflate the outbox.
+            if (!AppLogNormalizer.ShouldPersistToAppLogs(logLevel, category))
                 return;
 
             DateTime utc = DateTime.UtcNow;

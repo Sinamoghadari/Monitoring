@@ -17,6 +17,12 @@ namespace Ergonomy.Logging
         public const string Warning = "WARNING";
         public const string Error = "ERROR";
 
+        /// <summary>
+        /// Process working-set / thread telemetry. Persisted even at INFORMATION so operators
+        /// can see resource usage without treating a healthy agent as a problem.
+        /// </summary>
+        public const string AgentPerformanceCategory = "AgentPerformance";
+
         public static readonly string[] AllowedLogLevels = { Information, Warning, Error };
 
         /// <summary>
@@ -65,6 +71,20 @@ namespace Ergonomy.Logging
         /// </summary>
         public static bool IsProblemLogLevel(LogLevel level)
             => level >= LogLevel.Warning;
+
+        /// <summary>
+        /// Whether a record should be written to the SQLite/Kafka app_logs channel.
+        /// WARNING/ERROR always persist. INFORMATION is dropped except for
+        /// <see cref="AgentPerformanceCategory"/> (periodic memory/thread telemetry).
+        /// Healthy ApiHealth / SqliteHealth INFORMATION still does not inflate the outbox.
+        /// </summary>
+        public static bool ShouldPersistToAppLogs(string? level, string? category)
+        {
+            if (IsProblemLevel(level))
+                return true;
+
+            return string.Equals(category, AgentPerformanceCategory, StringComparison.OrdinalIgnoreCase);
+        }
 
         /// <summary>
         /// Returns only the Windows username. Strips <c>|Elevated=True</c> / <c>|Elevated=False</c>
