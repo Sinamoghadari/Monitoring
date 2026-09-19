@@ -200,28 +200,99 @@ def get_user_activities(limit: int = 1000):
         client.close()
 
 
-@app.get("/api/settings")
-def get_settings():
+class UpdateManifestPatch(BaseModel):
+    """Partial Update block. Unset fields are left untouched in JSONB."""
+
+    model_config = ConfigDict(extra="allow")
+
+    Enabled: Optional[bool] = None
+    LatestVersion: Optional[str] = None
+    Version: Optional[str] = None
+    DownloadUrl: Optional[str] = None
+    Sha256: Optional[str] = None
+    ServiceName: Optional[str] = None
+    CheckIntervalMinutes: Optional[int] = Field(default=None, ge=1)
+    MaxJitterSeconds: Optional[int] = Field(default=None, ge=0)
+    DownloadRetryCount: Optional[int] = Field(default=None, ge=1)
+
+
+class SettingsPatch(BaseModel):
+    """Partial document. Nested objects are merged; scalars/arrays replace."""
+
+    model_config = ConfigDict(extra="allow")
+
+    Update: Optional[UpdateManifestPatch] = None
+
+
+def _strip_unset(model: BaseModel) -> Dict[str, Any]:
+    payload = model.model_dump(exclude_unset=True)
+    if "Update" in payload and payload["Update"] is not None:
+        payload["Update"] = {
+            key: value for key, value in payload["Update"].items() if value is not None
+        }
+        if not payload["Update"]:
+            del payload["Update"]
+    return payload
+
+
+def _write_settings(mutator, expected_version: Optional[int]):
     conn = get_pg_connection()
     try:
-        cur = conn.cursor()
-        cur.execute("SELECT settings_json FROM app_configuration ORDER BY id DESC LIMIT 1")
-        row = cur.fetchone()
-        return row[0] if row else {}
+        settings_store.ensure_schema(conn)
+        document, version = mutator(conn, expected_version)
+        return {
+            "success": True,
+            "message": "Settings updated in place (single row)",
+            "row_version": version,
+            "settings": document,
+        }
+    except settings_store.ConflictError as ex:
+        raise HTTPException(status_code=409, detail=str(ex)) from ex
+    except LookupError as ex:
+        raise HTTPException(status_code=404, detail=str(ex)) from ex
+    finally:
+        conn.close()
+
+
+@app.get("/api/settings")
+def get_settings():
+    """Agent contract: raw JSON document of the single live row."""
+    conn = get_pg_connection()
+    try:
+        live = settings_store.get_live(conn)
+        return live[1] if live else {}
     finally:
         conn.close()
 
 
 @app.post("/api/settings")
-def save_settings(settings: Dict[str, Any]):
-    conn = get_pg_connection()
-    try:
-        cur = conn.cursor()
-        cur.execute("INSERT INTO app_configuration (settings_json) VALUES (%s)", (json.dumps(settings),))
-        conn.commit()
-        return {"success": True, "message": "Settings saved"}
-    finally:
-        conn.close()
+def save_settings(
+    settings: Dict[str, Any],
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
+    """Full-document replace of the live row. Does not INSERT a new row."""
+    expected = int(if_match) if if_match and if_match.isdigit() else None
+    return _write_settings(
+        lambda conn, ver: settings_store.replace_live(conn, settings, ver),
+        expected,
+    )
+
+
+@app.patch("/api/settings")
+@app.post("/api/settings/merge")
+def merge_settings(
+    patch: SettingsPatch,
+    if_match: Optional[str] = Header(default=None, alias="If-Match"),
+):
+    """Atomic nested JSONB merge against the single live row."""
+    payload = _strip_unset(patch)
+    if not payload:
+        raise HTTPException(status_code=400, detail="Empty patch")
+    expected = int(if_match) if if_match and if_match.isdigit() else None
+    return _write_settings(
+        lambda conn, ver: settings_store.merge_live(conn, payload, ver),
+        expected,
+    )
 
 
 @app.get("/api/logs-chart")
