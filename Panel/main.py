@@ -1,8 +1,8 @@
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Header, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 import clickhouse_connect
 import psycopg2
 import json
@@ -11,6 +11,7 @@ import base64
 import os
 from datetime import datetime
 from fastapi.responses import FileResponse
+import settings_store
 
 app = FastAPI(
     title="Monitoring Dashboard API",
@@ -78,6 +79,17 @@ def init_clickhouse_tables():
 @app.on_event("startup")
 def on_startup():
     init_clickhouse_tables()
+    conn = None
+    try:
+        conn = get_pg_connection()
+        settings_store.ensure_schema(conn)
+        settings_store.collapse_to_single_row(conn)
+        conn.commit()
+    except Exception as ex:
+        print(f"Failed to ensure app_configuration single-row schema: {ex}")
+    finally:
+        if conn is not None:
+            conn.close()
 
 
 def get_pg_connection():
