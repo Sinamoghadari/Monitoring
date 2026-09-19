@@ -14,6 +14,7 @@ namespace Ergonomy
 {
     internal static class Program
     {
+        private const string SingleInstanceMutexName = @"Global\Ergonomy_Agent_SingleInstance_Mutex";
         private const int AttachParentProcess = -1;
 
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -29,6 +30,70 @@ namespace Ergonomy
         /// </summary>
         [STAThread]
         static void Main(string[] args)
+        {
+            if (!TryAcquireSingleInstanceMutex(out Mutex? singleInstance) || singleInstance == null)
+                return;
+
+            using (singleInstance)
+            {
+                try
+                {
+                    GC.KeepAlive(singleInstance);
+                    RunApplication(args);
+                }
+                finally
+                {
+                    try { singleInstance.ReleaseMutex(); }
+                    catch (ApplicationException) { }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Creates the process-wide mutex. A second instance exits immediately with no UI.
+        /// An abandoned mutex (previous crash) is treated as ownership of this instance.
+        /// </summary>
+        private static bool TryAcquireSingleInstanceMutex(out Mutex? mutex)
+        {
+            mutex = null;
+            try
+            {
+                mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out bool createdNew);
+                if (!createdNew)
+                {
+                    mutex.Dispose();
+                    mutex = null;
+                    return false;
+                }
+
+                return true;
+            }
+            catch (AbandonedMutexException ex)
+            {
+                mutex = ex.Mutex ?? mutex;
+                if (mutex == null)
+                {
+                    try
+                    {
+                        mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out _);
+                    }
+                    catch
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+            catch
+            {
+                mutex?.Dispose();
+                mutex = null;
+                return false;
+            }
+        }
+
+        private static void RunApplication(string[] args)
         {
             bool diagnose = HasFlag(args, "--diagnose-startup");
             EnsureConsoleAttached(forceAlloc: diagnose);
