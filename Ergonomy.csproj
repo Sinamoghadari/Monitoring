@@ -64,10 +64,8 @@
     <PackageReference Include="System.Management" Version="10.0.5" />
   </ItemGroup>
 
+  <!-- فقط یکبار و مطابق نام پوشه اصلی (Assets) لود شود -->
   <ItemGroup>
-    <Content Include="assets\**">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
     <Content Include="Assets\**">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
