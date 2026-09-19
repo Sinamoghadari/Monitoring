@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ergonomy.Service", "Ergonom
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ergonomy.Task", "Ergonomy.Task\Ergonomy.Task.csproj", "{3C328665-0842-43E8-B60C-83A92BCB3797}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Ergonomy.Core.Tests", "Ergonomy.Core.Tests\Ergonomy.Core.Tests.csproj", "{A7C91E4B-2D18-4F55-9E0A-8B6C4D1F2A30}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,6 +34,10 @@ Global
 		{3C328665-0842-43E8-B60C-83A92BCB3797}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3C328665-0842-43E8-B60C-83A92BCB3797}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3C328665-0842-43E8-B60C-83A92BCB3797}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A7C91E4B-2D18-4F55-9E0A-8B6C4D1F2A30}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A7C91E4B-2D18-4F55-9E0A-8B6C4D1F2A30}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A7C91E4B-2D18-4F55-9E0A-8B6C4D1F2A30}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A7C91E4B-2D18-4F55-9E0A-8B6C4D1F2A30}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

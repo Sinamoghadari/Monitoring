@@ -85,7 +85,20 @@ namespace Ergonomy.Core.Ipc
                 try
                 {
                     server = IpcSecurityFactory.CreateServerStream(_pipeName, _maxInstances);
-                    await server.WaitForConnectionAsync(ct).ConfigureAwait(false);
+                    using var waitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    waitCts.CancelAfter(IpcConstants.AcceptAclRefresh);
+                    try
+                    {
+                        await server.WaitForConnectionAsync(waitCts.Token).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                    {
+                        // No client connected before the ACL refresh window. Recreate the
+                        // instance so a newly logged-on user SID is included in the DACL.
+                        server.Dispose();
+                        server = null;
+                        continue;
+                    }
                 }
                 catch (OperationCanceledException)
                 {
@@ -113,6 +126,9 @@ namespace Ergonomy.Core.Ipc
                     await DelayQuietAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
                     continue;
                 }
+
+                if (server == null)
+                    continue;
 
                 string id = $"conn-{Interlocked.Increment(ref _connectionSeq)}";
                 var connection = new IpcConnection(server, id);

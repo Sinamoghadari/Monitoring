@@ -27,16 +27,33 @@ VALUES (
       "UsedRamMb", "FreeRamMb", "StorageDetails", "NetworkDetails" , "ComputerName"
     ],
   "NetworkTraceTargetIP": "172.17.214.1",
+  "API": {
+    "Settings": "https://siscoeye.sirjansteel.com/api/settings",
+    "Commands": "https://siscoeye.sirjansteel.com/api/commands",
+    "LoadImages": "https://siscoeye.sirjansteel.com/api/images"
+  },
   "AllowSqliteWrite": true,
   "AllowKafkaWrite": true,
   "PermissionSqliteRetryIntervalHours": 0.1,
   "PermissionKafkaRetryIntervalHours": 0.1,
   "ConnectionFailureSleepMinutes": 5,
   "HeartbeatIntervalMinutes": 1,
+  "VersionCheckerMinute": 60,
   "Kafka": {
-    "BootstrapServers": "172.17.214.38:9092",
+    "BootstrapServers": "172.17.214.38:9094",
     "UserActivityTopic": "user_activity",
-    "SystemMetricsTopic": "system_metrics"
+    "SystemMetricsTopic": "system_metrics",
+    "AppLogsTopic": "app_logs"
+  },
+  "Update": {
+    "Enabled": false,
+    "LatestVersion": "1.0.0",
+    "DownloadUrl": "",
+    "Sha256": "",
+    "ServiceName": "Ergonomy.Service",
+    "CheckIntervalMinutes": 60,
+    "MaxJitterSeconds": 900,
+    "DownloadRetryCount": 5
   },
   "Images": {
     "PrimaryAlarmImagePath": "Assets/primary_alarm.png",

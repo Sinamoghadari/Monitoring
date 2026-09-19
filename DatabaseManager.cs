@@ -116,7 +116,7 @@ namespace Ergonomy.Database
                 await conn.OpenAsync();
 
                 statusMessage = "PostgreSQL Connection is OK.";
-                logLevel = "INFO";
+                logLevel = "INFORMATION";
             }
             catch (Exception ex)
             {
