@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using Ergonomy.Diagnostics;
 
 namespace Ergonomy.Logging
 {
@@ -96,8 +97,9 @@ namespace Ergonomy.Logging
                 {
                     AppLogsSink?.Invoke(logLevel, _category, message, exception);
                 }
-                catch
+                catch (Exception ex)
                 {
+                    ExceptionPolicy.IgnoreBestEffortDispose(ex);
                 }
             }
 

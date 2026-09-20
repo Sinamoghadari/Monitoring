@@ -6,6 +6,7 @@ using System.Windows.Forms;
 using Ergonomy;
 using Ergonomy.Configuration;
 using Ergonomy.Core.Ipc;
+using Ergonomy.Diagnostics;
 using Ergonomy.Hooks;
 using Ergonomy.Logging;
 using Microsoft.Extensions.DependencyInjection;
@@ -34,6 +35,10 @@ namespace Ergonomy.TaskAgent
         [STAThread]
         private static void Main()
         {
+            ExceptionPolicy.InstallLastChanceHandlers(AgentProcessKind.Task);
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (_, e) => ExceptionPolicy.ReportThreadException(e.Exception);
+
             using var singleInstance = new Mutex(true, SingleInstanceMutexName, out bool isOwner);
             if (!isOwner)
             {

@@ -365,8 +365,9 @@ namespace Ergonomy.Database
                 {
                     producer.Dispose();
                 }
-                catch
+                catch (Exception ex)
                 {
+                    Ergonomy.Diagnostics.ExceptionPolicy.IgnoreBestEffortDispose(ex);
                 }
             }
         }

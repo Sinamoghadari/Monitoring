@@ -12,6 +12,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Ergonomy.Configuration;
+using Ergonomy.Diagnostics;
 using Ergonomy.Logging;
 using Ergonomy.Observability;
 
@@ -401,7 +402,7 @@ namespace Ergonomy.Services
                 if (acquired)
                 {
                     try { mutex.ReleaseMutex(); }
-                    catch (ApplicationException) { }
+                    catch (ApplicationException ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
                 }
 
                 lock (_applySync)
@@ -632,8 +633,9 @@ namespace Ergonomy.Services
                 if (asm != null && !(asm.Major == 0 && asm.Minor == 0 && asm.Build == 0))
                     return $"{asm.Major}.{asm.Minor}.{Math.Max(asm.Build, 0)}";
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
 
             return BaselineVersion;
@@ -688,8 +690,9 @@ namespace Ergonomy.Services
                 if (!IsAlreadyApplied(version))
                     File.WriteAllText(marker, version + Environment.NewLine);
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
         }
 
@@ -757,8 +760,9 @@ namespace Ergonomy.Services
                 if (!string.IsNullOrWhiteSpace(path) && File.Exists(path))
                     return path;
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
 
             return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Ergonomy.exe");
@@ -809,8 +813,9 @@ namespace Ergonomy.Services
                 if (File.Exists(path))
                     File.Delete(path);
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
         }
 

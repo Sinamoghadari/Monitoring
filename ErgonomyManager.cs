@@ -108,11 +108,18 @@ namespace Ergonomy.Core
                     _ = Task.Run(async () =>
                     {
                         try { if (_alarmManager != null) await _alarmManager.LoadImagesFromApiAsync(); }
-                        catch (Exception ex) { Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] ❌ [Ergonomy] Image load error: {ex.Message}"); }
+                        catch (Exception ex)
+                        {
+                            ExceptionPolicy.Report(
+                                ExceptionSeverity.Operational,
+                                ex,
+                                new ExceptionReportContext { Module = nameof(ErgonomyManager), Message = "Image load error." });
+                        }
                     });
                 }
-                catch
+                catch (Exception ex)
                 {
+                    ExceptionPolicy.IgnoreBestEffortDispose(ex);
                 }
 
                 _activityMonitor?.Start();

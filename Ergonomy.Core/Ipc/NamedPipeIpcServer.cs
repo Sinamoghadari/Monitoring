@@ -7,6 +7,7 @@ using System.Runtime.Versioning;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Ergonomy.Diagnostics;
 
 namespace Ergonomy.Core.Ipc
 {
@@ -196,9 +197,9 @@ namespace Ergonomy.Core.Ipc
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
-                // shutting down
+                ExceptionPolicy.IgnoreIfShuttingDown(ex);
             }
             catch (IpcProtocolException ex)
             {
@@ -281,7 +282,7 @@ namespace Ergonomy.Core.Ipc
                 return;
             }
 
-            try { _cts.Cancel(); } catch (ObjectDisposedException) { }
+            try { _cts.Cancel(); } catch (ObjectDisposedException ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
 
             foreach (IpcConnection connection in _connections.Values.ToArray())
             {
@@ -300,9 +301,9 @@ namespace Ergonomy.Core.Ipc
                 {
                     _logger.LogWarning("IPC accept loop did not stop within the grace period.");
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    // already faulted / cancelled
+                    ExceptionPolicy.IgnoreIfShuttingDown(ex);
                 }
             }
 
@@ -318,7 +319,7 @@ namespace Ergonomy.Core.Ipc
         private static async Task DelayQuietAsync(TimeSpan delay, CancellationToken ct)
         {
             try { await Task.Delay(delay, ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
         }
 
         /// <summary>
@@ -332,7 +333,7 @@ namespace Ergonomy.Core.Ipc
             }
 
             _disposed = true;
-            try { StopAsync().GetAwaiter().GetResult(); } catch (Exception) { /* best effort */ }
+            try { StopAsync().GetAwaiter().GetResult(); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
             _cts?.Dispose();
             _cts = null;
         }

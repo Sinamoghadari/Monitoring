@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Ergonomy.Configuration;
 using Ergonomy.Database;
+using Ergonomy.Diagnostics;
 using Ergonomy.Logging;
 
 namespace Ergonomy.Services
@@ -79,12 +80,16 @@ namespace Ergonomy.Services
 
                 _localDb.SaveUserActivity(QueueTargets.AdvancedSystemMetrics, metrics);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
+                ExceptionPolicy.IgnoreIfShuttingDown(ex);
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, "Error collecting advanced metrics.");
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Operational,
+                    ex,
+                    new ExceptionReportContext { Module = nameof(AdvancedMetricsWorker), Message = "Error collecting advanced metrics." });
             }
             finally
             {

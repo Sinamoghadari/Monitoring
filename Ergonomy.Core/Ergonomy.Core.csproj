@@ -24,4 +24,8 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="Ergonomy.Core.Tests" />
+  </ItemGroup>
+
 </Project>

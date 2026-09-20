@@ -39,6 +39,9 @@ namespace Ergonomy.Logging
         public const int KafkaReconfigured = 6050;
         public const int GracefulShutdown = 7000;
 
+        public const int ExceptionReported = 9000;
+        public const int ExceptionLastChance = 9010;
+
         public const int UpdateCheck = 8000;
         public const int UpdateAvailable = 8010;
         public const int UpdateDownloadFailed = 8020;
@@ -75,5 +78,7 @@ namespace Ergonomy.Logging
         public static readonly EventId UpdateDownloadFailedId = new(UpdateDownloadFailed, "UpdateDownloadFailed");
         public static readonly EventId UpdateIntegrityFailedId = new(UpdateIntegrityFailed, "UpdateIntegrityFailed");
         public static readonly EventId UpdateAppliedId = new(UpdateApplied, "UpdateApplied");
+        public static readonly EventId ExceptionReportedId = new(ExceptionReported, "ExceptionReported");
+        public static readonly EventId ExceptionLastChanceId = new(ExceptionLastChance, "ExceptionLastChance");
     }
 }

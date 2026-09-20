@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Microsoft.Data.Sqlite;
+using Ergonomy.Diagnostics;
 using Ergonomy.Services;
 
 namespace Ergonomy.Database
@@ -165,7 +166,7 @@ namespace Ergonomy.Database
                 {
                     checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
                     try { checkpoint.ExecuteNonQuery(); }
-                    catch { }
+                    catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
                 }
 
                 using (var attach = plain.CreateCommand())
@@ -188,7 +189,7 @@ namespace Ergonomy.Database
             }
 
             try { SqliteConnection.ClearAllPools(); }
-            catch { }
+            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
 
             if (!CanOpenEncrypted(encryptedTemp, passphrase))
             {
@@ -233,8 +234,9 @@ namespace Ergonomy.Database
                 if (File.Exists(path))
                     File.Delete(path);
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
         }
     }

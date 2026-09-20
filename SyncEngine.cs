@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Ergonomy.Diagnostics;
 using Ergonomy.Logging;
 using Ergonomy.Observability;
 
@@ -107,19 +108,22 @@ namespace Ergonomy.Database
             {
                 cts?.Cancel();
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreIfShuttingDown(ex);
             }
 
             try
             {
                 loop?.Wait(TimeSpan.FromSeconds(10));
             }
-            catch (AggregateException)
+            catch (AggregateException ex)
             {
+                ExceptionPolicy.IgnoreIfShuttingDown(ex);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreIfShuttingDown(ex);
             }
 
             cts?.Dispose();
@@ -174,7 +178,10 @@ namespace Ergonomy.Database
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Sync initial pass error.");
+                    ExceptionPolicy.Report(
+                        ExceptionSeverity.Operational,
+                        ex,
+                        new ExceptionReportContext { Module = nameof(SyncEngine), Message = "Sync initial pass error." });
                 }
 
                 while (!ct.IsCancellationRequested)
@@ -206,16 +213,23 @@ namespace Ergonomy.Database
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Sync pass error.");
+                        ExceptionPolicy.Report(
+                            ExceptionSeverity.Operational,
+                            ex,
+                            new ExceptionReportContext { Module = nameof(SyncEngine), Message = "Sync pass error." });
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
+                ExceptionPolicy.IgnoreIfShuttingDown(ex);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "SyncEngine loop failed unexpectedly.");
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Operational,
+                    ex,
+                    new ExceptionReportContext { Module = nameof(SyncEngine), Message = "SyncEngine loop failed unexpectedly." });
             }
         }
 
@@ -296,10 +310,26 @@ namespace Ergonomy.Database
                     }
                     catch (JsonException ex)
                     {
+                        ExceptionPolicy.Report(
+                            ExceptionSeverity.Operational,
+                            ex,
+                            new ExceptionReportContext
+                            {
+                                Module = nameof(SyncEngine),
+                                Message = "Poison outbox record (invalid-json). Target=" + record.TargetTable
+                            });
                         HandlePoisonRecord(record.Id, record.TargetTable, "invalid-json");
                     }
                     catch (NotSupportedException ex)
                     {
+                        ExceptionPolicy.Report(
+                            ExceptionSeverity.Operational,
+                            ex,
+                            new ExceptionReportContext
+                            {
+                                Module = nameof(SyncEngine),
+                                Message = "Poison outbox record (unsupported-payload). Target=" + record.TargetTable
+                            });
                         HandlePoisonRecord(record.Id, record.TargetTable, "unsupported-payload");
                     }
                     catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -324,7 +354,10 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "SyncEngine fatal error.");
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Operational,
+                    ex,
+                    new ExceptionReportContext { Module = nameof(SyncEngine), Message = "SyncEngine fatal error." });
             }
             finally
             {

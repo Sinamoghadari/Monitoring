@@ -264,7 +264,7 @@ namespace Ergonomy
             _disposed = true;
             _scheduleTimer.Stop();
             Task? poll; lock (_pollSync) poll = _pollTask;
-            try { poll?.Wait(TimeSpan.FromSeconds(25)); } catch { }
+            try { poll?.Wait(TimeSpan.FromSeconds(25)); } catch (Exception ex) { Ergonomy.Diagnostics.ExceptionPolicy.IgnoreIfShuttingDown(ex); }
             _scheduleTimer.Dispose(); _httpClient.Dispose(); _pollGate.Dispose();
         }
     }

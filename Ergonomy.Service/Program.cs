@@ -2,10 +2,13 @@ using System;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.Versioning;
+using System.Threading;
 using System.Threading.Tasks;
 using Ergonomy.Configuration;
+using Ergonomy.Core.Hosting;
 using Ergonomy.Core.Ipc;
 using Ergonomy.Database;
+using Ergonomy.Diagnostics;
 using Ergonomy.Logging;
 using Ergonomy.Observability;
 using Ergonomy.Service.Hosting;
@@ -47,6 +50,14 @@ namespace Ergonomy.Service
         /// <returns>کد خروج صفر در موفقیت و یک در شکست راه‌اندازی.</returns>
         private static async Task<int> Main(string[] args)
         {
+            ExceptionPolicy.InstallLastChanceHandlers(AgentProcessKind.Service);
+
+            if (!RuntimeIsolation.TryClaimService(out Mutex? serviceRunning, out Mutex? sqliteOwner, out string? reason))
+            {
+                Console.Error.WriteLine("[FATAL] Ergonomy.Service did not start: " + reason);
+                return 1;
+            }
+
             bool isInteractive = !IsRunningAsWindowsService(args);
 
             IHost host = Host.CreateDefaultBuilder(args)
@@ -125,14 +136,27 @@ namespace Ergonomy.Service
 
             try
             {
+                ExceptionPolicy.Configure(
+                    AgentProcessKind.Service,
+                    host.Services.GetService<ILoggerFactory>()?.CreateLogger(ExceptionPolicy.LoggerCategory));
+                GC.KeepAlive(serviceRunning);
+                GC.KeepAlive(sqliteOwner);
                 await host.RunAsync().ConfigureAwait(false);
                 return 0;
             }
             catch (Exception ex)
             {
-                // Last-resort logging if the host itself fails to start.
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Fatal,
+                    ex,
+                    new ExceptionReportContext { Module = nameof(Program), Message = "Ergonomy.Service failed to start." });
                 Console.Error.WriteLine($"[FATAL] Ergonomy.Service failed to start: {ex}");
                 return 1;
+            }
+            finally
+            {
+                RuntimeIsolation.Release(ref sqliteOwner);
+                RuntimeIsolation.Release(ref serviceRunning);
             }
         }
 
@@ -166,9 +190,9 @@ namespace Ergonomy.Service
                     return true;
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Parent lookup is best-effort; fall through to the UserInteractive check above.
+                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
 
             return false;
@@ -190,8 +214,9 @@ namespace Ergonomy.Service
                     self.Handle, 0, pbi, pbi.Length * IntPtr.Size, out _);
                 return status == 0 ? (int)pbi[5] : 0;
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex);
                 return 0;
             }
         }

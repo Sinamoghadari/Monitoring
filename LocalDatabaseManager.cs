@@ -7,6 +7,7 @@ using System.Threading;
 using Microsoft.Data.Sqlite;
 using Ergonomy.Configuration;
 using Ergonomy.Database;
+using Ergonomy.Diagnostics;
 using Ergonomy.Logging;
 using Ergonomy.Services;
 
@@ -151,8 +152,10 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] Retention timer error.");
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Operational,
+                    ex,
+                    new ExceptionReportContext { Module = nameof(LocalDatabaseManager), Message = "Retention timer error." });
             }
         }
 
@@ -317,9 +320,12 @@ namespace Ergonomy.Database
                 if (File.Exists(walPath))
                     total += new FileInfo(walPath).Length;
             }
-            catch
+            catch (Exception ex)
             {
-                // در صورت خطای IO، صفر برمی‌گردد و سیاست به‌سوی safe-side می‌رود.
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Operational,
+                    ex,
+                    new ExceptionReportContext { Module = nameof(LocalDatabaseManager), Message = "Database size probe failed; treating size as zero." });
             }
 
             return total;
@@ -445,9 +451,14 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] SQLite outbox write failed. " +
-                    $"Target: {targetTableName} | Error.");
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Operational,
+                    ex,
+                    new ExceptionReportContext
+                    {
+                        Module = nameof(LocalDatabaseManager),
+                        Message = "SQLite outbox write failed. Target=" + targetTableName
+                    });
 
                 return OutboxSaveResult.Failed;
             }
@@ -511,8 +522,10 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] SQLite outbox read failed.");
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Operational,
+                    ex,
+                    new ExceptionReportContext { Module = nameof(LocalDatabaseManager), Message = "SQLite outbox read failed." });
             }
 
             return records;
@@ -628,8 +641,10 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] Retention (age) failed.");
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Operational,
+                    ex,
+                    new ExceptionReportContext { Module = nameof(LocalDatabaseManager), Message = "Retention (age) failed." });
                 return 0;
             }
         }
@@ -702,9 +717,14 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] Retention (capacity) failed for " +
-                    $"'{targetTable}'.");
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Operational,
+                    ex,
+                    new ExceptionReportContext
+                    {
+                        Module = nameof(LocalDatabaseManager),
+                        Message = "Retention (capacity) failed for " + targetTable
+                    });
                 return 0;
             }
         }
@@ -727,8 +747,10 @@ namespace Ergonomy.Database
             }
             catch (Exception ex)
             {
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] Count reconcile failed.");
+                ExceptionPolicy.Report(
+                    ExceptionSeverity.Operational,
+                    ex,
+                    new ExceptionReportContext { Module = nameof(LocalDatabaseManager), Message = "Count reconcile failed." });
             }
         }
 
@@ -777,16 +799,18 @@ namespace Ergonomy.Database
                 checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
                 checkpoint.ExecuteNonQuery();
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
 
             try
             {
                 SqliteConnection.ClearAllPools();
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
         }
     }
