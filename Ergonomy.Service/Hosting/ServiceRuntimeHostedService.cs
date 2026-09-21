@@ -4,6 +4,7 @@ using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
 using Ergonomy.Configuration;
+using Ergonomy.Core.Diagnostics;
 using Ergonomy.Database;
 using Ergonomy.Service.Ipc;
 using Ergonomy.Services;
@@ -109,13 +110,13 @@ namespace Ergonomy.Service.Hosting
         public Task StopAsync(CancellationToken cancellationToken)
         {
             _settings.SettingsChanged -= OnSettingsChanged;
-            try { _update.Stop(); } catch { }
-            try { _healthMonitor.Stop(); } catch { }
-            try { _permissionMonitor.Stop(); } catch { }
-            try { _settingsRefresh.Stop(); } catch { }
-            try { _permissions.StopAll(); } catch { }
-            try { _sync.Stop("service-stopping"); } catch { }
-            try { _kafka.Dispose(); } catch { }
+            try { _update.Stop(); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "stop-update"); }
+            try { _healthMonitor.Stop(); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "stop-health"); }
+            try { _permissionMonitor.Stop(); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "stop-permission"); }
+            try { _settingsRefresh.Stop(); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "stop-settings"); }
+            try { _permissions.StopAll(); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "stop-permissions"); }
+            try { _sync.Stop("service-stopping"); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "stop-sync"); }
+            try { _kafka.Dispose(); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "stop-kafka"); }
             StartupLog.Info("shutdown completed");
             return Task.CompletedTask;
         }

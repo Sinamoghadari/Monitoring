@@ -6,6 +6,7 @@ using System.Linq;
 using System.Runtime.Versioning;
 using System.Threading;
 using System.Threading.Tasks;
+using Ergonomy.Core.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Ergonomy.Core.Ipc
@@ -122,7 +123,7 @@ namespace Ergonomy.Core.Ipc
                 catch (Exception ex)
                 {
                     server?.Dispose();
-                    _logger.LogError(ex, "Unexpected IPC accept failure.");
+                    ExceptionPolicy.Report(ex, "ipc-accept", _logger);
                     await DelayQuietAsync(TimeSpan.FromSeconds(5), ct).ConfigureAwait(false);
                     continue;
                 }
@@ -136,7 +137,7 @@ namespace Ergonomy.Core.Ipc
                 _logger.LogInformation("IPC client connected. Connection={ConnectionId} Clients={Count}", id, _connections.Count);
 
                 try { ClientConnected?.Invoke(connection); }
-                catch (Exception ex) { _logger.LogError(ex, "ClientConnected handler failed. Connection={ConnectionId}", id); }
+                catch (Exception ex) { ExceptionPolicy.Report(ex, "ipc-client-connected-handler", _logger); }
 
                 _ = Task.Run(() => PumpConnectionAsync(connection, ct), CancellationToken.None);
             }
@@ -191,18 +192,17 @@ namespace Ergonomy.Core.Ipc
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "IPC message handler failed. Connection={ConnectionId} Type={Type}",
-                            connection.Id, message.Type);
+                        ExceptionPolicy.Report(ex, "ipc-server-handler", _logger);
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
-                // shutting down
+                ExceptionPolicy.IgnoreIfShuttingDown(ex, "ipc-pump-cancel");
             }
             catch (IpcProtocolException ex)
             {
-                _logger.LogError(ex, "IPC protocol violation; dropping connection. Connection={ConnectionId}", connection.Id);
+                ExceptionPolicy.Report(ex, "ipc-protocol", _logger);
             }
             catch (IOException ex)
             {
@@ -210,13 +210,13 @@ namespace Ergonomy.Core.Ipc
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "IPC connection pump failed. Connection={ConnectionId}", connection.Id);
+                ExceptionPolicy.Report(ex, "ipc-pump", _logger);
             }
             finally
             {
                 _connections.TryRemove(connection.Id, out _);
                 try { ClientDisconnected?.Invoke(connection); }
-                catch (Exception ex) { _logger.LogError(ex, "ClientDisconnected handler failed."); }
+                catch (Exception ex) { ExceptionPolicy.Report(ex, "ipc-client-disconnected-handler", _logger); }
 
                 connection.Dispose();
                 _logger.LogInformation("IPC client disconnected. Connection={ConnectionId} Clients={Count}",
@@ -266,7 +266,7 @@ namespace Ergonomy.Core.Ipc
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "IPC send failed. Connection={ConnectionId} Type={Type}", connection.Id, message.Type);
+                ExceptionPolicy.Report(ex, "ipc-server-send", _logger);
             }
         }
 
@@ -281,7 +281,8 @@ namespace Ergonomy.Core.Ipc
                 return;
             }
 
-            try { _cts.Cancel(); } catch (ObjectDisposedException) { }
+            try { _cts.Cancel(); }
+            catch (ObjectDisposedException ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex, "ipc-server-cancel"); }
 
             foreach (IpcConnection connection in _connections.Values.ToArray())
             {
@@ -300,9 +301,9 @@ namespace Ergonomy.Core.Ipc
                 {
                     _logger.LogWarning("IPC accept loop did not stop within the grace period.");
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    // already faulted / cancelled
+                    ExceptionPolicy.IgnoreBestEffortDispose(ex, "ipc-accept-stop-wait");
                 }
             }
 
@@ -318,7 +319,7 @@ namespace Ergonomy.Core.Ipc
         private static async Task DelayQuietAsync(TimeSpan delay, CancellationToken ct)
         {
             try { await Task.Delay(delay, ct).ConfigureAwait(false); }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex, "ipc-accept-delay"); }
         }
 
         /// <summary>
@@ -332,7 +333,8 @@ namespace Ergonomy.Core.Ipc
             }
 
             _disposed = true;
-            try { StopAsync().GetAwaiter().GetResult(); } catch (Exception) { /* best effort */ }
+            try { StopAsync().GetAwaiter().GetResult(); }
+            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "ipc-server-dispose"); }
             _cts?.Dispose();
             _cts = null;
         }

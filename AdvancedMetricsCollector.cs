@@ -10,12 +10,14 @@ using System.Text.Json;
 using LibreHardwareMonitor.Hardware;
 using System.Diagnostics.Eventing.Reader;
 using System.Globalization;
+using Ergonomy.Core.Diagnostics;
 
 public class AdvancedMetricsCollector
 {
     private readonly int _topProcessesCount;
     private readonly string _targetIp;
     private readonly HashSet<string> _enabledMetrics;
+    private readonly ProbeFailureLimiter _probeFailures = new();
 
     /// <summary>
     /// جمع‌کننده متریک‌های پیشرفته را با فهرست متریک‌های فعال، تعداد فرایندهای برتر و IP هدف ردیابی شبکه می‌سازد.
@@ -136,7 +138,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetInteractiveWindowsUsername), ex); }
         return null;
     }
 
@@ -161,7 +163,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetExplorerUser), ex); }
         return null;
     }
     // ---------------------------------------------------
@@ -187,7 +189,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetDiskHealthStatus), ex); }
         return JsonSerializer.Serialize(diskHealth, _jsonOptions);
     }
 
@@ -221,7 +223,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetCriticalSystemEvents), ex); }
         return JsonSerializer.Serialize(eventStats, _jsonOptions);
     }
 
@@ -389,7 +391,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetCpuWmiDetails), ex); }
         return cpuWmi;
     }
 
@@ -417,8 +419,9 @@ public class AdvancedMetricsCollector
                 dict["AvgDiskLatencyMs"] = diskLatency.NextValue() * 1000; 
             }
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
+            NoteProbeFailure(nameof(GetDiskPerformanceMetrics), ex);
             dict["Error"] = "Performance Counter Error: " + ex.Message;
         }
 
@@ -473,8 +476,9 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
+            NoteProbeFailure(nameof(GetAdvancedSmartData), ex);
             dict["Error"] = "WMI SMART Error (Run as Admin): " + ex.Message;
         }
 
@@ -504,8 +508,8 @@ public class AdvancedMetricsCollector
                 .Select(p => 
                 {
                     double cpuSeconds = 0;
-                    try { cpuSeconds = Math.Round(p.TotalProcessorTime.TotalSeconds, 2); } 
-                    catch { }
+                    try { cpuSeconds = Math.Round(p.TotalProcessorTime.TotalSeconds, 2); }
+                    catch (Exception ex) { NoteProbeFailure("TopProcesses.Cpu", ex); }
                     
                     return new { ProcessName = p.ProcessName, CpuTotalSeconds = cpuSeconds };
                 })
@@ -525,8 +529,9 @@ public class AdvancedMetricsCollector
 
             return JsonSerializer.Serialize(combinedResult, _jsonOptions);
         }
-        catch 
+        catch (Exception ex)
         {
+            NoteProbeFailure(nameof(GetTopProcesses), ex);
             return "{}";
         }
     }
@@ -550,7 +555,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetDiskModels), ex); }
         return JsonSerializer.Serialize(models, _jsonOptions);
     }
 
@@ -580,7 +585,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetMotherboardSerial), ex); }
         
         return "Unknown";
     }
@@ -633,6 +638,7 @@ public class AdvancedMetricsCollector
         }
         catch (Exception ex)
         {
+            NoteProbeFailure(nameof(PerformNetworkTrace), ex);
             hops.Add(new { Error = ex.Message });
         }
         return JsonSerializer.Serialize(hops, _jsonOptions);
@@ -654,7 +660,7 @@ public class AdvancedMetricsCollector
                 foreach (var item in searcher.Get()) return item["displayName"]?.ToString() ?? "Unknown";
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetSecurityStatus), ex); }
         return "Not Found / No Permission";
     }
 
@@ -677,7 +683,7 @@ public class AdvancedMetricsCollector
             }
             return count;
         }
-        catch { return -1; }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetFailedLoginsCount), ex); return -1; }
     }
 
     /// <summary>
@@ -693,7 +699,7 @@ public class AdvancedMetricsCollector
                 return searcher.Get().Count;
             }
         }
-        catch { return 0; }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetUsbDevicesCount), ex); return 0; }
     }
 
     /// <summary>
@@ -707,9 +713,10 @@ public class AdvancedMetricsCollector
             long tickCount = Environment.TickCount64; 
             return DateTime.Now - TimeSpan.FromMilliseconds(tickCount);
         }
-        catch
+        catch (Exception ex)
         {
-            return DateTime.MinValue; 
+            NoteProbeFailure(nameof(GetBootTime), ex);
+            return DateTime.MinValue;
         }
     }
 
@@ -761,7 +768,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetDiskWmiInfo), ex); }
         return dict;
     }
 
@@ -793,9 +800,12 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetGpuDetails), ex); }
         return JsonSerializer.Serialize(gpus, _jsonOptions);
     }
+
+    private void NoteProbeFailure(string probe, Exception ex)
+        => _probeFailures.TryReport(probe, ex, "probe:" + probe);
 }
 
 public class UpdateVisitor : IVisitor

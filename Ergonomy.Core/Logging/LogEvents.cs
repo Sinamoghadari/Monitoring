@@ -45,6 +45,11 @@ namespace Ergonomy.Logging
         public const int UpdateIntegrityFailed = 8030;
         public const int UpdateApplied = 8040;
 
+        public const int UnhandledException = 9000;
+        public const int UnobservedTaskException = 9010;
+        public const int WinFormsThreadException = 9020;
+        public const int OperationalException = 9030;
+
         public static readonly EventId WorkerStartedId = new(WorkerStarted, "WorkerStarted");
         public static readonly EventId WorkerStoppedId = new(WorkerStopped, "WorkerStopped");
         public static readonly EventId WorkerErrorId = new(WorkerError, "WorkerError");
@@ -75,5 +80,9 @@ namespace Ergonomy.Logging
         public static readonly EventId UpdateDownloadFailedId = new(UpdateDownloadFailed, "UpdateDownloadFailed");
         public static readonly EventId UpdateIntegrityFailedId = new(UpdateIntegrityFailed, "UpdateIntegrityFailed");
         public static readonly EventId UpdateAppliedId = new(UpdateApplied, "UpdateApplied");
+        public static readonly EventId UnhandledExceptionId = new(UnhandledException, "UnhandledException");
+        public static readonly EventId UnobservedTaskExceptionId = new(UnobservedTaskException, "UnobservedTaskException");
+        public static readonly EventId WinFormsThreadExceptionId = new(WinFormsThreadException, "WinFormsThreadException");
+        public static readonly EventId OperationalExceptionId = new(OperationalException, "OperationalException");
     }
 }

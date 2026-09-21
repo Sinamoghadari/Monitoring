@@ -5,6 +5,7 @@ using System.Runtime.Versioning;
 using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
+using Ergonomy.Core.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Ergonomy.Core.Ipc
@@ -107,7 +108,7 @@ namespace Ergonomy.Core.Ipc
                     delay = IpcConstants.ReconnectInitialDelay;
                     _logger.LogInformation("IPC client connected to the service.");
                     try { Connected?.Invoke(); }
-                    catch (Exception ex) { _logger.LogError(ex, "Connected handler failed."); }
+                    catch (Exception ex) { ExceptionPolicy.Report(ex, "ipc-connected-handler", _logger); }
 
                     await PumpAsync(connection, ct).ConfigureAwait(false);
                 }
@@ -134,7 +135,7 @@ namespace Ergonomy.Core.Ipc
                 catch (Exception ex)
                 {
                     pipe?.Dispose();
-                    _logger.LogError(ex, "Unexpected IPC client failure.");
+                    ExceptionPolicy.Report(ex, "ipc-client", _logger);
                 }
                 finally
                 {
@@ -149,7 +150,7 @@ namespace Ergonomy.Core.Ipc
                     {
                         previous.Dispose();
                         try { Disconnected?.Invoke(); }
-                        catch (Exception ex) { _logger.LogError(ex, "Disconnected handler failed."); }
+                        catch (Exception ex) { ExceptionPolicy.Report(ex, "ipc-disconnected-handler", _logger); }
                     }
                 }
 
@@ -159,7 +160,11 @@ namespace Ergonomy.Core.Ipc
                 }
 
                 try { await Task.Delay(delay, ct).ConfigureAwait(false); }
-                catch (OperationCanceledException) { break; }
+                catch (OperationCanceledException ex)
+                {
+                    ExceptionPolicy.IgnoreIfShuttingDown(ex, "ipc-client-reconnect-delay");
+                    break;
+                }
 
                 double next = Math.Min(delay.TotalSeconds * 2, IpcConstants.ReconnectMaxDelay.TotalSeconds);
                 delay = TimeSpan.FromSeconds(next);
@@ -203,7 +208,7 @@ namespace Ergonomy.Core.Ipc
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "IPC message handler failed. Type={Type}", message.Type);
+                    ExceptionPolicy.Report(ex, "ipc-client-handler", _logger);
                 }
             }
         }
@@ -236,7 +241,7 @@ namespace Ergonomy.Core.Ipc
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "IPC send failed. Type={Type}", message.Type);
+                ExceptionPolicy.Report(ex, "ipc-client-send", _logger);
                 return false;
             }
         }
@@ -252,7 +257,8 @@ namespace Ergonomy.Core.Ipc
                 return;
             }
 
-            try { _cts.Cancel(); } catch (ObjectDisposedException) { }
+            try { _cts.Cancel(); }
+            catch (ObjectDisposedException ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex, "ipc-client-cancel"); }
 
             IpcConnection? connection;
             lock (_sync)
@@ -267,7 +273,7 @@ namespace Ergonomy.Core.Ipc
             {
                 try { await _loop.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
                 catch (TimeoutException) { _logger.LogWarning("IPC client loop did not stop within the grace period."); }
-                catch (Exception) { /* already finished/faulted */ }
+                catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "ipc-client-stop-wait"); }
             }
 
             _loop = null;
@@ -284,7 +290,8 @@ namespace Ergonomy.Core.Ipc
             }
 
             _disposed = true;
-            try { StopAsync().GetAwaiter().GetResult(); } catch (Exception) { /* best effort */ }
+            try { StopAsync().GetAwaiter().GetResult(); }
+            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "ipc-client-dispose"); }
             _cts?.Dispose();
             _cts = null;
         }

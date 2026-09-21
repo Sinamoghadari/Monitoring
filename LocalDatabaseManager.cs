@@ -6,6 +6,8 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using Microsoft.Data.Sqlite;
 using Ergonomy.Configuration;
+using Ergonomy.Core.Diagnostics;
+using Ergonomy.Core.Hosting;
 using Ergonomy.Database;
 using Ergonomy.Logging;
 using Ergonomy.Services;
@@ -83,6 +85,7 @@ namespace Ergonomy.Database
         private DateTime _lastStatusRefreshUtc = DateTime.MinValue;
 
         private bool _disposed;
+        private readonly bool _sqliteEnabled;
 
         /// <summary>
         /// مدیر outbox را با تنظیمات و مسیر پیش‌فرض ProgramData می‌سازد.
@@ -110,23 +113,32 @@ namespace Ergonomy.Database
             if (connectionProvider == null) throw new ArgumentNullException(nameof(connectionProvider));
             _dbPath = connectionProvider.DatabasePath;
             _connectionString = connectionProvider.ConnectionString;
+            _sqliteEnabled = RuntimeIsolation.MayWriteSqlite;
 
-            try
+            if (!_sqliteEnabled)
             {
-                InitializeDatabase();
-                ReconcileCount();
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] SQLite outbox initialized.");
-                StartupLog.Info("local DB initialized");
+                StartupLog.Info("SQLite outbox skipped; Ergonomy.Service owns the database.");
             }
-            catch (Exception ex)
+            else
             {
-                Console.WriteLine(
-                    $"[{DateTime.Now:HH:mm:ss}] ❌ SQLite outbox initialization failed; tray will continue. {ex.Message}");
-                StartupLog.Error("local DB initialization failed; tray will continue.", ex);
+                try
+                {
+                    InitializeDatabase();
+                    ReconcileCount();
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] SQLite outbox initialized.");
+                    StartupLog.Info("local DB initialized");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(
+                        $"[{DateTime.Now:HH:mm:ss}] ❌ SQLite outbox initialization failed; tray will continue. {ex.Message}");
+                    StartupLog.Error("local DB initialization failed; tray will continue.", ex);
+                    ExceptionPolicy.Report(ex, "sqlite-init");
+                }
             }
 
-            if (_settings.RetentionCheckIntervalSeconds > 0)
+            if (_sqliteEnabled && _settings.RetentionCheckIntervalSeconds > 0)
             {
                 _retentionTimer = new System.Timers.Timer(
                     _settings.RetentionCheckIntervalSeconds * 1000)
@@ -153,6 +165,7 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] Retention timer error.");
+                ExceptionPolicy.Report(ex, "sqlite-retention-timer");
             }
         }
 
@@ -317,9 +330,9 @@ namespace Ergonomy.Database
                 if (File.Exists(walPath))
                     total += new FileInfo(walPath).Length;
             }
-            catch
+            catch (Exception ex)
             {
-                // در صورت خطای IO، صفر برمی‌گردد و سیاست به‌سوی safe-side می‌رود.
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "sqlite-size");
             }
 
             return total;
@@ -380,6 +393,9 @@ namespace Ergonomy.Database
             string targetTableName,
             object dataObject)
         {
+            if (!_sqliteEnabled)
+                return OutboxSaveResult.Failed;
+
             if (string.IsNullOrWhiteSpace(targetTableName))
             {
                 throw new ArgumentException(
@@ -448,7 +464,7 @@ namespace Ergonomy.Database
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] SQLite outbox write failed. " +
                     $"Target: {targetTableName} | Error.");
-
+                ExceptionPolicy.Report(ex, "sqlite-write");
                 return OutboxSaveResult.Failed;
             }
         }
@@ -461,6 +477,8 @@ namespace Ergonomy.Database
         public List<SyncRecord> GetPendingRecords(int limit = 50)
         {
             var records = new List<SyncRecord>();
+            if (!_sqliteEnabled)
+                return records;
 
             if (limit <= 0)
                 limit = 50;
@@ -513,6 +531,7 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] SQLite outbox read failed.");
+                ExceptionPolicy.Report(ex, "sqlite-read");
             }
 
             return records;
@@ -525,6 +544,9 @@ namespace Ergonomy.Database
         /// <returns>اگر دقیقاً یک ردیف حذف شد true است.</returns>
         public bool DeleteRecord(Guid id)
         {
+            if (!_sqliteEnabled)
+                return false;
+
             try
             {
                 using var connection = CreateOpenConnection();
@@ -555,7 +577,7 @@ namespace Ergonomy.Database
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] SQLite outbox delete failed. " +
                     $"Record deletion failed.");
-
+                ExceptionPolicy.Report(ex, "sqlite-delete");
                 return false;
             }
         }
@@ -570,6 +592,9 @@ namespace Ergonomy.Database
         /// <returns>تعداد حذف‌های سنی و ظرفیتی.</returns>
         public RetentionResult RunRetention()
         {
+            if (!_sqliteEnabled)
+                return new RetentionResult(0, 0);
+
             int deletedByAge = DeleteExpiredRecords();
             Interlocked.Add(ref _deletedByAgeCount, deletedByAge);
 
@@ -630,6 +655,7 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] Retention (age) failed.");
+                ExceptionPolicy.Report(ex, "sqlite-retention-age");
                 return 0;
             }
         }
@@ -705,6 +731,7 @@ namespace Ergonomy.Database
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] Retention (capacity) failed for " +
                     $"'{targetTable}'.");
+                ExceptionPolicy.Report(ex, "sqlite-retention-capacity");
                 return 0;
             }
         }
@@ -729,6 +756,7 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] Count reconcile failed.");
+                ExceptionPolicy.Report(ex, "sqlite-reconcile");
             }
         }
 
@@ -769,6 +797,9 @@ namespace Ergonomy.Database
             _retentionTimer?.Stop();
             _retentionTimer?.Dispose();
 
+            if (!_sqliteEnabled)
+                return;
+
             try
             {
                 using var connection = new SqliteConnection(_connectionString);
@@ -777,16 +808,18 @@ namespace Ergonomy.Database
                 checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE);";
                 checkpoint.ExecuteNonQuery();
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "sqlite-checkpoint");
             }
 
             try
             {
                 SqliteConnection.ClearAllPools();
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "sqlite-clear-pools");
             }
         }
     }

@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
+using Ergonomy.Core.Diagnostics;
 
 namespace Ergonomy.Core.Ipc
 {
@@ -106,12 +107,13 @@ namespace Ergonomy.Core.Ipc
                     server.Disconnect();
                 }
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                // Disconnect on an already-broken pipe is not actionable.
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "ipc-disconnect");
             }
 
-            try { _stream.Dispose(); } catch (Exception) { /* best effort */ }
+            try { _stream.Dispose(); }
+            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "ipc-stream-dispose"); }
             _writeLock.Dispose();
         }
     }

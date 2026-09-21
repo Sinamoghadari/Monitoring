@@ -4,6 +4,8 @@ using System.Net.Http;
 using System.Runtime.Versioning;
 using System.Threading.Tasks;
 using Ergonomy.Configuration;
+using Ergonomy.Core.Diagnostics;
+using Ergonomy.Core.Hosting;
 using Ergonomy.Core.Ipc;
 using Ergonomy.Database;
 using Ergonomy.Logging;
@@ -47,6 +49,16 @@ namespace Ergonomy.Service
         /// <returns>کد خروج صفر در موفقیت و یک در شکست راه‌اندازی.</returns>
         private static async Task<int> Main(string[] args)
         {
+            ExceptionPolicy.InstallLastChance();
+
+            using IsolationClaim? claim = RuntimeIsolation.TryClaimService();
+            if (claim == null)
+            {
+                Console.Error.WriteLine(
+                    "[FATAL] Ergonomy.Service could not claim SQLite ownership. Another writer is running.");
+                return 1;
+            }
+
             bool isInteractive = !IsRunningAsWindowsService(args);
 
             IHost host = Host.CreateDefaultBuilder(args)
@@ -123,6 +135,8 @@ namespace Ergonomy.Service
                 })
                 .Build();
 
+            ExceptionPolicy.Configure(host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("ExceptionPolicy"));
+
             try
             {
                 await host.RunAsync().ConfigureAwait(false);
@@ -130,7 +144,7 @@ namespace Ergonomy.Service
             }
             catch (Exception ex)
             {
-                // Last-resort logging if the host itself fails to start.
+                ExceptionPolicy.Report(ex, "service-host");
                 Console.Error.WriteLine($"[FATAL] Ergonomy.Service failed to start: {ex}");
                 return 1;
             }
@@ -166,9 +180,9 @@ namespace Ergonomy.Service
                     return true;
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Parent lookup is best-effort; fall through to the UserInteractive check above.
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "parent-process-lookup");
             }
 
             return false;
@@ -190,8 +204,9 @@ namespace Ergonomy.Service
                     self.Handle, 0, pbi, pbi.Length * IntPtr.Size, out _);
                 return status == 0 ? (int)pbi[5] : 0;
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "parent-pid");
                 return 0;
             }
         }

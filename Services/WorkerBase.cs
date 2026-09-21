@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Ergonomy.Core.Diagnostics;
 using Ergonomy.Logging;
 
 namespace Ergonomy.Services
@@ -93,9 +94,9 @@ namespace Ergonomy.Services
                     catch (OperationCanceledException) when (ct.IsCancellationRequested) { break; }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
-                // expected on shutdown
+                ExceptionPolicy.IgnoreIfShuttingDown(ex, "worker-loop-cancel");
             }
             catch (Exception ex)
             {
@@ -165,8 +166,7 @@ namespace Ergonomy.Services
             if (!selfStop && loop != null)
             {
                 try { loop.Wait(TimeSpan.FromSeconds(5)); }
-                catch (AggregateException) { }
-                catch (Exception) { }
+                catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "worker-stop-wait"); }
             }
 
             lock (_sync)

@@ -5,6 +5,7 @@ using System.Threading;
 using System.Windows.Forms;
 using Ergonomy;
 using Ergonomy.Configuration;
+using Ergonomy.Core.Diagnostics;
 using Ergonomy.Core.Ipc;
 using Ergonomy.Hooks;
 using Ergonomy.Logging;
@@ -34,6 +35,8 @@ namespace Ergonomy.TaskAgent
         [STAThread]
         private static void Main()
         {
+            ExceptionPolicy.InstallLastChance();
+
             using var singleInstance = new Mutex(true, SingleInstanceMutexName, out bool isOwner);
             if (!isOwner)
             {
@@ -41,10 +44,15 @@ namespace Ergonomy.TaskAgent
                 return;
             }
 
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (_, e) =>
+                ExceptionPolicy.Report(e.Exception, "winforms-thread", eventId: LogEvents.WinFormsThreadExceptionId);
+
             ApplicationConfiguration.Initialize();
 
             using ServiceProvider provider = BuildServiceProvider();
             var loggerFactory = provider.GetRequiredService<ILoggerFactory>();
+            ExceptionPolicy.Configure(loggerFactory.CreateLogger("ExceptionPolicy"));
             loggerFactory.AddProvider(new TaskProblemIpcLoggerProvider(
                 provider.GetRequiredService<NamedPipeIpcClient>()));
 

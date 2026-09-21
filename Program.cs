@@ -8,6 +8,9 @@ using System.Windows.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Ergonomy.Configuration;
+using Ergonomy.Core.Diagnostics;
+using Ergonomy.Core.Hosting;
+using Ergonomy.Logging;
 using Ergonomy.Services;
 
 namespace Ergonomy
@@ -31,20 +34,37 @@ namespace Ergonomy
         [STAThread]
         static void Main(string[] args)
         {
+            ExceptionPolicy.InstallLastChance();
+
             if (!TryAcquireSingleInstanceMutex(out Mutex? singleInstance) || singleInstance == null)
                 return;
 
+            IsolationClaim? sqliteOwner = null;
             using (singleInstance)
             {
                 try
                 {
                     GC.KeepAlive(singleInstance);
+
+                    if (RuntimeIsolation.IsServiceRunning())
+                    {
+                        StartupLog.EnsureDirectories();
+                        StartupLog.Info("Ergonomy.Service owns SQLite; tray will not open the database.");
+                    }
+                    else
+                    {
+                        sqliteOwner = RuntimeIsolation.TryClaimSqliteOwner();
+                        if (sqliteOwner == null)
+                            return;
+                    }
+
                     RunApplication(args);
                 }
                 finally
                 {
+                    sqliteOwner?.Dispose();
                     try { singleInstance.ReleaseMutex(); }
-                    catch (ApplicationException) { }
+                    catch (ApplicationException ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "tray-mutex-release"); }
                 }
             }
         }
@@ -77,16 +97,18 @@ namespace Ergonomy
                     {
                         mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out _);
                     }
-                    catch
+                    catch (Exception recreateEx)
                     {
+                        ExceptionPolicy.IgnoreBestEffortDispose(recreateEx, "tray-mutex-abandoned-recreate");
                         return false;
                     }
                 }
 
                 return true;
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "tray-mutex-acquire");
                 mutex?.Dispose();
                 mutex = null;
                 return false;
@@ -97,6 +119,10 @@ namespace Ergonomy
         {
             bool diagnose = HasFlag(args, "--diagnose-startup");
             EnsureConsoleAttached(forceAlloc: diagnose);
+
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (_, e) =>
+                ExceptionPolicy.Report(e.Exception, "winforms-thread", eventId: LogEvents.WinFormsThreadExceptionId);
 
             try
             {
@@ -121,7 +147,9 @@ namespace Ergonomy
                 SynchronizationContext.SetSynchronizationContext(null);
 
                 using var provider = ServiceRegistrar.Build(uiAnchor);
-                provider.GetRequiredService<ILoggerFactory>().AddProvider(
+                ILoggerFactory loggerFactory = provider.GetRequiredService<ILoggerFactory>();
+                ExceptionPolicy.Configure(loggerFactory.CreateLogger("ExceptionPolicy"));
+                loggerFactory.AddProvider(
                     new ErrorOnlyAppLogLoggerProvider(provider.GetRequiredService<MessageLogService>()));
 
                 var settingsService = provider.GetRequiredService<ISettingsService>();
@@ -139,6 +167,7 @@ namespace Ergonomy
             }
             catch (Exception ex)
             {
+                ExceptionPolicy.Report(ex, "tray-startup");
                 StartupLog.WriteException(ex, "Fatal startup exception. Tray did not stay alive.");
                 PauseIfInteractive();
             }
@@ -158,12 +187,13 @@ namespace Ergonomy
                 if (!AttachConsole(AttachParentProcess) && forceAlloc)
                     AllocConsole();
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "attach-console");
             }
 
             try { Console.OutputEncoding = Encoding.UTF8; }
-            catch { }
+            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "console-encoding"); }
         }
 
         private static void PauseIfInteractive()
@@ -176,12 +206,13 @@ namespace Ergonomy
                 Console.WriteLine("The window will stay open for 20 seconds so the message can be read.");
                 Console.Out.Flush();
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "pause-console");
             }
 
             try { Thread.Sleep(TimeSpan.FromSeconds(20)); }
-            catch { }
+            catch (Exception ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex, "pause-sleep"); }
         }
 
         private static void RunStartupDiagnostics(IServiceProvider provider)
