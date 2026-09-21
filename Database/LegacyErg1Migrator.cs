@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
-using Ergonomy.Diagnostics;
 using Ergonomy.Services;
 
 namespace Ergonomy.Database
@@ -71,9 +70,8 @@ namespace Ergonomy.Database
                     StartupLog.Info($"Decrypted legacy ERG1 database to a temporary SQLite file for SQLCipher import.");
                     return true;
                 }
-                catch (CryptographicException ex)
+                catch (CryptographicException)
                 {
-                    ExceptionPolicy.IgnoreBestEffortDispose(ex);
                 }
                 catch (Exception ex)
                 {
@@ -95,15 +93,14 @@ namespace Ergonomy.Database
                     "ERGONOMY_DIRECTORY_PASSWORD",
                     EnvironmentVariableTarget.Machine);
             }
-            catch (Exception ex)
+            catch
             {
-                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
 
             if (string.IsNullOrWhiteSpace(fromEnv))
             {
                 try { fromEnv = Environment.GetEnvironmentVariable("ERGONOMY_DIRECTORY_PASSWORD"); }
-                catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
+                catch { }
             }
 
             if (!string.IsNullOrWhiteSpace(fromEnv))

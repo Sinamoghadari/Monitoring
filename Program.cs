@@ -8,15 +8,13 @@ using System.Windows.Forms;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Ergonomy.Configuration;
-using Ergonomy.Core.Hosting;
-using Ergonomy.Diagnostics;
 using Ergonomy.Services;
 
 namespace Ergonomy
 {
     internal static class Program
     {
-        private const string SingleInstanceMutexName = RuntimeIsolation.TraySingleInstanceMutexName;
+        private const string SingleInstanceMutexName = @"Global\Ergonomy_Agent_SingleInstance_Mutex";
         private const int AttachParentProcess = -1;
 
         [DllImport("kernel32.dll", SetLastError = true)]
@@ -33,33 +31,21 @@ namespace Ergonomy
         [STAThread]
         static void Main(string[] args)
         {
-            ExceptionPolicy.InstallLastChanceHandlers(AgentProcessKind.Tray);
-            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-            Application.ThreadException += (_, e) => ExceptionPolicy.ReportThreadException(e.Exception);
-
-            // Production runtime is Service + Task. Do not open SQLCipher if the Service owns it.
-            if (RuntimeIsolation.IsServiceRunning())
-                return;
-
             if (!TryAcquireSingleInstanceMutex(out Mutex? singleInstance) || singleInstance == null)
                 return;
 
-            if (!RuntimeIsolation.TryClaimSqliteOwner(out Mutex? sqliteOwner, out _))
+            using (singleInstance)
             {
-                RuntimeIsolation.Release(ref singleInstance);
-                return;
-            }
-
-            try
-            {
-                GC.KeepAlive(singleInstance);
-                GC.KeepAlive(sqliteOwner);
-                RunApplication(args);
-            }
-            finally
-            {
-                RuntimeIsolation.Release(ref sqliteOwner);
-                RuntimeIsolation.Release(ref singleInstance);
+                try
+                {
+                    GC.KeepAlive(singleInstance);
+                    RunApplication(args);
+                }
+                finally
+                {
+                    try { singleInstance.ReleaseMutex(); }
+                    catch (ApplicationException) { }
+                }
             }
         }
 
@@ -91,18 +77,16 @@ namespace Ergonomy
                     {
                         mutex = new Mutex(initiallyOwned: true, SingleInstanceMutexName, out _);
                     }
-                    catch (Exception inner)
+                    catch
                     {
-                        ExceptionPolicy.IgnoreBestEffortDispose(inner);
                         return false;
                     }
                 }
 
                 return true;
             }
-            catch (Exception ex)
+            catch
             {
-                ExceptionPolicy.IgnoreBestEffortDispose(ex);
                 mutex?.Dispose();
                 mutex = null;
                 return false;
@@ -137,12 +121,8 @@ namespace Ergonomy
                 SynchronizationContext.SetSynchronizationContext(null);
 
                 using var provider = ServiceRegistrar.Build(uiAnchor);
-                ILoggerFactory loggerFactory = provider.GetRequiredService<ILoggerFactory>();
-                loggerFactory.AddProvider(
+                provider.GetRequiredService<ILoggerFactory>().AddProvider(
                     new ErrorOnlyAppLogLoggerProvider(provider.GetRequiredService<MessageLogService>()));
-                ExceptionPolicy.Configure(
-                    AgentProcessKind.Tray,
-                    loggerFactory.CreateLogger(ExceptionPolicy.LoggerCategory));
 
                 var settingsService = provider.GetRequiredService<ISettingsService>();
                 settingsService.LoadBootstrap();
@@ -178,13 +158,12 @@ namespace Ergonomy
                 if (!AttachConsole(AttachParentProcess) && forceAlloc)
                     AllocConsole();
             }
-            catch (Exception ex)
+            catch
             {
-                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
 
             try { Console.OutputEncoding = Encoding.UTF8; }
-            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
+            catch { }
         }
 
         private static void PauseIfInteractive()
@@ -197,13 +176,12 @@ namespace Ergonomy
                 Console.WriteLine("The window will stay open for 20 seconds so the message can be read.");
                 Console.Out.Flush();
             }
-            catch (Exception ex)
+            catch
             {
-                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
 
             try { Thread.Sleep(TimeSpan.FromSeconds(20)); }
-            catch (Exception ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
+            catch { }
         }
 
         private static void RunStartupDiagnostics(IServiceProvider provider)

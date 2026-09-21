@@ -7,7 +7,6 @@ using Microsoft.Extensions.Logging;
 using Ergonomy.Configuration;
 using Ergonomy.Core;
 using Ergonomy.Database;
-using Ergonomy.Diagnostics;
 using Ergonomy.Hooks;
 using Ergonomy.Logging;
 using Ergonomy.Observability;
@@ -160,7 +159,7 @@ namespace Ergonomy.Services
         private static string GetWindowsSID()
         {
             try { return WindowsIdentity.GetCurrent()?.User?.Value ?? "UNKNOWN"; }
-            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); return "UNKNOWN"; }
+            catch { return "UNKNOWN"; }
         }
 
         /// <summary>
@@ -170,23 +169,7 @@ namespace Ergonomy.Services
         private static string GetWindowsUsername()
         {
             try { return WindowsIdentity.GetCurrent().Name; }
-            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); return Environment.UserName; }
-        }
-
-        /// <summary>
-        /// Windows username for <c>WindowsUsername_RunAdmin</c>. Elevation is not included;
-        /// that field is a username only.
-        /// </summary>
-        private static string GetWindowsUsernameRunAdmin()
-        {
-            try
-            {
-                return WindowsIdentity.GetCurrent()?.Name ?? Environment.UserName;
-            }
-            catch
-            {
-                return Environment.UserName;
-            }
+            catch { return Environment.UserName; }
         }
 
         /// <summary>

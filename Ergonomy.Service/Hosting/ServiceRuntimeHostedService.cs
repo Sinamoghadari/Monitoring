@@ -5,7 +5,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Ergonomy.Configuration;
 using Ergonomy.Database;
-using Ergonomy.Diagnostics;
 using Ergonomy.Service.Ipc;
 using Ergonomy.Services;
 using Microsoft.Extensions.Hosting;
@@ -80,9 +79,6 @@ namespace Ergonomy.Service.Hosting
             _settings.LoadBootstrap();
             StartupLog.Info("config loaded");
             _loggerFactory.AddProvider(new ErrorOnlyAppLogLoggerProvider(_appLog));
-            ExceptionPolicy.Configure(
-                AgentProcessKind.Service,
-                _loggerFactory.CreateLogger(ExceptionPolicy.LoggerCategory));
 
             _ipc.SettingsSnapshotProvider = () =>
                 _ipc.SnapshotFrom(_settings.Current, _settings.SettingsSourceIsApi);
@@ -113,13 +109,13 @@ namespace Ergonomy.Service.Hosting
         public Task StopAsync(CancellationToken cancellationToken)
         {
             _settings.SettingsChanged -= OnSettingsChanged;
-            try { _update.Stop(); } catch (Exception ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
-            try { _healthMonitor.Stop(); } catch (Exception ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
-            try { _permissionMonitor.Stop(); } catch (Exception ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
-            try { _settingsRefresh.Stop(); } catch (Exception ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
-            try { _permissions.StopAll(); } catch (Exception ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
-            try { _sync.Stop("service-stopping"); } catch (Exception ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
-            try { _kafka.Dispose(); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
+            try { _update.Stop(); } catch { }
+            try { _healthMonitor.Stop(); } catch { }
+            try { _permissionMonitor.Stop(); } catch { }
+            try { _settingsRefresh.Stop(); } catch { }
+            try { _permissions.StopAll(); } catch { }
+            try { _sync.Stop("service-stopping"); } catch { }
+            try { _kafka.Dispose(); } catch { }
             StartupLog.Info("shutdown completed");
             return Task.CompletedTask;
         }
@@ -146,9 +142,9 @@ namespace Ergonomy.Service.Hosting
             string sid;
             string user;
             try { sid = WindowsIdentity.GetCurrent()?.User?.Value ?? "UNKNOWN"; }
-            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); sid = "UNKNOWN"; }
+            catch { sid = "UNKNOWN"; }
             try { user = WindowsIdentity.GetCurrent()?.Name ?? Environment.UserName; }
-            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); user = Environment.UserName; }
+            catch { user = Environment.UserName; }
             return new MachineIdentity(sid, user, Environment.MachineName, user);
         }
     }

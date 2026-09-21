@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Text;
-using Ergonomy.Diagnostics;
 
 namespace Ergonomy.Services
 {
@@ -45,9 +44,8 @@ namespace Ergonomy.Services
             {
                 EnsureDirectories();
             }
-            catch (Exception ex)
+            catch
             {
-                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
 
             var sb = new StringBuilder();
@@ -62,7 +60,7 @@ namespace Ergonomy.Services
 
             string line = sb.ToString();
             try { Console.WriteLine(line); }
-            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
+            catch { }
 
             try
             {
@@ -70,9 +68,8 @@ namespace Ergonomy.Services
                 if (errorsFile)
                     File.AppendAllText(ErrorLogPath, line + Environment.NewLine + Environment.NewLine, Encoding.UTF8);
             }
-            catch (Exception ex)
+            catch
             {
-                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
         }
 

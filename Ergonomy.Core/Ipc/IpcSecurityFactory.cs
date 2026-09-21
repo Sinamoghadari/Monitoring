@@ -5,7 +5,6 @@ using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
-using Ergonomy.Diagnostics;
 
 namespace Ergonomy.Core.Ipc
 {
@@ -85,9 +84,8 @@ namespace Ergonomy.Core.Ipc
                 if (current != null)
                     return current;
             }
-            catch (Exception ex)
+            catch
             {
-                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
 
             return new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
@@ -108,7 +106,7 @@ namespace Ergonomy.Core.Ipc
             }
 
             try { Add(WindowsIdentity.GetCurrent()?.User); }
-            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
+            catch { }
 
             IntPtr sessions = IntPtr.Zero;
             try
@@ -132,9 +130,8 @@ namespace Ergonomy.Core.Ipc
                     Add(SidFromSession(info.SessionId));
                 }
             }
-            catch (Exception ex)
+            catch
             {
-                ExceptionPolicy.IgnoreBestEffortDispose(ex);
             }
             finally
             {

@@ -1,7 +1,6 @@
 using System;
 using System.Threading;
 using Microsoft.Extensions.Logging;
-using Ergonomy.Diagnostics;
 using Ergonomy.Logging;
 
 namespace Ergonomy.Services
@@ -29,7 +28,7 @@ namespace Ergonomy.Services
 
         private void Write(string category, LogLevel level, string message)
         {
-            if (Suppress.Value || ExceptionPolicy.IsSuppressed)
+            if (Suppress.Value)
                 return;
             if (!AppLogNormalizer.IsProblemLogLevel(level))
                 return;

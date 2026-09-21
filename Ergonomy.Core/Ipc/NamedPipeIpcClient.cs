@@ -6,7 +6,6 @@ using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Ergonomy.Diagnostics;
 
 namespace Ergonomy.Core.Ipc
 {
@@ -253,7 +252,7 @@ namespace Ergonomy.Core.Ipc
                 return;
             }
 
-            try { _cts.Cancel(); } catch (ObjectDisposedException ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
+            try { _cts.Cancel(); } catch (ObjectDisposedException) { }
 
             IpcConnection? connection;
             lock (_sync)
@@ -268,7 +267,7 @@ namespace Ergonomy.Core.Ipc
             {
                 try { await _loop.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false); }
                 catch (TimeoutException) { _logger.LogWarning("IPC client loop did not stop within the grace period."); }
-                catch (Exception ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
+                catch (Exception) { /* already finished/faulted */ }
             }
 
             _loop = null;
@@ -285,7 +284,7 @@ namespace Ergonomy.Core.Ipc
             }
 
             _disposed = true;
-            try { StopAsync().GetAwaiter().GetResult(); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
+            try { StopAsync().GetAwaiter().GetResult(); } catch (Exception) { /* best effort */ }
             _cts?.Dispose();
             _cts = null;
         }

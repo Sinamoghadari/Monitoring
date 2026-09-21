@@ -208,16 +208,9 @@ namespace Ergonomy
                     using var ms = new MemoryStream(imageBytes);
                     loaded.Add(new Bitmap(ms));
                 }
-                catch (Exception ex)
+                catch
                 {
-                    Ergonomy.Diagnostics.ExceptionPolicy.Report(
-                        Ergonomy.Diagnostics.ExceptionSeverity.Operational,
-                        ex,
-                        new Ergonomy.Diagnostics.ExceptionReportContext
-                        {
-                            Module = nameof(AlarmManager),
-                            Message = "Skipped a corrupt alarm image payload."
-                        });
+                    // Skip a single corrupt payload; others may still be usable.
                 }
             }
 

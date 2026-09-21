@@ -8,7 +8,6 @@ using Microsoft.Extensions.Logging;
 using Ergonomy.Configuration;
 using Ergonomy.Core;
 using Ergonomy.Database;
-using Ergonomy.Diagnostics;
 using Ergonomy.Logging;
 using Ergonomy.Observability;
 using Ergonomy.Services;
@@ -180,7 +179,7 @@ namespace Ergonomy
             form.Shown += (_, _) =>
             {
                 try { form.Hide(); }
-                catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
+                catch { }
             };
             form.FormClosing += (_, e) =>
             {
@@ -188,7 +187,7 @@ namespace Ergonomy
                 {
                     e.Cancel = true;
                     try { form.Hide(); }
-                    catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
+                    catch { }
                 }
             };
             return form;
@@ -337,11 +336,7 @@ namespace Ergonomy
             {
                 StartupLog.Info("shutdown started");
                 try { ExitThread(); }
-                catch (Exception ex)
-                {
-                    ExceptionPolicy.IgnoreIfShuttingDown(ex);
-                    Application.Exit();
-                }
+                catch { Application.Exit(); }
             }
 
             try
@@ -358,9 +353,8 @@ namespace Ergonomy
                     return;
                 }
             }
-            catch (Exception ex)
+            catch
             {
-                ExceptionPolicy.IgnoreIfShuttingDown(ex);
             }
 
             Exit();

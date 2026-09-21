@@ -10,12 +10,9 @@ using System.Text.Json;
 using LibreHardwareMonitor.Hardware;
 using System.Diagnostics.Eventing.Reader;
 using System.Globalization;
-using Ergonomy.Diagnostics;
 
 public class AdvancedMetricsCollector
 {
-    private static readonly ProbeFailureLimiter ProbeFailures = new(ProbeFailureLimiter.DefaultWindow);
-
     private readonly int _topProcessesCount;
     private readonly string _targetIp;
     private readonly HashSet<string> _enabledMetrics;
@@ -139,7 +136,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (Exception ex) { ReportProbeFailure("WmiInteractiveUser", ex); }
+        catch { }
         return null;
     }
 
@@ -164,7 +161,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (Exception ex) { ReportProbeFailure("WmiExplorerUser", ex); }
+        catch { }
         return null;
     }
     // ---------------------------------------------------
@@ -190,7 +187,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (Exception ex) { ReportProbeFailure("WmiDiskHealth", ex); }
+        catch { }
         return JsonSerializer.Serialize(diskHealth, _jsonOptions);
     }
 
@@ -224,7 +221,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (Exception ex) { ReportProbeFailure("EventLogCritical", ex); }
+        catch { }
         return JsonSerializer.Serialize(eventStats, _jsonOptions);
     }
 
@@ -392,7 +389,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (Exception ex) { ReportProbeFailure("WmiCpu", ex); }
+        catch { }
         return cpuWmi;
     }
 
@@ -422,7 +419,6 @@ public class AdvancedMetricsCollector
         }
         catch (System.Exception ex)
         {
-            ReportProbeFailure("DiskPerformanceCounter", ex);
             dict["Error"] = "Performance Counter Error: " + ex.Message;
         }
 
@@ -479,7 +475,6 @@ public class AdvancedMetricsCollector
         }
         catch (System.Exception ex)
         {
-            ReportProbeFailure("WmiSmart", ex);
             dict["Error"] = "WMI SMART Error (Run as Admin): " + ex.Message;
         }
 
@@ -510,7 +505,7 @@ public class AdvancedMetricsCollector
                 {
                     double cpuSeconds = 0;
                     try { cpuSeconds = Math.Round(p.TotalProcessorTime.TotalSeconds, 2); } 
-                    catch (Exception ex) { ReportProbeFailure("ProcessCpuTime", ex); }
+                    catch { }
                     
                     return new { ProcessName = p.ProcessName, CpuTotalSeconds = cpuSeconds };
                 })
@@ -530,9 +525,8 @@ public class AdvancedMetricsCollector
 
             return JsonSerializer.Serialize(combinedResult, _jsonOptions);
         }
-        catch (Exception ex)
+        catch 
         {
-            ReportProbeFailure("ProcessList", ex);
             return "{}";
         }
     }
@@ -556,7 +550,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (Exception ex) { ReportProbeFailure("WmiDiskModels", ex); }
+        catch { }
         return JsonSerializer.Serialize(models, _jsonOptions);
     }
 
@@ -586,7 +580,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (Exception ex) { ReportProbeFailure("WmiMotherboardSerial", ex); }
+        catch { }
         
         return "Unknown";
     }
@@ -639,7 +633,6 @@ public class AdvancedMetricsCollector
         }
         catch (Exception ex)
         {
-            ReportProbeFailure("NetworkTrace", ex);
             hops.Add(new { Error = ex.Message });
         }
         return JsonSerializer.Serialize(hops, _jsonOptions);
@@ -661,7 +654,7 @@ public class AdvancedMetricsCollector
                 foreach (var item in searcher.Get()) return item["displayName"]?.ToString() ?? "Unknown";
             }
         }
-        catch (Exception ex) { ReportProbeFailure("WmiSecurityCenter", ex); }
+        catch { }
         return "Not Found / No Permission";
     }
 
@@ -684,7 +677,7 @@ public class AdvancedMetricsCollector
             }
             return count;
         }
-        catch (Exception ex) { ReportProbeFailure("EventLogFailedLogins", ex); return -1; }
+        catch { return -1; }
     }
 
     /// <summary>
@@ -700,7 +693,7 @@ public class AdvancedMetricsCollector
                 return searcher.Get().Count;
             }
         }
-        catch (Exception ex) { ReportProbeFailure("WmiUsb", ex); return 0; }
+        catch { return 0; }
     }
 
     /// <summary>
@@ -714,9 +707,8 @@ public class AdvancedMetricsCollector
             long tickCount = Environment.TickCount64; 
             return DateTime.Now - TimeSpan.FromMilliseconds(tickCount);
         }
-        catch (Exception ex)
+        catch
         {
-            ReportProbeFailure("BootTime", ex);
             return DateTime.MinValue; 
         }
     }
@@ -769,7 +761,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (Exception ex) { ReportProbeFailure("WmiDiskInfo", ex); }
+        catch { }
         return dict;
     }
 
@@ -801,28 +793,8 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (Exception ex) { ReportProbeFailure("WmiGpu", ex); }
+        catch { }
         return JsonSerializer.Serialize(gpus, _jsonOptions);
-    }
-
-    /// <summary>
-    /// First miss per probe family in a 15-minute window is reported as Operational;
-    /// repeats increment a suppressed counter and emit nothing.
-    /// </summary>
-    private static void ReportProbeFailure(string family, Exception ex)
-    {
-        if (!ProbeFailures.TryEmit(family, out int suppressed))
-            return;
-
-        string extra = suppressed > 0 ? $" ({suppressed} repeats suppressed)" : string.Empty;
-        ExceptionPolicy.Report(
-            ExceptionSeverity.Operational,
-            ex,
-            new ExceptionReportContext
-            {
-                Module = nameof(AdvancedMetricsCollector),
-                Message = "Probe " + family + " failed" + extra
-            });
     }
 }
 

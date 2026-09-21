@@ -7,7 +7,6 @@ using System.Runtime.Versioning;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Ergonomy.Diagnostics;
 
 namespace Ergonomy.Core.Ipc
 {
@@ -197,9 +196,9 @@ namespace Ergonomy.Core.Ipc
                     }
                 }
             }
-            catch (OperationCanceledException ex)
+            catch (OperationCanceledException)
             {
-                ExceptionPolicy.IgnoreIfShuttingDown(ex);
+                // shutting down
             }
             catch (IpcProtocolException ex)
             {
@@ -282,7 +281,7 @@ namespace Ergonomy.Core.Ipc
                 return;
             }
 
-            try { _cts.Cancel(); } catch (ObjectDisposedException ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
+            try { _cts.Cancel(); } catch (ObjectDisposedException) { }
 
             foreach (IpcConnection connection in _connections.Values.ToArray())
             {
@@ -301,9 +300,9 @@ namespace Ergonomy.Core.Ipc
                 {
                     _logger.LogWarning("IPC accept loop did not stop within the grace period.");
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    ExceptionPolicy.IgnoreIfShuttingDown(ex);
+                    // already faulted / cancelled
                 }
             }
 
@@ -319,7 +318,7 @@ namespace Ergonomy.Core.Ipc
         private static async Task DelayQuietAsync(TimeSpan delay, CancellationToken ct)
         {
             try { await Task.Delay(delay, ct).ConfigureAwait(false); }
-            catch (OperationCanceledException ex) { ExceptionPolicy.IgnoreIfShuttingDown(ex); }
+            catch (OperationCanceledException) { }
         }
 
         /// <summary>
@@ -333,7 +332,7 @@ namespace Ergonomy.Core.Ipc
             }
 
             _disposed = true;
-            try { StopAsync().GetAwaiter().GetResult(); } catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex); }
+            try { StopAsync().GetAwaiter().GetResult(); } catch (Exception) { /* best effort */ }
             _cts?.Dispose();
             _cts = null;
         }
