@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Text;
 
@@ -37,6 +38,21 @@ namespace Ergonomy.Services
 
         public static void WriteException(Exception exception, string context)
             => Error(context, exception);
+
+        /// <summary>
+        /// Best-effort Windows Application log entry. Uses the built-in "Application" source
+        /// so no admin Event Source registration is required.
+        /// </summary>
+        public static void WriteApplicationEvent(string message, EventLogEntryType type = EventLogEntryType.Error)
+        {
+            try
+            {
+                EventLog.WriteEntry("Application", "[Ergonomy] " + message, type);
+            }
+            catch (Exception)
+            {
+            }
+        }
 
         private static void Write(string level, string message, Exception? exception, bool errorsFile)
         {

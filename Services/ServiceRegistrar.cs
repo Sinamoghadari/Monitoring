@@ -73,12 +73,16 @@ namespace Ergonomy.Services
                 try
                 {
                     KafkaSettings? k = sp.GetRequiredService<AppSettings>().Kafka;
-                    return new KafkaConnect(k ?? new KafkaSettings());
+                    return new KafkaConnect(
+                        k ?? new KafkaSettings(),
+                        sp.GetService<ILogger<KafkaConnect>>());
                 }
                 catch (Exception ex)
                 {
                     StartupLog.Error("KafkaConnect factory failed; using a fail-safe instance so the tray can start.", ex);
-                    return new KafkaConnect(new KafkaSettings());
+                    return new KafkaConnect(
+                        new KafkaSettings(),
+                        sp.GetService<ILogger<KafkaConnect>>());
                 }
             });
 
@@ -132,13 +136,6 @@ namespace Ergonomy.Services
             services.AddSingleton<ICollectionGate, UiCollectionGate>();
             services.AddSingleton<PermissionsEvaluator>();
             services.AddSingleton<WakeUpScheduler>();
-            services.AddSingleton<CommandManager>(sp =>
-                new CommandManager(
-                    sp.GetRequiredService<AppSettings>(),
-                    sp.GetRequiredService<MachineIdentity>().WindowsUsername,
-                    sp.GetRequiredService<LocalDatabaseManager>(),
-                    sp.GetRequiredService<ISettingsService>(),
-                    sp.GetRequiredService<ILogger<CommandManager>>()));
 
             services.AddSingleton<SettingsRefreshWorker>();
             services.AddSingleton<HealthMonitorWorker>();

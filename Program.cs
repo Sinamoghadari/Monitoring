@@ -35,9 +35,14 @@ namespace Ergonomy
         static void Main(string[] args)
         {
             ExceptionPolicy.InstallLastChance();
+            StartupLog.EnsureDirectories();
+            StartupLog.Info("startup process entered");
 
             if (!TryAcquireSingleInstanceMutex(out Mutex? singleInstance) || singleInstance == null)
+            {
+                StartupLog.Warn(@"Exit: could not claim single-instance mutex (Global\Ergonomy_Agent_SingleInstance_Mutex). Another instance may already be running.");
                 return;
+            }
 
             IsolationClaim? sqliteOwner = null;
             using (singleInstance)
@@ -48,14 +53,16 @@ namespace Ergonomy
 
                     if (RuntimeIsolation.IsServiceRunning())
                     {
-                        StartupLog.EnsureDirectories();
                         StartupLog.Info("Ergonomy.Service owns SQLite; tray will not open the database.");
                     }
                     else
                     {
                         sqliteOwner = RuntimeIsolation.TryClaimSqliteOwner();
                         if (sqliteOwner == null)
+                        {
+                            StartupLog.Warn(@"Exit: SQLite owner mutex already held (Global\Ergonomy_Sqlite_Owner_v1).");
                             return;
+                        }
                     }
 
                     RunApplication(args);

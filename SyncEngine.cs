@@ -311,6 +311,8 @@ namespace Ergonomy.Database
                     catch (Exception ex)
                     {
                         anyTransientFailure = true;
+                        Console.WriteLine(
+                            $"[{DateTime.Now:HH:mm:ss}] ❌ SyncEngine Kafka send failed. {ex.Message}");
                         ExceptionPolicy.Report(ex, "sync-kafka-send", _logger, LogEvents.KafkaSendFailureId);
                     }
                 }

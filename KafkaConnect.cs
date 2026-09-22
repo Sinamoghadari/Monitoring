@@ -6,6 +6,9 @@ using System.Threading.Tasks;
 using Confluent.Kafka;
 using Ergonomy.Configuration;
 using Ergonomy.Database;
+using Ergonomy.Logging;
+using Ergonomy.Services;
+using Microsoft.Extensions.Logging;
 
 namespace Ergonomy.Database
 {
@@ -13,6 +16,7 @@ namespace Ergonomy.Database
     {
         private IProducer<string, string>? _producer;
         private KafkaSettings _settings;
+        private readonly ILogger? _logger;
         private readonly object _sync = new();
         private bool _disposed;
 
@@ -41,9 +45,10 @@ namespace Ergonomy.Database
         /// <summary>
         /// تولیدکننده کافکا را از مدل تنظیمات می‌سازد.
         /// </summary>
-        public KafkaConnect(KafkaSettings settings)
+        public KafkaConnect(KafkaSettings settings, ILogger? logger = null)
         {
             ArgumentNullException.ThrowIfNull(settings);
+            _logger = logger;
             _settings = settings.Clone();
             try
             {
@@ -57,6 +62,8 @@ namespace Ergonomy.Database
                 _producer = null;
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka producer initialization failed; tray will continue. {ex.Message}");
+                _logger?.LogError(ex, "Kafka producer initialization failed; tray will continue.");
+                StartupLog.Error("Kafka producer initialization failed; tray will continue.", ex);
             }
         }
 
@@ -88,6 +95,7 @@ namespace Ergonomy.Database
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ⚠️ Kafka reconfigure ignored: {ex.Message}");
+                _logger?.LogWarning(ex, "Kafka reconfigure ignored.");
                 return false;
             }
 
@@ -103,10 +111,11 @@ namespace Ergonomy.Database
                 {
                     next = BuildProducer(normalized);
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
                     Console.WriteLine(
                         $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka producer rebuild failed; keeping the existing producer.");
+                    _logger?.LogError(ex, "Kafka producer rebuild failed; keeping the existing producer.");
                     return false;
                 }
 
@@ -227,6 +236,8 @@ namespace Ergonomy.Database
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka delivery failed. " +
                     $"Kafka delivery failure. Code: {ex.Error.Code}");
+                _logger?.LogWarning(LogEvents.KafkaSendFailureId, ex,
+                    "Kafka delivery failed. Topic={Topic} Code={Code}", topic, ex.Error.Code);
 
                 throw;
             }
@@ -238,11 +249,13 @@ namespace Ergonomy.Database
 
                 throw;
             }
-            catch (Exception)
+            catch (Exception ex)
             {
                 Console.WriteLine(
                     $"[{DateTime.Now:HH:mm:ss}] ❌ Unexpected Kafka send error. " +
                     "Kafka send failed.");
+                _logger?.LogError(LogEvents.KafkaSendFailureId, ex,
+                    "Unexpected Kafka send error. Topic={Topic}", topic);
 
                 throw;
             }
@@ -294,7 +307,7 @@ namespace Ergonomy.Database
         /// <summary>
         /// یک تولیدکننده idempotent با فشرده‌سازی Gzip می‌سازد.
         /// </summary>
-        private static IProducer<string, string> BuildProducer(KafkaSettings settings)
+        private IProducer<string, string> BuildProducer(KafkaSettings settings)
         {
             var config = new ProducerConfig
             {
@@ -313,6 +326,15 @@ namespace Ergonomy.Database
                     Console.WriteLine(
                         $"[{DateTime.Now:HH:mm:ss}] ❌ Kafka client error: " +
                         $"{error.Code}");
+                    if (error.IsFatal)
+                    {
+                        _logger?.LogError("Kafka client fatal error. Code={Code} Reason={Reason}", error.Code, error.Reason);
+                        StartupLog.Error($"Kafka client fatal error. Code={error.Code} Reason={error.Reason}");
+                    }
+                    else
+                    {
+                        _logger?.LogWarning("Kafka client error. Code={Code} Reason={Reason}", error.Code, error.Reason);
+                    }
                 })
                 .Build();
         }

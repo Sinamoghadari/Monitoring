@@ -51,11 +51,15 @@ namespace Ergonomy.Service
         {
             ExceptionPolicy.InstallLastChance();
 
+            StartupLog.EnsureDirectories();
             using IsolationClaim? claim = RuntimeIsolation.TryClaimService();
             if (claim == null)
             {
                 Console.Error.WriteLine(
                     "[FATAL] Ergonomy.Service could not claim SQLite ownership. Another writer is running.");
+                StartupLog.Error("Exit: could not claim Global\\Ergonomy_Service_Running_v1 / Global\\Ergonomy_Sqlite_Owner_v1.");
+                StartupLog.WriteApplicationEvent(
+                    "Ergonomy.Service could not claim SQLite ownership. Another writer is running.");
                 return 1;
             }
 
@@ -102,12 +106,16 @@ namespace Ergonomy.Service
                         try
                         {
                             KafkaSettings? k = sp.GetRequiredService<AppSettings>().Kafka;
-                            return new KafkaConnect(k ?? new KafkaSettings());
+                            return new KafkaConnect(
+                                k ?? new KafkaSettings(),
+                                sp.GetService<ILogger<KafkaConnect>>());
                         }
                         catch (Exception ex)
                         {
                             StartupLog.Error("KafkaConnect factory failed; using a fail-safe instance.", ex);
-                            return new KafkaConnect(new KafkaSettings());
+                            return new KafkaConnect(
+                                new KafkaSettings(),
+                                sp.GetService<ILogger<KafkaConnect>>());
                         }
                     });
                     services.AddSingleton<SyncEngine>(sp =>

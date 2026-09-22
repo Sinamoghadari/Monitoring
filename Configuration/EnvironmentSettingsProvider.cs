@@ -119,14 +119,6 @@ namespace Ergonomy.Configuration
                     "ERGONOMY_ALLOW_ERGONOMY_COLLECTION",
                     true),
 
-                RemoteCommandsEnabled = GetBool(
-                    "ERGONOMY_REMOTE_COMMANDS_ENABLED",
-                    false),
-
-                SystemPowerCommandsEnabled = GetBool(
-                    "ERGONOMY_SYSTEM_POWER_COMMANDS_ENABLED",
-                    false),
-
                 SettingsCheckIntervalSeconds = GetInt(
                     "ERGONOMY_SETTINGS_CHECK_INTERVAL_SECONDS",
                     30),
@@ -167,10 +159,6 @@ namespace Ergonomy.Configuration
                     "ERGONOMY_ADVANCED_METRICS_INTERVAL_MINUTES",
                     120),
 
-                CommandCheckIntervalSeconds = GetDouble(
-                    "ERGONOMY_COMMAND_CHECK_INTERVAL_SECONDS",
-                    30),
-
                 SyncEngineIntervalMinutes = GetDouble(
                     "ERGONOMY_SYNC_ENGINE_INTERVAL_MINUTES",
                     1),
@@ -206,8 +194,7 @@ namespace Ergonomy.Configuration
                 API = new ApiSettings
                 {
                     Settings = GetString("ERGONOMY_API_SETTINGS", AgentEndpoints.ApiSettings),
-                    LoadImages = GetString("ERGONOMY_API_LOAD_IMAGES", AgentEndpoints.ApiImages),
-                    Commands = GetString("ERGONOMY_API_COMMANDS", AgentEndpoints.ApiCommands)
+                    LoadImages = GetString("ERGONOMY_API_LOAD_IMAGES", AgentEndpoints.ApiImages)
                 },
 
                 Kafka = new KafkaSettings

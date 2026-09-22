@@ -51,7 +51,6 @@ namespace Ergonomy.Configuration
             {
                 changed |= RewriteField(settings.API.Settings, RewriteApiUrl, v => settings.API.Settings = v);
                 changed |= RewriteField(settings.API.LoadImages, RewriteApiUrl, v => settings.API.LoadImages = v);
-                changed |= RewriteField(settings.API.Commands, RewriteApiUrl, v => settings.API.Commands = v);
             }
 
             if (settings.Kafka != null)

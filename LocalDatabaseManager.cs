@@ -134,6 +134,8 @@ namespace Ergonomy.Database
                     Console.WriteLine(
                         $"[{DateTime.Now:HH:mm:ss}] ❌ SQLite outbox initialization failed; tray will continue. {ex.Message}");
                     StartupLog.Error("local DB initialization failed; tray will continue.", ex);
+                    StartupLog.WriteApplicationEvent(
+                        "SQLite outbox initialization failed: " + ex.Message);
                     ExceptionPolicy.Report(ex, "sqlite-init");
                 }
             }

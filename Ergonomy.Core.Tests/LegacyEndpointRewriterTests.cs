@@ -47,8 +47,7 @@ namespace Ergonomy.Core.Tests
                 API = new ApiSettings
                 {
                     Settings = "http://172.17.214.38:8082/api/settings",
-                    LoadImages = "http://172.17.214.38:8082/api/images",
-                    Commands = "http://172.17.214.38:8082/api/commands"
+                    LoadImages = "http://172.17.214.38:8082/api/images"
                 },
                 Kafka = new KafkaSettings { BootstrapServers = "172.17.214.38:9092" },
                 Update = new AgentUpdateSettings
@@ -60,7 +59,6 @@ namespace Ergonomy.Core.Tests
             Assert.True(LegacyEndpointRewriter.Rewrite(settings));
             Assert.Equal(AgentEndpoints.ApiSettings, settings.API.Settings);
             Assert.Equal(AgentEndpoints.ApiImages, settings.API.LoadImages);
-            Assert.Equal(AgentEndpoints.ApiCommands, settings.API.Commands);
             Assert.Equal(AgentEndpoints.KafkaBootstrap, settings.Kafka.BootstrapServers);
             Assert.Equal(
                 "https://siscoeye.sirjansteel.com/api/updates/package_1.0.1.zip",

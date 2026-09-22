@@ -56,6 +56,8 @@ namespace Ergonomy.Database
                 StartupLog.Error(
                     $"SQLCipher prepare failed for '{DatabasePath}'. Original file was not destroyed.",
                     ex);
+                StartupLog.WriteApplicationEvent(
+                    $"SQLCipher prepare failed for '{DatabasePath}'. Original file was not destroyed.");
             }
 
             ConnectionString = BuildConnectionString(DatabasePath, passphrase);
@@ -107,8 +109,10 @@ namespace Ergonomy.Database
 
             if (!CanOpenEncrypted(path, passphrase))
             {
-                StartupLog.Error(
-                    $"Existing database '{path}' is not plaintext SQLite, not ERG1, and did not open with the SQLCipher key. File left untouched.");
+                string message =
+                    $"Existing database '{path}' is not plaintext SQLite, not ERG1, and did not open with the SQLCipher key. File left untouched.";
+                StartupLog.Error(message);
+                StartupLog.WriteApplicationEvent(message);
             }
         }
 

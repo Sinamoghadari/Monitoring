@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Generator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends, Query, status
+from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
@@ -242,7 +242,7 @@ def get_logs_chart():
 
 
 # ==========================================
-# تنظیمات و دستورات (PostgreSQL)
+# تنظیمات (PostgreSQL)
 # ==========================================
 @app.get("/api/images")
 def get_alarm_images():
@@ -321,44 +321,3 @@ def patch_update_settings(payload: UpdateSettingsPayload, conn=Depends(get_pg_co
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
-
-@app.get("/api/commands")
-def get_pending_commands(
-    computer: Optional[str] = Query(None),
-    user: Optional[str] = Query(None),
-    conn=Depends(get_pg_connection)
-):
-    with conn.cursor() as cur:
-        query = """
-            SELECT id, command
-            FROM client_commands
-            WHERE status = 'pending'
-              AND (
-                  computer_name = %s
-                  OR windows_username = %s
-                  OR (computer_name IS NULL AND windows_username IS NULL)
-              )
-        """
-        cur.execute(query, (computer, user))
-        rows = cur.fetchall()
-
-        commands_list = []
-        for cmd_id, cmd_data in rows:
-            command_string = json.dumps(cmd_data, ensure_ascii=False) if cmd_data else ""
-            commands_list.append({
-                "Id": cmd_id,
-                "Command": command_string
-            })
-        return commands_list
-
-
-@app.post("/api/commands/{cmd_id}/execute")
-def mark_command_executed(cmd_id: int, conn=Depends(get_pg_connection)):
-    with conn.cursor() as cur:
-        cur.execute("UPDATE client_commands SET status = 'executed' WHERE id = %s", (cmd_id,))
-        conn.commit()
-
-        if cur.rowcount == 0:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Command not found")
-
-        return {"success": True, "message": f"Command {cmd_id} marked as executed"}

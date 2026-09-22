@@ -9,7 +9,6 @@ namespace Ergonomy.Configuration
     public static class AgentEndpoints
     {
         public const string ApiSettings = "https://siscoeye.sirjansteel.com/api/settings";
-        public const string ApiCommands = "https://siscoeye.sirjansteel.com/api/commands";
         public const string ApiImages = "https://siscoeye.sirjansteel.com/api/images";
         public const string ApiDomainClients = "https://siscoeye.sirjansteel.com/api/domain-clients";
         public const string ApiUpdatesReport = "https://siscoeye.sirjansteel.com/api/updates/report";

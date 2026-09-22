@@ -87,7 +87,7 @@ namespace Ergonomy.Configuration
 
             if (settings.API == null)
                 throw new SettingsValidationException(
-                    "API settings (Settings/LoadImages/Commands) are missing.");
+                    "API settings (Settings/LoadImages) are missing.");
 
             if (string.IsNullOrWhiteSpace(settings.API.Settings))
                 throw new SettingsValidationException(

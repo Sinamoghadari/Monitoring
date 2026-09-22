@@ -8,18 +8,11 @@ namespace Ergonomy.Configuration
     {
         public string Settings { get; set; } = AgentEndpoints.ApiSettings;
         public string LoadImages { get; set; } = AgentEndpoints.ApiImages;
-        public string Commands { get; set; } = AgentEndpoints.ApiCommands;
     }
 
     public class AppSettings
     {
         public bool AllowErgonomyCollection { get; set; } = true;
-
-        // Machine-authoritative security controls. Safe defaults are disabled.
-        [JsonPropertyName("ERGONOMY_REMOTE_COMMANDS_ENABLED")]
-        public bool RemoteCommandsEnabled { get; set; } = false;
-        [JsonPropertyName("ERGONOMY_SYSTEM_POWER_COMMANDS_ENABLED")]
-        public bool SystemPowerCommandsEnabled { get; set; } = false;
 
         // --- تنظیمات آلارم و لاگیک برنامه ---
         public int NotificationIntervalSeconds { get; set; }
@@ -33,7 +26,6 @@ namespace Ergonomy.Configuration
         public int TopProcessesCount { get; set; }
         public int SettingsCheckIntervalSeconds { get; set; }
         public int VersionCheckerMinute { get; set; } = 60;
-        public double CommandCheckIntervalSeconds { get; set; }
         public double SyncEngineIntervalMinutes { get; set; }
         public double PermissionPostgresRetryIntervalHours { get; set; } = 1;
         public string NetworkTraceTargetIP { get; set; } = "";
@@ -46,10 +38,6 @@ namespace Ergonomy.Configuration
         public double PermissionSqliteRetryIntervalHours { get; set; } = 1;
         public double ConnectionFailureSleepMinutes { get; set; } = 5;
         public double PermissionKafkaRetryIntervalHours { get; set; } = 1;
-
-        // --- زمان‌بندی دستورات ---
-        public string? ScheduledRestartTime { get; set; }
-        public string? ScheduledShutdownTime { get; set; }
 
         // --- تنظیمات زیرساخت‌ها ---
         public KafkaSettings? Kafka { get; set; }

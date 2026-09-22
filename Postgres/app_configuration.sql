@@ -29,7 +29,6 @@ VALUES (
   "NetworkTraceTargetIP": "172.17.214.1",
   "API": {
     "Settings": "https://siscoeye.sirjansteel.com/api/settings",
-    "Commands": "https://siscoeye.sirjansteel.com/api/commands",
     "LoadImages": "https://siscoeye.sirjansteel.com/api/images"
   },
   "AllowSqliteWrite": true,

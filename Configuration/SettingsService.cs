@@ -175,8 +175,8 @@ namespace Ergonomy.Configuration
 
                 AppDefaults.Apply(remoteSettings);
 
-                // Settings API URL + security flags stay machine-authoritative.
-                // Kafka/topics and command/image URLs may come from the Control API.
+                // Settings API URL stays machine-authoritative.
+                // Kafka/topics and image URLs may come from the Control API.
                 PreserveEnvironmentInfrastructureSettings(remoteSettings);
 
                 if (!TryValidate(remoteSettings))
@@ -258,14 +258,10 @@ namespace Ergonomy.Configuration
                     ? bootstrap.VersionCheckerMinute
                     : 60;
             }
-
-            // Security switches are machine-authoritative. API settings cannot enable them.
-            remoteSettings.RemoteCommandsEnabled = bootstrap.RemoteCommandsEnabled;
-            remoteSettings.SystemPowerCommandsEnabled = bootstrap.SystemPowerCommandsEnabled;
         }
 
         /// <summary>
-        /// آدرس API تنظیمات همیشه از محیط ماشین است؛ Commands و LoadImages در صورت ارسال معتبر از API پذیرفته می‌شوند.
+        /// آدرس API تنظیمات همیشه از محیط ماشین است؛ LoadImages در صورت ارسال معتبر از API پذیرفته می‌شود.
         /// </summary>
         private static ApiSettings MergeApiSettings(ApiSettings? bootstrap, ApiSettings? remote)
         {
@@ -276,8 +272,7 @@ namespace Ergonomy.Configuration
             return new ApiSettings
             {
                 Settings = string.IsNullOrWhiteSpace(env.Settings) ? remote.Settings : env.Settings,
-                LoadImages = FirstNonEmpty(remote.LoadImages, env.LoadImages),
-                Commands = FirstNonEmpty(remote.Commands, env.Commands)
+                LoadImages = FirstNonEmpty(remote.LoadImages, env.LoadImages)
             };
         }
 

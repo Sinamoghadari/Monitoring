@@ -24,7 +24,6 @@ namespace Ergonomy
         private readonly ISettingsService _settingsService;
         private readonly SyncEngine _syncEngine;
         private readonly ErgonomyManager _ergonomyManager;
-        private readonly CommandManager _commandManager;
         private readonly MessageLogService _messageLog;
         private readonly PermissionsEvaluator _permissions;
         private readonly SettingsRefreshWorker _settingsRefreshWorker;
@@ -57,7 +56,6 @@ namespace Ergonomy
         /// <param name="kafkaConnect">تولیدکننده کافکا برای ارسال نهایی پیام‌ها.</param>
         /// <param name="syncEngine">موتور همگام‌سازی صف SQLite به کافکا.</param>
         /// <param name="ergonomyManager">مدیر جمع‌آوری فعالیت و هشدار ارگونومی.</param>
-        /// <param name="commandManager">مدیر دریافت و اجرای فرمان‌های راه دور.</param>
         /// <param name="messageLog">کانال ثبت تشخیصی در کنسول و outbox لاگ‌ها.</param>
         /// <param name="permissions">ارزیاب مجوزهای SQLite، کافکا و ارگونومی.</param>
         /// <param name="advancedMetricsWorker">کارگر جمع‌آوری متریک‌های پیشرفته سیستم.</param>
@@ -76,7 +74,6 @@ namespace Ergonomy
             KafkaConnect kafkaConnect,
             SyncEngine syncEngine,
             ErgonomyManager ergonomyManager,
-            CommandManager commandManager,
             MessageLogService messageLog,
             PermissionsEvaluator permissions,
             AdvancedMetricsWorker advancedMetricsWorker,
@@ -97,7 +94,6 @@ namespace Ergonomy
             _kafkaConnect = kafkaConnect;
             _syncEngine = syncEngine;
             _ergonomyManager = ergonomyManager;
-            _commandManager = commandManager;
             _messageLog = messageLog;
             _permissions = permissions;
             _advancedMetricsWorker = advancedMetricsWorker;
@@ -122,20 +118,6 @@ namespace Ergonomy
             {
                 if (e.ExceptionObject is Exception ex)
                     HandleCriticalFailure(ex.Message);
-            };
-
-            // Command manager callbacks (routed to workers/services, not the shell).
-            _commandManager.OnLogRequired = (level, message) => _messageLog.Log(level, message, "Command");
-            _commandManager.OnForceSync = () => _syncEngine.ForceSyncAsync();
-            _commandManager.OnStopCollection = () =>
-            {
-                _permissions.StopAllDataCollection();
-                _permissions.SetLocalCollectionRunning(false);
-            };
-            _commandManager.OnStartCollection = () =>
-            {
-                _permissions.StartLocalDataCollection();
-                _permissions.SetLocalCollectionRunning(true);
             };
 
             ConsoleStructuredLogProvider.AppLogsSink = ForwardConsoleLogToAppLogs;
@@ -218,7 +200,6 @@ namespace Ergonomy
             TryStartWorker("settings-refresh", () => _settingsRefreshWorker.Start());
             TryStartWorker("health-monitor", () => _healthMonitorWorker.Start());
             TryStartWorker("permission-monitor", () => _permissionMonitorWorker.Start());
-            TryStartWorker("command-manager", () => _commandManager.Start());
             TryStartWorker("update-manager", () => _updateManager.Start());
             TryStartWorker("version-heartbeat", () => _versionHeartbeatWorker.Start());
 
@@ -282,7 +263,7 @@ namespace Ergonomy
         }
 
         /// <summary>
-        /// پس از تازه‌سازی تنظیمات از API، فاصله همگام‌سازی، فرمان‌ها و مدیر ارگونومی را
+        /// پس از تازه‌سازی تنظیمات از API، فاصله همگام‌سازی و مدیر ارگونومی را
         /// به‌روز کرده و مجوزهای اجرایی را دوباره ارزیابی می‌کند.
         /// </summary>
         /// <param name="newSettings">نسخه جدید تنظیمات مؤثر برنامه.</param>
@@ -305,9 +286,6 @@ namespace Ergonomy
 
             try { _syncEngine.UpdateSyncInterval(newSettings.SyncEngineIntervalMinutes); }
             catch (Exception ex) { StartupLog.Error("Sync interval update failed.", ex); }
-
-            try { _commandManager.UpdateSettings(newSettings); }
-            catch (Exception ex) { StartupLog.Error("CommandManager settings update failed.", ex); }
 
             try
             {
@@ -412,7 +390,6 @@ namespace Ergonomy
             _permissions.EvaluateAll();
             _settingsRefreshWorker.Start();
             _permissionMonitorWorker.Start();
-            _commandManager.Start();
             _updateManager.Start();
             _versionHeartbeatWorker.Start();
         }
@@ -479,7 +456,6 @@ namespace Ergonomy
                 _syncEngine.Stop("application shutdown");
                 _ergonomyManager.Stop("application shutdown");
 
-                _commandManager.Dispose();
                 _metricsEndpoint.Dispose();
                 _wakeUpScheduler.Dispose();
                 _kafkaConnect.Dispose();
