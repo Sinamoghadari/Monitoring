@@ -93,8 +93,6 @@ This is preserved; my fix does **not** move any work into the hook callback.
   timeout, and actionable Win32 error output.
 - `Hooks/ActivityMonitor.cs` — added `Activity monitor sampling started` log and
   throttled sample logs (first input detected + max one sample every 30s).
-- `Logging/DataLogger.cs` — added `UpdateSettings` so the hourly Excel logger
-  follows settings changes.
 - `knowledge.txt` — created (repository root), as required.
 
 ## Configuration Flow Verified
@@ -173,8 +171,6 @@ This is preserved; my fix does **not** move any work into the hook callback.
 
 ## Remaining Risks
 
-- `DataLogger` writes an hourly Excel file; if the destination path is
-  unwritable the log is silently skipped (pre-existing, unrelated to alarm path).
 - `MessageAlarmForm` / `CommandManager` scheduled-shutdown paths are legacy and
   unchanged.
 - If the UI-anchor `Control` cannot be created (rare), `BeginInvoke` is skipped
@@ -219,7 +215,7 @@ composition root; timers moved to workers; settings/sync/logging/observability e
 - `SyncEngine.cs` — converted to a cancelable PeriodicTimer worker; added Prometheus metrics.
 - `CommandManager.cs` — `dynamic` -> typed `AppSettings`.
 - `DatabaseManager.cs` — removed standalone ConfigurationBuilder / appsettings read.
-- `ErgonomyManager.cs` — deps injected (MachineIdentity, ActivityMonitor, AlarmManager, DataLogger).
+- `ErgonomyManager.cs` — deps injected (MachineIdentity, ActivityMonitor, AlarmManager).
 - `Hooks/ActivityMonitor.cs` — owns/disposes the hook; disposal guard.
 
 ### New files

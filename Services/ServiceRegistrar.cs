@@ -105,11 +105,6 @@ namespace Ergonomy.Services
                     sp.GetRequiredService<AppSettings>(),
                     sp.GetRequiredService<ILogger<AlarmManager>>()));
             services.AddSingleton<IAlarmImageLoader>(sp => sp.GetRequiredService<AlarmManager>());
-            services.AddSingleton<DataLogger>(sp =>
-                new DataLogger(
-                    sp.GetRequiredService<ActivityMonitor>(),
-                    () => sp.GetRequiredService<AlarmManager>().SessionCloseCounter,
-                    sp.GetRequiredService<AppSettings>()));
 
             services.AddSingleton<ErgonomyManager>(sp =>
                 new ErgonomyManager(
@@ -118,7 +113,6 @@ namespace Ergonomy.Services
                     sp.GetRequiredService<MachineIdentity>(),
                     sp.GetRequiredService<ActivityMonitor>(),
                     sp.GetRequiredService<AlarmManager>(),
-                    sp.GetRequiredService<DataLogger>(),
                     uiAnchor));
 
             // Sync / persistence.

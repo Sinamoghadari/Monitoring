@@ -14,7 +14,6 @@ VALUES (
   "SessionCloseLimit": 3,
   "SecondaryAlarmUnclosableSeconds": 10,
   "SecondaryAlarmAutoCloseSeconds": 7,
-  "LoggingIntervalHours": 1,
   "AdvancedMetricsIntervalMinutes": 0.1,
   "SyncEngineIntervalMinutes": 1,
   "TopProcessesCount": 10,

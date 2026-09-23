@@ -21,7 +21,6 @@ namespace Ergonomy.Configuration
         public int SessionCloseLimit { get; set; }
         public int SecondaryAlarmUnclosableSeconds { get; set; }
         public int SecondaryAlarmAutoCloseSeconds { get; set; }
-        public int LoggingIntervalHours { get; set; } = 1;
         public double AdvancedMetricsIntervalMinutes { get; set; }
         public int TopProcessesCount { get; set; }
         public int SettingsCheckIntervalSeconds { get; set; }

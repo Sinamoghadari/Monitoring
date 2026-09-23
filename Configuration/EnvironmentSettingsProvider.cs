@@ -151,10 +151,6 @@ namespace Ergonomy.Configuration
                     "ERGONOMY_SECONDARY_ALARM_AUTO_CLOSE_SECONDS",
                     7),
 
-                LoggingIntervalHours = GetInt(
-                    "ERGONOMY_LOGGING_INTERVAL_HOURS",
-                    1),
-
                 AdvancedMetricsIntervalMinutes = GetInt(
                     "ERGONOMY_ADVANCED_METRICS_INTERVAL_MINUTES",
                     120),

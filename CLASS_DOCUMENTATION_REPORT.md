@@ -103,7 +103,7 @@ LocalDatabaseManager (SQLite outbox)
 | کلاس | `ErgonomyManager` |
 | پایه / واسط | `IDisposable` |
 | مسئولیت | هماهنگ‌کننده چرخه جمع‌آوری ارگونومی: شروع/توقف هوک، ارزیابی آستانه، نمایش هشدار و صف‌بندی payload نشست. |
-| وابستگی‌ها | `AppSettings`، `LocalDatabaseManager`، `MachineIdentity`، `ActivityMonitor`، `AlarmManager`، `DataLogger`، `Control` |
+| وابستگی‌ها | `AppSettings`، `LocalDatabaseManager`، `MachineIdentity`، `ActivityMonitor`، `AlarmManager`، `Control` |
 | جایگاه معماری | قلب مسیر ارگونومی در فرایند میراثی. |
 
 **اعضای مهم**
@@ -556,16 +556,6 @@ DTO فرمان پایگاه با `Id` و `Command`.
 
 ---
 
-### ۴.۳ `Logging/DataLogger.cs`
-
-| فیلد | مقدار |
-| --- | --- |
-| مسئولیت | نوشتن ساعتی یک فایل اکسل محلی با زمان تهران/شمسی شامل ثانیه‌های فعالیت و شمارنده بستن. |
-| وابستگی‌ها | `ActivityMonitor`، EPPlus، `AppSettings` |
-| جایگاه معماری | مسیر تشخیصی محلی جدا از Kafka. شکست نوشتن فایل نادیده گرفته می‌شود. |
-
-**متدها:** سازنده، `GetIntervalMs`، `UpdateSettings`، `Start`، `Stop`، `OnLogTimerElapsed`، `LogData`، `Dispose`.
-
 ---
 
 ## ۵. سرویس‌ها و کارگران
@@ -854,7 +844,6 @@ DTO فرمان پایگاه با `Id` و `Command`.
         │    ├ ActivityMonitor   └─ shutdown.exe              │
         │    │    └ GlobalInputHook                     AdvancedMetricsCollector
         │    ├ AlarmManager + Forms                              │
-        │    └ DataLogger                                        │
         │                                                        │
         └──────────────┬─────────────────────────────────────────┘
                        ▼
@@ -890,10 +879,9 @@ DTO فرمان پایگاه با `Id` و `Command`.
 4. **`CommandManager` به `LocalDatabaseManager` وابسته است ولی در بدنه فعلی از آن استفاده نمی‌کند.** وابستگی احتمالاً برای سازگاری مهاجرت باقی مانده است.
 5. **مهاجرت دوفرایندی ناقص است.** `Ergonomy.Service` فقط IPC را میزبانی می‌کند و `TaskApplicationContext.ShowAlarm` هنوز فرم واقعی ندارد. اجرای موازی سه باینری رفتار تولید کامل را تکرار نمی‌کند.
 6. **`AdvancedMetricsCollector` فضای نام ندارد** و برخی حسگرها به دسترسی مدیر نیاز دارند (SMART، Security Event Log). شکست‌ها silently به مقدار پیش‌فرض تبدیل می‌شوند.
-7. **`DataLogger` شکست نوشتن اکسل را می‌بلعد.** مسیر فایل کنار exe ممکن است در نصب Program Files غیرقابل‌نوشتن باشد.
-8. **پروب SQLite در `HealthCheckService` رشته اتصال کامل را به‌عنوان «مسیر» باز می‌کند** که درست است، اما نام ویژگی `OutboxDatabasePathForDiagnostics` ممکن است با `ConnectionString` اشتباه گرفته شود.
-9. **سوئیچ‌های قدرت سیستم واقعاً `shutdown.exe` را صدا می‌زنند.** مستندسازی رفتار را تغییر نداده؛ بازبینی عملیاتی این مسیر توصیه می‌شود.
-10. **در این محیط SDK دات‌نت موجود نبود** و کامپایل انجام نشد. صحت نحوی XML comments باید روی میزبان Windows/.NET 9 با `dotnet build` تأیید شود.
+7. **پروب SQLite در `HealthCheckService` رشته اتصال کامل را به‌عنوان «مسیر» باز می‌کند** که درست است، اما نام ویژگی `OutboxDatabasePathForDiagnostics` ممکن است با `ConnectionString` اشتباه گرفته شود.
+8. **سوئیچ‌های قدرت سیستم واقعاً `shutdown.exe` را صدا می‌زنند.** مستندسازی رفتار را تغییر نداده؛ بازبینی عملیاتی این مسیر توصیه می‌شود.
+9. **در این محیط SDK دات‌نت موجود نبود** و کامپایل انجام نشد. صحت نحوی XML comments باید روی میزبان Windows/.NET 9 با `dotnet build` تأیید شود.
 
 --------------------------------------------------------------------------------------------------------------------------------------------------------
 ساده شده

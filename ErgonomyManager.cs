@@ -6,7 +6,6 @@ using System.Windows.Forms;
 using Ergonomy.Configuration;
 using Ergonomy.Database;
 using Ergonomy.Hooks;
-using Ergonomy.Logging;
 using Ergonomy.Services;
 
 namespace Ergonomy.Core
@@ -19,7 +18,6 @@ namespace Ergonomy.Core
         private readonly MachineIdentity _identity;
 
         private ActivityMonitor? _activityMonitor;
-        private DataLogger? _dataLogger;
         private AlarmManager? _alarmManager;
         private System.Timers.Timer? _notificationTimer;
 
@@ -41,7 +39,6 @@ namespace Ergonomy.Core
         /// <param name="identity">هویت پایدار نشست، SID و نام کاربری ویندوز.</param>
         /// <param name="activityMonitor">نمونه‌بردار فعالیت صفحه‌کلید و ماوس.</param>
         /// <param name="alarmManager">مدیر نمایش هشدارهای اولیه و ثانویه.</param>
-        /// <param name="dataLogger">ثبت‌کننده ساعتی فعالیت در فایل اکسل.</param>
         /// <param name="uiAnchor">کنترل پنهان برای انتقال نمایش هشدار به نخ رابط کاربری.</param>
         public ErgonomyManager(
             AppSettings appSettings,
@@ -49,7 +46,6 @@ namespace Ergonomy.Core
             MachineIdentity identity,
             ActivityMonitor activityMonitor,
             AlarmManager alarmManager,
-            DataLogger dataLogger,
             Control? uiAnchor = null)
         {
             _appSettings = appSettings;
@@ -59,11 +55,10 @@ namespace Ergonomy.Core
 
             _activityMonitor = activityMonitor ?? throw new ArgumentNullException(nameof(activityMonitor));
             _alarmManager = alarmManager ?? throw new ArgumentNullException(nameof(alarmManager));
-            _dataLogger = dataLogger ?? throw new ArgumentNullException(nameof(dataLogger));
         }
 
         /// <summary>
-        /// مرجع تنظیمات را به‌روز می‌کند و فاصله تایمر اعلان، مدیر هشدار و ثبت‌کننده اکسل را
+        /// مرجع تنظیمات را به‌روز می‌کند و فاصله تایمر اعلان و مدیر هشدار را
         /// با مقادیر جدید هماهنگ می‌سازد.
         /// </summary>
         /// <param name="appSettings">تنظیمات جدید دریافتی از سرویس تنظیمات.</param>
@@ -78,7 +73,6 @@ namespace Ergonomy.Core
 
                 _appSettings = appSettings;
                 _alarmManager?.UpdateSettings(appSettings);
-                _dataLogger?.UpdateSettings(appSettings);
 
                 // Refresh the notification interval in case it changed.
                 if (_notificationTimer != null)
@@ -92,7 +86,7 @@ namespace Ergonomy.Core
 
         /// <summary>
         /// جمع‌آوری ارگونومی را شروع می‌کند: تصاویر هشدار را به‌صورت ناهمگام از API بارگذاری می‌کند،
-        /// پایشگر فعالیت و ثبت‌کننده را فعال کرده و رکورد شروع نشست را در outbox می‌نویسد.
+        /// پایشگر فعالیت را فعال کرده و رکورد شروع نشست را در outbox می‌نویسد.
         /// </summary>
         public void Start()
         {
@@ -116,7 +110,6 @@ namespace Ergonomy.Core
                 }
 
                 _activityMonitor?.Start();
-                _dataLogger?.Start();
                 LogSessionState("Start");
 
                 if (_notificationTimer == null)
@@ -157,7 +150,6 @@ namespace Ergonomy.Core
 
                 LogSessionState("End");
 
-                _dataLogger?.Stop();
                 _activityMonitor?.Stop();
 
                 IsRunning = false;

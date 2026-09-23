@@ -442,7 +442,6 @@ Permission: True
 text
 ErgonomyManager.UpdateSettings(...)
 AlarmManager.UpdateSettings(...)
-DataLogger.UpdateSettings(...)
 اکنون هر بار API تنظیمات جدید می‌دهد:
 
 text
@@ -452,7 +451,6 @@ MainApplicationContext تنظیمات جدید را می‌گیرد
 ↓
 ErgonomyManager.UpdateSettings(new_settings)
 AlarmManager.UpdateSettings(new_settings)
-DataLogger.UpdateSettings(new_settings)
 ↓
 همه با یک نسخه از تنظیمات کار می‌کنند
 درس عمومی برای Python
