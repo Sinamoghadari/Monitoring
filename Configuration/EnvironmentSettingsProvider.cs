@@ -133,7 +133,7 @@ namespace Ergonomy.Configuration
 
                 ActivityThresholdSeconds = GetInt(
                     "ERGONOMY_ACTIVITY_THRESHOLD_SECONDS",
-                    5),
+                    1800),
 
                 PrimaryAlarmAutoCloseSeconds = GetInt(
                     "ERGONOMY_PRIMARY_ALARM_AUTO_CLOSE_SECONDS",
