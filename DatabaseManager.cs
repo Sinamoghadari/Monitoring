@@ -86,7 +86,9 @@ namespace Ergonomy.Database
                     if (settings == null)
                         return null;
 
-                    AppDefaults.Apply(settings);
+                    // PostgreSQL is already a successful server source. Do not replace omitted
+                    // or zero-valued fields with compiled defaults here; SettingsService applies
+                    // the last-known-good in-memory/cache baseline when it consumes API data.
                     return settings;
                 }
             }
