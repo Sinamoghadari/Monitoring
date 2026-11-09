@@ -151,10 +151,9 @@ namespace Ergonomy.Configuration
                 ? fallback.Update.CheckIntervalMinutes
                 : 60;
             settings.Update.CheckIntervalMinutes = Normalize(
-                settings.CheckIntervalMinutes,
+                settings.Update.CheckIntervalMinutes,
                 fallbackUpdateInterval,
                 0);
-            settings.CheckIntervalMinutes = settings.Update.CheckIntervalMinutes;
 
             int fallbackJitter = fallback?.Update?.MaxJitterSeconds > 0
                 ? fallback.Update.MaxJitterSeconds
