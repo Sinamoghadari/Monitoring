@@ -29,7 +29,7 @@ namespace Ergonomy.Configuration
         /// <summary>
         /// تنظیمات بوت‌استرپ را از متغیرهای محیطی سطح ماشین می‌خواند و سپس آخرین پاسخ معتبر
         /// ذخیره‌شده در SQLite را، در صورت وجود، به‌عنوان تنظیمات مؤثر بارگذاری می‌کند؛
-        /// فراخوانی تکرارپذیر است.
+        /// فراخوانی‌های تکراری در مرحله بوت امن هستند و پس از فعال‌شدن منبع API بی‌اثر می‌شوند.
         /// </summary>
         void LoadBootstrap();
 
@@ -56,6 +56,7 @@ namespace Ergonomy.Configuration
         private AppSettings _current = new();
         private AppSettings _bootstrap = new();
         private bool _sourceIsApi;
+        private bool _bootstrapLoaded;
         private bool _disposed;
 
         public event Action<AppSettings>? SettingsChanged;
@@ -105,6 +106,14 @@ namespace Ergonomy.Configuration
         /// </summary>
         public void LoadBootstrap()
         {
+            lock (_sync)
+            {
+                // Startup composition can resolve AppSettings more than once. Once a remote or
+                // cached source is active, a later bootstrap call must not roll it back.
+                if (_bootstrapLoaded && _sourceIsApi)
+                    return;
+            }
+
             AppSettings bootstrap = EnvironmentSettingsProvider.Load();
             AppDefaults.Apply(bootstrap);
 
@@ -164,6 +173,7 @@ namespace Ergonomy.Configuration
             {
                 _bootstrap = bootstrap;
                 _current = effective;
+                _bootstrapLoaded = true;
                 // A cache row is the result of a prior successful API synchronization, so it is
                 // exposed as the remote source even before the first refresh of this process.
                 _sourceIsApi = loadedFromCache;
