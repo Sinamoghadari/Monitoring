@@ -119,29 +119,33 @@ namespace Ergonomy.Configuration
                     "ERGONOMY_ALLOW_ERGONOMY_COLLECTION",
                     true),
 
-                RemoteCommandsEnabled = GetBool(
-                    "ERGONOMY_REMOTE_COMMANDS_ENABLED",
-                    false),
-
-                SystemPowerCommandsEnabled = GetBool(
-                    "ERGONOMY_SYSTEM_POWER_COMMANDS_ENABLED",
-                    false),
-
                 SettingsCheckIntervalSeconds = GetInt(
                     "ERGONOMY_SETTINGS_CHECK_INTERVAL_SECONDS",
-                    30),
+                    120),
+
+                CheckIntervalMinutes = GetInt(
+                    "ERGONOMY_CHECK_INTERVAL_MINUTES",
+                    60),
+
+                LoggingIntervalHours = GetInt(
+                    "ERGONOMY_LOGGING_INTERVAL_HOURS",
+                    24),
+
+                VersionCheckerMinute = GetInt(
+                    "ERGONOMY_VERSION_CHECKER_MINUTE",
+                    4800),
 
                 NotificationIntervalSeconds = GetInt(
                     "ERGONOMY_NOTIFICATION_INTERVAL_SECONDS",
-                    5),
+                    7),
 
                 ActivityThresholdSeconds = GetInt(
                     "ERGONOMY_ACTIVITY_THRESHOLD_SECONDS",
-                    5),
+                    60),
 
                 PrimaryAlarmAutoCloseSeconds = GetInt(
                     "ERGONOMY_PRIMARY_ALARM_AUTO_CLOSE_SECONDS",
-                    7),
+                    20),
 
                 SessionCloseLimit = GetInt(
                     "ERGONOMY_SESSION_CLOSE_LIMIT",
@@ -149,23 +153,15 @@ namespace Ergonomy.Configuration
 
                 SecondaryAlarmUnclosableSeconds = GetInt(
                     "ERGONOMY_SECONDARY_ALARM_UNCLOSABLE_SECONDS",
-                    10),
+                    60),
 
                 SecondaryAlarmAutoCloseSeconds = GetInt(
                     "ERGONOMY_SECONDARY_ALARM_AUTO_CLOSE_SECONDS",
-                    7),
+                    10),
 
-                LoggingIntervalHours = GetInt(
-                    "ERGONOMY_LOGGING_INTERVAL_HOURS",
-                    1),
-
-                AdvancedMetricsIntervalMinutes = GetInt(
+                AdvancedMetricsIntervalMinutes = GetDouble(
                     "ERGONOMY_ADVANCED_METRICS_INTERVAL_MINUTES",
-                    120),
-
-                CommandCheckIntervalSeconds = GetDouble(
-                    "ERGONOMY_COMMAND_CHECK_INTERVAL_SECONDS",
-                    30),
+                    5),
 
                 SyncEngineIntervalMinutes = GetDouble(
                     "ERGONOMY_SYNC_ENGINE_INTERVAL_MINUTES",
@@ -177,7 +173,7 @@ namespace Ergonomy.Configuration
 
                 NetworkTraceTargetIP = GetString(
                     "ERGONOMY_NETWORK_TRACE_TARGET_IP",
-                    ""),
+                    "172.17.214.1"),
 
                 AllowSqliteWrite = GetBool(
                     "ERGONOMY_ALLOW_SQLITE_WRITE",
@@ -195,22 +191,25 @@ namespace Ergonomy.Configuration
                     "ERGONOMY_PERMISSION_KAFKA_RETRY_INTERVAL_HOURS",
                     1),
 
+                PermissionPostgresRetryIntervalHours = GetDouble(
+                    "ERGONOMY_PERMISSION_POSTGRES_RETRY_INTERVAL_HOURS",
+                    1),
+
                 ConnectionFailureSleepMinutes = GetDouble(
                     "ERGONOMY_CONNECTION_FAILURE_SLEEP_MINUTES",
-                    5),
+                    10),
 
                 API = new ApiSettings
                 {
-                    Settings = GetString("ERGONOMY_API_SETTINGS"),
-                    LoadImages = GetString("ERGONOMY_API_LOAD_IMAGES"),
-                    Commands = GetString("ERGONOMY_API_COMMANDS")
+                    Settings = GetString("ERGONOMY_API_SETTINGS", AgentEndpoints.ApiSettings),
+                    LoadImages = GetString("ERGONOMY_API_LOAD_IMAGES", AgentEndpoints.ApiImages)
                 },
 
                 Kafka = new KafkaSettings
                 {
                     BootstrapServers = GetString(
                         "ERGONOMY_KAFKA_BOOTSTRAP_SERVERS",
-                        "localhost:9092"),
+                        AgentEndpoints.KafkaBootstrap),
 
                     UserActivityTopic = GetString(
                         "ERGONOMY_KAFKA_USER_ACTIVITY_TOPIC",
@@ -254,7 +253,28 @@ namespace Ergonomy.Configuration
 
 
                 EnabledMetrics = ParseEnabledMetrics(
-                    GetString("ERGONOMY_ENABLED_METRICS"))
+                    GetString("ERGONOMY_ENABLED_METRICS")),
+
+                Update = new AgentUpdateSettings
+                {
+                    Enabled = GetBool("ERGONOMY_UPDATE_ENABLED", false),
+                    LatestVersion = GetString("ERGONOMY_UPDATE_LATEST_VERSION"),
+                    Version = GetString("ERGONOMY_UPDATE_VERSION"),
+                    DownloadUrl = GetString("ERGONOMY_UPDATE_DOWNLOAD_URL"),
+                    Sha256 = GetString("ERGONOMY_UPDATE_SHA256"),
+                    ServiceName = GetString(
+                        "ERGONOMY_UPDATE_SERVICE_NAME",
+                        "Ergonomy.Service"),
+                    CheckIntervalMinutes = GetInt(
+                        "ERGONOMY_CHECK_INTERVAL_MINUTES",
+                        60),
+                    MaxJitterSeconds = GetInt(
+                        "ERGONOMY_UPDATE_MAX_JITTER_SECONDS",
+                        900),
+                    DownloadRetryCount = GetInt(
+                        "ERGONOMY_UPDATE_DOWNLOAD_RETRY_COUNT",
+                        5)
+                }
             };
         }
 

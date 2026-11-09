@@ -42,27 +42,52 @@ namespace Ergonomy.Services
             services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(15) });
             services.AddSingleton(uiAnchor); // hidden UI-thread anchor / marshalling control
 
+            // The settings cache and the outbox share one SQLCipher database/provider. Register
+            // them before settings so cached values are loaded before any worker is constructed.
+            services.AddSingleton<SqliteOutboxConnectionProvider>();
+            services.AddSingleton<SettingsCacheStore>();
+
             // Settings: single source of truth for current + bootstrap settings.
             services.AddSingleton<ISettingsService, SettingsService>();
 
-            // AppSettings singleton = the settings-in-effect at first resolution. Long-lived
-            // services that must react to refresh use ISettingsService + UpdateSettings /
-            // SettingsChanged; they must NOT hold a stale reference across refreshes.
-            services.AddSingleton(sp => sp.GetRequiredService<ISettingsService>().Current);
+            // Explicit <AppSettings>: AddSingleton(sp => ...) without TService can bind to
+            // AddSingleton<T>(T instance) and register the Func itself, so GetRequiredService<AppSettings>()
+            // throws "No service for type AppSettings has been registered".
+            // LoadBootstrap here because MessageLogService/LocalDatabaseManager resolve before Program.Main calls it.
+            services.AddSingleton<AppSettings>(sp =>
+            {
+                ISettingsService settings = sp.GetRequiredService<ISettingsService>();
+                settings.LoadBootstrap();
+                return settings.Current;
+            });
 
             services.AddSingleton<MachineIdentity>(_ => new MachineIdentity(
                 GetWindowsSID(),
                 GetWindowsUsername(),
-                Environment.MachineName));
+                Environment.MachineName,
+                GetWindowsUsernameRunAdmin()));
 
-            services.AddSingleton<SqliteOutboxConnectionProvider>();
             services.AddSingleton<LocalDatabaseManager>(sp =>
-                new LocalDatabaseManager(sp.GetRequiredService<AppSettings>().Outbox, sp.GetRequiredService<SqliteOutboxConnectionProvider>()));
+                new LocalDatabaseManager(
+                    sp.GetRequiredService<AppSettings>().Outbox,
+                    sp.GetRequiredService<SqliteOutboxConnectionProvider>()));
 
             services.AddSingleton<KafkaConnect>(sp =>
             {
-                KafkaSettings k = sp.GetRequiredService<AppSettings>().Kafka!;
-                return new KafkaConnect(k.BootstrapServers, k.UserActivityTopic, k.SystemMetricsTopic, k.AppLogsTopic);
+                try
+                {
+                    KafkaSettings? k = sp.GetRequiredService<AppSettings>().Kafka;
+                    return new KafkaConnect(
+                        k ?? new KafkaSettings(),
+                        sp.GetService<ILogger<KafkaConnect>>());
+                }
+                catch (Exception ex)
+                {
+                    StartupLog.Error("KafkaConnect factory failed; using a fail-safe instance so the tray can start.", ex);
+                    return new KafkaConnect(
+                        new KafkaSettings(),
+                        sp.GetService<ILogger<KafkaConnect>>());
+                }
             });
 
             // Observability (Prometheus scrape endpoint; no new Kafka/SQLite pipeline).
@@ -80,12 +105,10 @@ namespace Ergonomy.Services
             services.AddSingleton<ActivityMonitor>(sp =>
                 new ActivityMonitor(sp.GetRequiredService<GlobalInputHook>()));
             services.AddSingleton<AlarmManager>(sp =>
-                new AlarmManager(sp.GetRequiredService<AppSettings>()));
-            services.AddSingleton<DataLogger>(sp =>
-                new DataLogger(
-                    sp.GetRequiredService<ActivityMonitor>(),
-                    () => sp.GetRequiredService<AlarmManager>().SessionCloseCounter,
-                    sp.GetRequiredService<AppSettings>()));
+                new AlarmManager(
+                    sp.GetRequiredService<AppSettings>(),
+                    sp.GetRequiredService<ILogger<AlarmManager>>()));
+            services.AddSingleton<IAlarmImageLoader>(sp => sp.GetRequiredService<AlarmManager>());
 
             services.AddSingleton<ErgonomyManager>(sp =>
                 new ErgonomyManager(
@@ -94,7 +117,6 @@ namespace Ergonomy.Services
                     sp.GetRequiredService<MachineIdentity>(),
                     sp.GetRequiredService<ActivityMonitor>(),
                     sp.GetRequiredService<AlarmManager>(),
-                    sp.GetRequiredService<DataLogger>(),
                     uiAnchor));
 
             // Sync / persistence.
@@ -109,20 +131,16 @@ namespace Ergonomy.Services
             // Services + workers.
             services.AddSingleton<MessageLogService>();
             services.AddSingleton<HealthCheckService>();
+            services.AddSingleton<ICollectionGate, UiCollectionGate>();
             services.AddSingleton<PermissionsEvaluator>();
             services.AddSingleton<WakeUpScheduler>();
-            services.AddSingleton<CommandManager>(sp =>
-                new CommandManager(
-                    sp.GetRequiredService<AppSettings>(),
-                    sp.GetRequiredService<MachineIdentity>().WindowsUsername,
-                    sp.GetRequiredService<LocalDatabaseManager>(),
-                    sp.GetRequiredService<ISettingsService>(),
-                    sp.GetRequiredService<ILogger<CommandManager>>()));
 
             services.AddSingleton<SettingsRefreshWorker>();
             services.AddSingleton<HealthMonitorWorker>();
             services.AddSingleton<PermissionMonitorWorker>();
             services.AddSingleton<AdvancedMetricsWorker>();
+            services.AddSingleton<UpdateManager>();
+            services.AddSingleton<VersionHeartbeatWorker>();
 
             services.AddTransient<MainApplicationContext>();
 
@@ -147,6 +165,22 @@ namespace Ergonomy.Services
         {
             try { return WindowsIdentity.GetCurrent().Name; }
             catch { return Environment.UserName; }
+        }
+
+        /// <summary>
+        /// Windows username for <c>WindowsUsername_RunAdmin</c>. Elevation is not included;
+        /// that field is a username only.
+        /// </summary>
+        private static string GetWindowsUsernameRunAdmin()
+        {
+            try
+            {
+                return WindowsIdentity.GetCurrent()?.Name ?? Environment.UserName;
+            }
+            catch
+            {
+                return Environment.UserName;
+            }
         }
     }
 }

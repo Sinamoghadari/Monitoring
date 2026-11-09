@@ -80,12 +80,14 @@ namespace Ergonomy.Database
                 if (result != null && result != DBNull.Value)
                 {
                     string jsonString = result.ToString()!;
-                    var options = new JsonSerializerOptions
-                    {
-                        PropertyNameCaseInsensitive = true
-                    };
+                    AppSettings? settings = JsonSerializer.Deserialize<AppSettings>(
+                        jsonString,
+                        SettingsJson.CreateOptions());
+                    if (settings == null)
+                        return null;
 
-                    return JsonSerializer.Deserialize<AppSettings>(jsonString, options);
+                    AppDefaults.Apply(settings);
+                    return settings;
                 }
             }
             catch (Exception ex)
@@ -116,7 +118,7 @@ namespace Ergonomy.Database
                 await conn.OpenAsync();
 
                 statusMessage = "PostgreSQL Connection is OK.";
-                logLevel = "INFO";
+                logLevel = "INFORMATION";
             }
             catch (Exception ex)
             {
@@ -241,121 +243,5 @@ namespace Ergonomy.Database
 
             return null;
         }
-
-        /// <summary>
-        /// فرمان‌های در وضعیت pending را برای این رایانه یا کاربر از جدول client_commands می‌خواند.
-        /// </summary>
-        /// <param name="computerName">نام رایانه برای فیلتر فرمان.</param>
-        /// <param name="windowsUsername">نام کاربری ویندوز برای فیلتر فرمان.</param>
-        /// <returns>فهرست فرمان‌های معلق.</returns>
-        public List<ClientCommand> GetPendingCommands(
-            string computerName,
-            string windowsUsername)
-        {
-            var commands = new List<ClientCommand>();
-
-            try
-            {
-                using var conn = new NpgsqlConnection(GetConnectionString());
-                conn.Open();
-
-                const string query = @"
-                    SELECT id, command
-                    FROM client_commands
-                    WHERE status = 'pending'
-                      AND (
-                           computer_name = @computerName
-                        OR windows_username = @windowsUsername
-                      );";
-
-                using var cmd = new NpgsqlCommand(query, conn);
-
-                cmd.Parameters.AddWithValue(
-                    "@computerName",
-                    string.IsNullOrWhiteSpace(computerName)
-                        ? (object)DBNull.Value
-                        : computerName);
-
-                cmd.Parameters.AddWithValue(
-                    "@windowsUsername",
-                    string.IsNullOrWhiteSpace(windowsUsername)
-                        ? (object)DBNull.Value
-                        : windowsUsername);
-
-                using var reader = cmd.ExecuteReader();
-                while (reader.Read())
-                {
-                    commands.Add(new ClientCommand
-                    {
-                        Id = reader.GetInt32(0),
-                        Command = reader.GetString(1)
-                    });
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[DB] Error getting pending commands.");
-            }
-
-            return commands;
-        }
-
-        /// <summary>
-        /// وضعیت فرمان را در PostgreSQL به outdated تغییر می‌دهد تا دوباره اجرا نشود.
-        /// </summary>
-        /// <param name="commandId">شناسه فرمان در جدول client_commands.</param>
-        public void MarkCommandAsOutdated(int commandId)
-        {
-            try
-            {
-                using var conn = new NpgsqlConnection(GetConnectionString());
-                conn.Open();
-
-                const string query = @"
-                    UPDATE client_commands
-                    SET status = 'outdated'
-                    WHERE id = @id;";
-
-                using var cmd = new NpgsqlCommand(query, conn);
-                cmd.Parameters.AddWithValue("@id", commandId);
-                cmd.ExecuteNonQuery();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[DB] Error.");
-            }
-        }
-
-        /// <summary>
-        /// وضعیت فرمان را در PostgreSQL به executed تغییر می‌دهد تا به‌عنوان انجام‌شده علامت بخورد.
-        /// </summary>
-        /// <param name="commandId">شناسه فرمان در جدول client_commands.</param>
-        public void MarkCommandAsExecuted(int commandId)
-        {
-            try
-            {
-                using var conn = new NpgsqlConnection(GetConnectionString());
-                conn.Open();
-
-                const string query = @"
-                    UPDATE client_commands
-                    SET status = 'executed'
-                    WHERE id = @id;";
-
-                using var cmd = new NpgsqlCommand(query, conn);
-                cmd.Parameters.AddWithValue("@id", commandId);
-                cmd.ExecuteNonQuery();
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[DB] Error.");
-            }
-        }
-    }
-
-    public sealed class ClientCommand
-    {
-        public int Id { get; set; }
-        public string Command { get; set; } = string.Empty;
     }
 }

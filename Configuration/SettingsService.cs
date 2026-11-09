@@ -1,9 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.Net.Http;
+using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Ergonomy.Database;
 using Ergonomy.Logging;
 
 namespace Ergonomy.Configuration
@@ -23,14 +27,17 @@ namespace Ergonomy.Configuration
         event Action<AppSettings>? SettingsChanged;
 
         /// <summary>
-        /// تنظیمات بوت‌استرپ را از متغیرهای محیطی سطح ماشین بارگذاری می‌کند؛ فراخوانی تکرارپذیر است.
+        /// تنظیمات بوت‌استرپ را از متغیرهای محیطی سطح ماشین می‌خواند و سپس آخرین پاسخ معتبر
+        /// ذخیره‌شده در SQLite را، در صورت وجود، به‌عنوان تنظیمات مؤثر بارگذاری می‌کند؛
+        /// فراخوانی تکرارپذیر است.
         /// </summary>
         void LoadBootstrap();
 
         /// <summary>
         /// به‌صورت ناهمگام تنظیمات را از API تنظیمات (پشتیبانی‌شده با PostgreSQL) می‌خواند
-        /// و در صورت تفاوت، Current را جایگزین کرده و SettingsChanged را اعلام می‌کند.
-        /// نقاط پایانی زیرساخت و تاپیک‌های کافکا همیشه از بوت‌استرپ حفظ می‌شوند.
+        /// و پس از اعتبارسنجی، پاسخ موفق را فوراً در SQLite ذخیره می‌کند؛ سپس Current را
+        /// به‌صورت اتمیک جایگزین کرده و در صورت تفاوت SettingsChanged را اعلام می‌کند.
+        /// URL سرویس تنظیمات و سوئیچ‌های امنیتی ماشین از بوت‌استرپ حفظ می‌شوند؛ Kafka می‌تواند از API بیاید.
         /// </summary>
         /// <param name="logFailures">اگر true باشد شکست شبکه در سطح هشدار ثبت می‌شود.</param>
         /// <param name="cancellationToken">توکن لغو درخواست HTTP.</param>
@@ -42,11 +49,12 @@ namespace Ergonomy.Configuration
     {
         private readonly HttpClient _httpClient;
         private readonly ILogger<SettingsService> _logger;
+        private SettingsCacheStore? _settingsCache;
         private readonly SemaphoreSlim _refreshLock = new(1, 1);
         private readonly object _sync = new();
 
-        private AppSettings _current = null!;
-        private AppSettings _bootstrap = null!;
+        private AppSettings _current = new();
+        private AppSettings _bootstrap = new();
         private bool _sourceIsApi;
         private bool _disposed;
 
@@ -57,10 +65,24 @@ namespace Ergonomy.Configuration
         /// </summary>
         /// <param name="httpClient">کلاینت HTTP برای فراخوانی API تنظیمات.</param>
         /// <param name="logger">ثبت‌کننده بارگذاری، تازه‌سازی و خطای اعتبارسنجی.</param>
-        public SettingsService(HttpClient httpClient, ILogger<SettingsService> logger)
+        /// <param name="settingsCache">کش SQLite مشترک با outbox برای حفظ آخرین تنظیمات API.</param>
+        public SettingsService(
+            HttpClient httpClient,
+            ILogger<SettingsService> logger,
+            SettingsCacheStore? settingsCache = null)
         {
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _settingsCache = settingsCache;
+        }
+
+        private SettingsCacheStore SettingsCache
+        {
+            get
+            {
+                return _settingsCache ??= new SettingsCacheStore(
+                    new SqliteOutboxConnectionProvider());
+            }
         }
 
         public AppSettings Current
@@ -83,22 +105,79 @@ namespace Ergonomy.Configuration
         /// </summary>
         public void LoadBootstrap()
         {
-            AppSettings bootstrap;
-            lock (_sync)
+            AppSettings bootstrap = EnvironmentSettingsProvider.Load();
+            AppDefaults.Apply(bootstrap);
+
+            AppSettings effective = bootstrap;
+            bool loadedFromCache = false;
+            string? cachedJson = SettingsCache.LoadSerialized();
+
+            if (!string.IsNullOrWhiteSpace(cachedJson))
             {
-                bootstrap = EnvironmentSettingsProvider.Load();
-                AppDefaults.Apply(bootstrap);
-                _bootstrap = bootstrap;
-                _current = bootstrap;
-                _sourceIsApi = false;
+                try
+                {
+                    if (!IsUsableCacheDocument(cachedJson))
+                    {
+                        _logger.LogWarning(
+                            "Local settings cache is empty or has an invalid shape; bootstrap defaults will be used.");
+                    }
+                    else
+                    {
+                        AppSettings cached = DeserializeSettingsPayload(cachedJson, bootstrap);
+
+                        // Cached values are authoritative for the runtime. The fallback is
+                        // used only to fill a malformed/partial cached document, while the
+                        // machine-owned API URL and other infrastructure boundaries remain
+                        // available for the next refresh.
+                        AppDefaults.Apply(cached, bootstrap);
+                        PreserveEnvironmentInfrastructureSettings(cached, bootstrap);
+
+                        if (TryValidate(cached))
+                        {
+                            effective = cached;
+                            loadedFromCache = true;
+                        }
+                        else
+                        {
+                            _logger.LogWarning(
+                                "Local settings cache failed validation; bootstrap defaults will be used.");
+                        }
+                    }
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogWarning(
+                        LogEvents.SettingsRefreshFailedId,
+                        ex,
+                        "Local settings cache is corrupt; bootstrap defaults will be used.");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(
+                        LogEvents.SettingsRefreshFailedId,
+                        ex,
+                        "Local settings cache could not be applied; bootstrap defaults will be used.");
+                }
             }
 
-            TryValidate(bootstrap);
+            lock (_sync)
+            {
+                _bootstrap = bootstrap;
+                _current = effective;
+                // A cache row is the result of a prior successful API synchronization, so it is
+                // exposed as the remote source even before the first refresh of this process.
+                _sourceIsApi = loadedFromCache;
+            }
+
+            TryValidate(effective);
 
             _logger.LogInformation(
-                "Bootstrap settings loaded from Machine Environment Variables. " +
-                "Enabled metrics count: {EnabledMetricsCount}",
-                _current.EnabledMetrics?.Count ?? 0);
+                "{SettingsSource} settings loaded. AllowErgonomyCollection={AllowErgonomy} " +
+                "UpdateEnabled={UpdateEnabled} Enabled metrics count: {EnabledMetricsCount}",
+                loadedFromCache ? "Cached API" : "Bootstrap",
+                effective.AllowErgonomyCollection,
+                effective.Update?.Enabled ?? false,
+                effective.EnabledMetrics?.Count ?? 0);
         }
 
         /// <summary>
@@ -137,7 +216,7 @@ namespace Ergonomy.Configuration
                 if (string.IsNullOrWhiteSpace(apiUrl))
                 {
                     if (logFailures)
-                        _logger.LogWarning("Settings API URL is empty in Environment settings.");
+                        _logger.LogWarning("Settings API URL is empty in the effective settings.");
                     return false;
                 }
 
@@ -149,35 +228,42 @@ namespace Ergonomy.Configuration
                     return false;
                 }
 
-                string jsonString = await response.Content.ReadAsStringAsync();
-                var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-                AppSettings? remoteSettings =
-                    JsonSerializer.Deserialize<AppSettings>(jsonString, options);
+                string jsonString = await response.Content.ReadAsStringAsync(cancellationToken);
+                AppSettings currentSnapshot;
+                lock (_sync) currentSnapshot = _current;
 
-                if (remoteSettings == null)
+                AppSettings remoteSettings;
+                try
                 {
-                    if (logFailures)
-                        _logger.LogWarning("Settings API response could not be deserialized.");
+                    // Treat the API response as a partial update over the active settings. This
+                    // keeps omitted fields at their last known-good values rather than invoking
+                    // compiled defaults during a successful refresh.
+                    remoteSettings = DeserializeSettingsPayload(jsonString, currentSnapshot);
+                }
+                catch (JsonException ex)
+                {
+                    _logger.LogWarning(LogEvents.SettingsRefreshFailedId, ex,
+                        "Settings API JSON could not be deserialized; retaining the existing settings. " +
+                        "PayloadLength={Length}",
+                        jsonString.Length);
                     return false;
                 }
 
-                AppDefaults.Apply(remoteSettings);
+                AppDefaults.Apply(remoteSettings, currentSnapshot);
 
-                // Infrastructure settings (API endpoints + Kafka topics) are authoritative
-                // only from the machine environment (bootstrap); the API cannot override them.
+                // Settings API URL stays machine-authoritative.
+                // Kafka/topics and image URLs may come from the Control API.
                 PreserveEnvironmentInfrastructureSettings(remoteSettings);
 
                 if (!TryValidate(remoteSettings))
                     return false;
 
-                AppSettings currentSnapshot;
-                lock (_sync) currentSnapshot = _current;
-
                 string currentJson = NormalizeSettings(currentSnapshot);
                 string newJson = NormalizeSettings(remoteSettings);
 
-                if (currentJson == newJson)
-                    return false;
+                // Every successful, validated API response is persisted, including an unchanged
+                // response. That makes a first successful synchronization durable immediately.
+                bool persisted = SettingsCache.SaveSerialized(newJson);
 
                 lock (_sync)
                 {
@@ -185,13 +271,31 @@ namespace Ergonomy.Configuration
                     _sourceIsApi = true;
                 }
 
-                _logger.LogInformation(LogEvents.SettingsRefreshedId, "Settings updated from API successfully.");
-                SettingsChanged?.Invoke(remoteSettings);
-                return true;
+                bool changed = currentJson != newJson;
+                _logger.LogInformation(
+                    LogEvents.SettingsRefreshedId,
+                    "Settings updated from API successfully. PersistedLocally={PersistedLocally} " +
+                    "AllowErgonomyCollection={AllowErgonomy} UpdateEnabled={UpdateEnabled} " +
+                    "LatestVersion={LatestVersion} CheckIntervalSeconds={CheckInterval}",
+                    persisted,
+                    remoteSettings.AllowErgonomyCollection,
+                    remoteSettings.Update?.Enabled ?? false,
+                    remoteSettings.Update?.TargetVersion,
+                    remoteSettings.SettingsCheckIntervalSeconds);
+
+                if (changed)
+                    SettingsChanged?.Invoke(remoteSettings);
+                return changed;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (JsonException ex)
+            {
+                _logger.LogWarning(LogEvents.SettingsRefreshFailedId, ex,
+                    "Settings refresh failed during JSON parsing; retaining the existing effective settings.");
+                return false;
             }
             catch (Exception ex)
             {
@@ -213,18 +317,248 @@ namespace Ergonomy.Configuration
         }
 
         /// <summary>
-        /// نقاط پایانی API، تنظیمات کافکا و سوئیچ‌های امنیتی را از بوت‌استرپ محیطی روی پاسخ API بازنویسی می‌کند.
+        /// URL سرویس تنظیمات و سوئیچ‌های امنیتی ماشین را از بوت‌استرپ حفظ می‌کند.
+        /// Kafka و سایر نقاط پایانی API در صورت معتبر بودن از Control API پذیرفته می‌شوند
+        /// و در غیر این صورت با مقادیر بوت‌استرپ پر می‌شوند.
         /// </summary>
         /// <param name="remoteSettings">تنظیمات دریافتی از API که باید اصلاح شود.</param>
         private void PreserveEnvironmentInfrastructureSettings(AppSettings remoteSettings)
         {
             AppSettings bootstrap;
             lock (_sync) bootstrap = _bootstrap;
-            remoteSettings.API = bootstrap.API;
-            remoteSettings.Kafka = bootstrap.Kafka;
-            // Security switches are machine-authoritative. API settings cannot enable them.
-            remoteSettings.RemoteCommandsEnabled = bootstrap.RemoteCommandsEnabled;
-            remoteSettings.SystemPowerCommandsEnabled = bootstrap.SystemPowerCommandsEnabled;
+            PreserveEnvironmentInfrastructureSettings(remoteSettings, bootstrap);
+        }
+
+        private static void PreserveEnvironmentInfrastructureSettings(
+            AppSettings remoteSettings,
+            AppSettings bootstrap)
+        {
+            remoteSettings.API = MergeApiSettings(bootstrap.API, remoteSettings.API);
+            remoteSettings.Kafka = MergeKafkaSettings(bootstrap.Kafka, remoteSettings.Kafka);
+            remoteSettings.Update = MergeUpdateSettings(bootstrap.Update, remoteSettings.Update);
+
+            int checkInterval = remoteSettings.CheckIntervalMinutes > 0
+                ? remoteSettings.CheckIntervalMinutes
+                : remoteSettings.Update?.CheckIntervalMinutes ?? 0;
+            remoteSettings.CheckIntervalMinutes = checkInterval > 0
+                ? checkInterval
+                : bootstrap.CheckIntervalMinutes;
+
+            remoteSettings.Update ??= new AgentUpdateSettings();
+            remoteSettings.Update.CheckIntervalMinutes = remoteSettings.CheckIntervalMinutes;
+
+            if (remoteSettings.VersionCheckerMinute <= 0)
+            {
+                remoteSettings.VersionCheckerMinute = bootstrap.VersionCheckerMinute;
+            }
+        }
+
+        /// <summary>
+        /// آدرس API تنظیمات همیشه از محیط ماشین است؛ LoadImages در صورت ارسال معتبر از API پذیرفته می‌شود.
+        /// </summary>
+        private static ApiSettings MergeApiSettings(ApiSettings? bootstrap, ApiSettings? remote)
+        {
+            ApiSettings env = bootstrap ?? new ApiSettings();
+            if (remote == null)
+                return env;
+
+            return new ApiSettings
+            {
+                Settings = string.IsNullOrWhiteSpace(env.Settings) ? remote.Settings : env.Settings,
+                LoadImages = FirstNonEmpty(remote.LoadImages, env.LoadImages)
+            };
+        }
+
+        /// <summary>
+        /// تنظیمات کافکا را از Control API می‌پذیرد و فیلدهای خالی را از بوت‌استرپ پر می‌کند.
+        /// </summary>
+        private static KafkaSettings MergeKafkaSettings(KafkaSettings? bootstrap, KafkaSettings? remote)
+        {
+            KafkaSettings env = bootstrap ?? new KafkaSettings();
+            if (remote == null)
+                return env.Clone();
+
+            return new KafkaSettings
+            {
+                BootstrapServers = FirstNonEmpty(remote.BootstrapServers, env.BootstrapServers),
+                UserActivityTopic = FirstNonEmpty(remote.UserActivityTopic, env.UserActivityTopic),
+                SystemMetricsTopic = FirstNonEmpty(remote.SystemMetricsTopic, env.SystemMetricsTopic),
+                AppLogsTopic = FirstNonEmpty(remote.AppLogsTopic, env.AppLogsTopic)
+            };
+        }
+
+        private static string FirstNonEmpty(string? preferred, string? fallback)
+        {
+            return string.IsNullOrWhiteSpace(preferred)
+                ? (fallback ?? string.Empty)
+                : preferred.Trim();
+        }
+
+        /// <summary>
+        /// مانیفست به‌روزرسانی را از API می‌پذیرد و در صورت خالی بودن پاسخ، مقادیر بوت‌استرپ را حفظ می‌کند.
+        /// </summary>
+        private static AgentUpdateSettings MergeUpdateSettings(AgentUpdateSettings? bootstrap, AgentUpdateSettings? remote)
+        {
+            AgentUpdateSettings env = bootstrap ?? new AgentUpdateSettings();
+            if (remote == null)
+                return env;
+
+            bool apiHasManifest = remote.Enabled
+                || !string.IsNullOrWhiteSpace(remote.TargetVersion)
+                || !string.IsNullOrWhiteSpace(remote.DownloadUrl)
+                || !string.IsNullOrWhiteSpace(remote.Sha256);
+
+            if (!apiHasManifest)
+                return env;
+
+            return new AgentUpdateSettings
+            {
+                Enabled = remote.Enabled,
+                LatestVersion = FirstNonEmpty(remote.TargetVersion, env.TargetVersion),
+                Version = FirstNonEmpty(remote.Version, env.Version),
+                DownloadUrl = FirstNonEmpty(remote.DownloadUrl, env.DownloadUrl),
+                Sha256 = FirstNonEmpty(remote.Sha256, env.Sha256),
+                ServiceName = FirstNonEmpty(remote.ServiceName, env.ServiceName),
+                CheckIntervalMinutes = remote.CheckIntervalMinutes > 0
+                    ? remote.CheckIntervalMinutes
+                    : env.CheckIntervalMinutes,
+                MaxJitterSeconds = remote.MaxJitterSeconds > 0
+                    ? remote.MaxJitterSeconds
+                    : env.MaxJitterSeconds,
+                DownloadRetryCount = remote.DownloadRetryCount > 0
+                    ? remote.DownloadRetryCount
+                    : env.DownloadRetryCount
+            };
+        }
+
+        /// <summary>
+        /// API payload را به‌صورت یک به‌روزرسانی جزئی روی آخرین تنظیمات مؤثر اعمال می‌کند.
+        /// این merge عمیق است تا حذف فیلدهای تو در تو نیز باعث بازگشت به مقدار کامپایل‌شده نشود.
+        /// </summary>
+        private static AppSettings DeserializeSettingsPayload(string json, AppSettings baseline)
+        {
+            JsonDocumentOptions documentOptions = new()
+            {
+                AllowTrailingCommas = true,
+                CommentHandling = JsonCommentHandling.Skip
+            };
+
+            JsonNode? baselineNode = JsonSerializer.SerializeToNode(
+                baseline,
+                SettingsJson.CreateOptions());
+            JsonNode? incomingNode = JsonNode.Parse(
+                json,
+                nodeOptions: null,
+                documentOptions: documentOptions);
+
+            if (baselineNode is not JsonObject baselineObject
+                || incomingNode is not JsonObject incomingObject)
+            {
+                throw new JsonException("Settings API payload must be a JSON object.");
+            }
+
+            MergeJsonObjects(baselineObject, incomingObject);
+            AppSettings? merged = baselineObject.Deserialize<AppSettings>(SettingsJson.CreateOptions());
+            if (merged == null)
+                throw new JsonException("Settings API payload deserialized to null.");
+
+            // CheckIntervalMinutes is canonical at AppSettings level. Accept the historical
+            // nested update-manifest location on the wire, but immediately project it into the
+            // canonical property and keep the nested manifest field synchronized below.
+            if (!HasProperty(incomingObject, nameof(AppSettings.CheckIntervalMinutes))
+                && TryGetProperty(incomingObject, "Update", out JsonNode? updateNode)
+                && updateNode is JsonObject updateObject
+                && TryGetProperty(updateObject, nameof(AgentUpdateSettings.CheckIntervalMinutes), out JsonNode? intervalNode)
+                && TryReadPositiveInt(intervalNode, out int nestedInterval))
+            {
+                merged.CheckIntervalMinutes = nestedInterval;
+            }
+
+            return merged;
+        }
+
+        private static void MergeJsonObjects(JsonObject target, JsonObject incoming)
+        {
+            foreach (KeyValuePair<string, JsonNode?> property in incoming)
+            {
+                string? targetName = null;
+                foreach (KeyValuePair<string, JsonNode?> existing in target)
+                {
+                    if (string.Equals(existing.Key, property.Key, StringComparison.OrdinalIgnoreCase))
+                    {
+                        targetName = existing.Key;
+                        break;
+                    }
+                }
+
+                if (property.Value is JsonObject incomingObject
+                    && targetName != null
+                    && target[targetName] is JsonObject targetObject)
+                {
+                    MergeJsonObjects(targetObject, incomingObject);
+                }
+                else
+                {
+                    target[targetName ?? property.Key] = property.Value?.DeepClone();
+                }
+            }
+        }
+
+        private static bool HasProperty(JsonObject objectNode, string propertyName)
+        {
+            return TryGetProperty(objectNode, propertyName, out _);
+        }
+
+        private static bool TryGetProperty(
+            JsonObject objectNode,
+            string propertyName,
+            out JsonNode? value)
+        {
+            foreach (KeyValuePair<string, JsonNode?> property in objectNode)
+            {
+                if (string.Equals(property.Key, propertyName, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = property.Value;
+                    return true;
+                }
+            }
+
+            value = null;
+            return false;
+        }
+
+        private static bool TryReadPositiveInt(JsonNode? node, out int value)
+        {
+            value = 0;
+            if (node == null)
+                return false;
+
+            return int.TryParse(
+                node.ToString(),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out value)
+                && value > 0;
+        }
+
+        private static bool IsUsableCacheDocument(string json)
+        {
+            JsonNode? node = JsonNode.Parse(
+                json,
+                nodeOptions: null,
+                documentOptions: new JsonDocumentOptions
+                {
+                    AllowTrailingCommas = true,
+                    CommentHandling = JsonCommentHandling.Skip
+                });
+
+            if (node is not JsonObject objectNode)
+                return false;
+
+            // A cache row written by this agent always contains these canonical fields. Requiring
+            // more than a non-empty JSON object lets an empty/placeholder row select bootstrap.
+            return HasProperty(objectNode, nameof(AppSettings.ActivityThresholdSeconds))
+                && HasProperty(objectNode, nameof(AppSettings.SettingsCheckIntervalSeconds));
         }
 
         /// <summary>
@@ -234,10 +568,7 @@ namespace Ergonomy.Configuration
         /// <returns>رشته JSON نرمال‌شده.</returns>
         private static string NormalizeSettings(AppSettings settings)
         {
-            return JsonSerializer.Serialize(settings, new JsonSerializerOptions
-            {
-                WriteIndented = false
-            });
+            return JsonSerializer.Serialize(settings, SettingsJson.CreateOptions());
         }
 
         /// <summary>

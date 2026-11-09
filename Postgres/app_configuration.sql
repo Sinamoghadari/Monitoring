@@ -8,16 +8,21 @@ CREATE TABLE IF NOT EXISTS app_configuration (
 INSERT INTO app_configuration (settings_json)
 VALUES (
 '{
-  "NotificationIntervalSeconds": 5,
-  "ActivityThresholdSeconds": 5,
-  "PrimaryAlarmAutoCloseSeconds": 7,
+  "AllowErgonomyCollection": true,
+  "AllowKafkaWrite": true,
+  "AllowSqliteWrite": true,
+  "NotificationIntervalSeconds": 7,
+  "ActivityThresholdSeconds": 60,
+  "PrimaryAlarmAutoCloseSeconds": 20,
   "SessionCloseLimit": 3,
-  "SecondaryAlarmUnclosableSeconds": 10,
-  "SecondaryAlarmAutoCloseSeconds": 7,
-  "LoggingIntervalHours": 1,
-  "AdvancedMetricsIntervalMinutes": 0.1,
+  "SecondaryAlarmUnclosableSeconds": 60,
+  "SecondaryAlarmAutoCloseSeconds": 10,
+  "AdvancedMetricsIntervalMinutes": 5,
   "SyncEngineIntervalMinutes": 1,
   "TopProcessesCount": 10,
+  "CheckIntervalMinutes": 60,
+  "LoggingIntervalHours": 24,
+  "SettingsCheckIntervalSeconds": 120,
   "EnabledMetrics": [
       "WindowsSid", "WindowsUsername", "BootTime", "SystemUptimeSeconds", 
       "FailedLoginAttempts", "AntivirusStatus", "FirewallStatus", "UsbDevicesCount", 
@@ -27,16 +32,30 @@ VALUES (
       "UsedRamMb", "FreeRamMb", "StorageDetails", "NetworkDetails" , "ComputerName"
     ],
   "NetworkTraceTargetIP": "172.17.214.1",
-  "AllowSqliteWrite": true,
-  "AllowKafkaWrite": true,
-  "PermissionSqliteRetryIntervalHours": 0.1,
-  "PermissionKafkaRetryIntervalHours": 0.1,
-  "ConnectionFailureSleepMinutes": 5,
-  "HeartbeatIntervalMinutes": 1,
+  "API": {
+    "Settings": "https://siscoeye.sirjansteel.com/api/settings",
+    "LoadImages": "https://siscoeye.sirjansteel.com/api/images"
+  },
+  "PermissionSqliteRetryIntervalHours": 1,
+  "PermissionKafkaRetryIntervalHours": 1,
+  "PermissionPostgresRetryIntervalHours": 1,
+  "ConnectionFailureSleepMinutes": 10,
+  "VersionCheckerMinute": 4800,
   "Kafka": {
-    "BootstrapServers": "172.17.214.38:9092",
+    "BootstrapServers": "172.17.214.38:9094",
     "UserActivityTopic": "user_activity",
-    "SystemMetricsTopic": "system_metrics"
+    "SystemMetricsTopic": "system_metrics",
+    "AppLogsTopic": "app_logs"
+  },
+  "Update": {
+    "Enabled": false,
+    "LatestVersion": "1.0.0",
+    "DownloadUrl": "",
+    "Sha256": "",
+    "ServiceName": "Ergonomy.Service",
+    "CheckIntervalMinutes": 60,
+    "MaxJitterSeconds": 900,
+    "DownloadRetryCount": 5
   },
   "Images": {
     "PrimaryAlarmImagePath": "Assets/primary_alarm.png",
