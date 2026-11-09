@@ -4,6 +4,7 @@ using System.Linq;
 using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
+using Ergonomy.Core.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Ergonomy.Observability
@@ -101,8 +102,12 @@ namespace Ergonomy.Observability
                 ctx.Response.ContentType = metrics ? "text/plain; version=0.0.4; charset=utf-8" : "text/plain; charset=utf-8";
                 await ctx.Response.OutputStream.WriteAsync(body, 0, body.Length).ConfigureAwait(false);
             }
-            catch (Exception ex) { _logger.LogError(ex, "Metrics request handling failed."); }
-            finally { try { ctx.Response.Close(); } catch { } }
+            catch (Exception ex) { ExceptionPolicy.Report(ex, "metrics-request", _logger); }
+            finally
+            {
+                try { ctx.Response.Close(); }
+                catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "metrics-response-close"); }
+            }
         }
         /// <summary>
         /// گیج هویت عامل را به انتهای خروجی پرومتئوس اضافه می‌کند.
@@ -121,10 +126,14 @@ namespace Ergonomy.Observability
         /// </summary>
         public void Stop()
         {
-            _cts?.Cancel(); try { _listener?.Stop(); _listener?.Close(); } catch { }
-            try { _loop?.Wait(TimeSpan.FromSeconds(3)); } catch { }
+            _cts?.Cancel();
+            try { _listener?.Stop(); _listener?.Close(); }
+            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "metrics-listener-stop"); }
+            try { _loop?.Wait(TimeSpan.FromSeconds(3)); }
+            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "metrics-loop-stop"); }
             Task[] active = _requests.Values.ToArray();
-            try { Task.WaitAll(active, TimeSpan.FromSeconds(3)); } catch { }
+            try { Task.WaitAll(active, TimeSpan.FromSeconds(3)); }
+            catch (Exception ex) { ExceptionPolicy.IgnoreBestEffortDispose(ex, "metrics-requests-drain"); }
         }
         /// <summary>
         /// نقطه پایانی متریک را متوقف کرده و توکن لغو را آزاد می‌کند.

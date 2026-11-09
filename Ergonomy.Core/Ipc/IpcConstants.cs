@@ -44,5 +44,11 @@ namespace Ergonomy.Core.Ipc
 
         /// <summary>Connection attempt timeout used by the client.</summary>
         public static readonly TimeSpan ConnectTimeout = TimeSpan.FromSeconds(5);
+
+        /// <summary>
+        /// How often an unconnected server instance is recreated so the pipe ACL can pick up
+        /// a newly logged-on interactive user SID without granting Authenticated Users.
+        /// </summary>
+        public static readonly TimeSpan AcceptAclRefresh = TimeSpan.FromSeconds(30);
     }
 }

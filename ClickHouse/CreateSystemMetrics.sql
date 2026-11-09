@@ -1,4 +1,6 @@
-CREATE TABLE IF NOT EXISTS SystemMetrics
+CREATE DATABASE IF NOT EXISTS Monitoring;
+
+CREATE TABLE IF NOT EXISTS Monitoring.SystemMetrics
 (
     `CollectedAt` DateTime,
     `CollectedAt_Shamsi` String, 

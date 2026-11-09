@@ -1,6 +1,6 @@
 # Ergonomy — Two-Process Architecture Split
 
-Status: **in progress (step 1 of 3 — skeleton + IPC layer + Generic Host / Windows Service lifetime landed).**
+Status: **step 3 in progress — Service owns outbox/sync/update/policy; Task owns hooks/UI; pipe ACL is service SID + interactive user SIDs only.**
 
 ## Why two processes
 
@@ -69,10 +69,12 @@ service-owned pipe throws `UnauthorizedAccessException` on .NET):
 
 | Trustee | Rights |
 | --- | --- |
-| `LocalSystem` | FullControl |
-| `BUILTIN\Administrators` | FullControl |
-| `Authenticated Users` | `ReadWrite \| Synchronize` (no `CreateNewInstance` — a non-admin process can never spoof the server end) |
+| Service process SID (`LocalSystem` when installed) | FullControl |
+| SID of each currently logged-on interactive user | ReadWrite + Synchronize (no CreateNewInstance) |
+| `Authenticated Users`, `BUILTIN\\Administrators` | **not granted** |
 | `Anonymous Logon`, `NETWORK` | explicit **Deny** |
+
+Waiting accept instances are recreated every 30s so a user who logs on after the Service starts is added to the DACL without ever granting Authenticated Users.
 
 ### Message catalogue
 
@@ -87,6 +89,7 @@ service-owned pipe throws `UnauthorizedAccessException` on .NET):
 | `service.settings` | Service → Task | `SettingsSnapshotPayload` (pushed on connect and on every refresh) |
 | `service.collection.start` / `.stop` | Service → Task | none |
 | `service.shutdown` | Service → Task | `ShutdownRequestPayload` |
+| `task.problem` | Task → Service | `ProblemLogPayload` (WARNING/ERROR only → SQLite → app_logs) |
 | `task.goodbye` | Task → Service | `GoodbyePayload` |
 
 Images are **never** transferred over the pipe: the Service downloads them and sends a local path.
@@ -114,16 +117,19 @@ ACL, server/client and both entry points implemented; `Ergonomy.Service` wired t
 with `UseWindowsService` (SCM + interactive console dual-mode); the legacy project keeps
 building against `Ergonomy.Core`.
 
-**Step 2 — move the desktop half.** `Hooks/GlobalInputHook.cs`, `Hooks/ActivityMonitor.cs`,
-`AlarmManager.cs`, `UI/*` and the alarm-side of `ErgonomyManager.cs` move into `Ergonomy.Task`;
-`TaskApplicationContext.ShowAlarm` replaces its TODO with the real forms and
-`ReportActivityAsync` is called from the threshold path instead of writing to SQLite directly.
+**Step 2 — done.** `GlobalInputHook`, `ActivityMonitor`, `AlarmManager` and the alarm forms
+run in `Ergonomy.Task`. Threshold activity is reported over the pipe (`task.activity`) instead
+of writing SQLite from the interactive session. `service.alarm.show` renders the real forms.
 
-**Step 3 — move the machine half.** `LocalDatabaseManager`, `SyncEngine`, `KafkaConnect`,
-`AdvancedMetricsCollector`, `HealthCheckService`, `CommandManager`, `SettingsService` and the
-workers move into `Ergonomy.Service`, wired to `ServiceIpcHost.ActivityReceived` /
-`SettingsSnapshotProvider`. `Ergonomy.csproj` is then deleted and `Ergonomy.sln` keeps three
-projects.
+**Step 3 — machine half (this change).** `LocalDatabaseManager` (SQLCipher), `SyncEngine`,
+`KafkaConnect`, `UpdateManager`, `SettingsService` / `SettingsRefreshWorker` and
+`PermissionsEvaluator` / `PermissionMonitorWorker` run in `Ergonomy.Service` so log shipping
+and sync continue after logoff. Interactive activity and Task problem logs (`task.problem`)
+are persisted to the outbox and forwarded to `app_logs` (WARNING/ERROR only). The legacy
+`Ergonomy.csproj` tray still builds for migration; production path is Service + Task.
+
+Advanced metrics, remote `CommandManager` and the Prometheus scrape endpoint remain in the
+legacy tray until a follow-up move; they are not required for outbox/sync-after-logoff.
 
 Deployment (after step 3): `Ergonomy.Service` installed as a Windows service (LocalSystem,
 auto-start, restart-on-failure); `Ergonomy.Task` started by a Task Scheduler logon trigger for
