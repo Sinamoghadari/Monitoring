@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Ergonomy.Configuration;
+using Ergonomy.Core.Diagnostics;
 using Ergonomy.Database;
 using Ergonomy.Logging;
 
@@ -45,7 +46,7 @@ namespace Ergonomy.Services
         protected override TimeSpan GetInterval()
         {
             double minutes = _settingsService.Current.AdvancedMetricsIntervalMinutes;
-            return TimeSpan.FromMinutes(minutes > 0 ? minutes : 120);
+            return TimeSpan.FromMinutes(minutes > 0 ? minutes : 5);
         }
 
         /// <summary>
@@ -79,12 +80,13 @@ namespace Ergonomy.Services
 
                 _localDb.SaveUserActivity(QueueTargets.AdvancedSystemMetrics, metrics);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
+                ExceptionPolicy.IgnoreIfShuttingDown(ex, "advanced-metrics-cancel");
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, "Error collecting advanced metrics.");
+                ExceptionPolicy.Report(ex, "advanced-metrics-collect", Logger);
             }
             finally
             {

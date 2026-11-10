@@ -6,6 +6,7 @@ using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Ergonomy.Core.Diagnostics;
 using Ergonomy.Logging;
 using Ergonomy.Observability;
 
@@ -107,19 +108,18 @@ namespace Ergonomy.Database
             {
                 cts?.Cancel();
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreIfShuttingDown(ex, "sync-cancel");
             }
 
             try
             {
                 loop?.Wait(TimeSpan.FromSeconds(10));
             }
-            catch (AggregateException)
+            catch (Exception ex)
             {
-            }
-            catch (Exception)
-            {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "sync-stop-wait");
             }
 
             cts?.Dispose();
@@ -174,7 +174,7 @@ namespace Ergonomy.Database
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Sync initial pass error.");
+                    ExceptionPolicy.Report(ex, "sync-initial-pass", _logger);
                 }
 
                 while (!ct.IsCancellationRequested)
@@ -206,16 +206,17 @@ namespace Ergonomy.Database
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Sync pass error.");
+                        ExceptionPolicy.Report(ex, "sync-pass", _logger);
                     }
                 }
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
+                ExceptionPolicy.IgnoreIfShuttingDown(ex, "sync-loop-cancel");
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "SyncEngine loop failed unexpectedly.");
+                ExceptionPolicy.Report(ex, "sync-loop", _logger);
             }
         }
 
@@ -310,9 +311,9 @@ namespace Ergonomy.Database
                     catch (Exception ex)
                     {
                         anyTransientFailure = true;
-
-                        _logger.LogWarning(LogEvents.KafkaSendFailureId, ex,
-                            "Kafka delivery failed; record remains pending. Target={Target}", record.TargetTable);
+                        Console.WriteLine(
+                            $"[{DateTime.Now:HH:mm:ss}] ❌ SyncEngine Kafka send failed. {ex.Message}");
+                        ExceptionPolicy.Report(ex, "sync-kafka-send", _logger, LogEvents.KafkaSendFailureId);
                     }
                 }
 
@@ -384,6 +385,7 @@ namespace Ergonomy.Database
                     if (metrics == null)
                         throw new JsonException("Advanced system metrics payload was null.");
 
+                    AppLogNormalizer.NormalizeDictionary(metrics, normalizeLogLevel: false);
                     await _kafkaConnect.SendSystemMetricsAsync(record.MessageId, metrics, cancellationToken).ConfigureAwait(false);
                     break;
                 }
@@ -408,6 +410,7 @@ namespace Ergonomy.Database
                     if (logData == null)
                         throw new JsonException("App log payload was null.");
 
+                    AppLogNormalizer.NormalizeDictionary(logData, normalizeLogLevel: true);
                     await _kafkaConnect.SendAppLogAsync(record.MessageId, logData, cancellationToken).ConfigureAwait(false);
                     break;
                 }

@@ -10,7 +10,7 @@ using System.Text.Json;
 using LibreHardwareMonitor.Hardware;
 using System.Diagnostics.Eventing.Reader;
 using System.Globalization;
-using Microsoft.Data.Sqlite;
+using Ergonomy.Core.Diagnostics;
 using Ergonomy.Networking;
 
 public class AdvancedMetricsCollector
@@ -18,6 +18,7 @@ public class AdvancedMetricsCollector
     private readonly int _topProcessesCount;
     private readonly string _targetIp;
     private readonly HashSet<string> _enabledMetrics;
+    private readonly ProbeFailureLimiter _probeFailures = new();
 
     /// <summary>
     /// جمع‌کننده متریک‌های پیشرفته را با فهرست متریک‌های فعال، تعداد فرایندهای برتر و IP هدف ردیابی شبکه می‌سازد.
@@ -61,31 +62,22 @@ public class AdvancedMetricsCollector
         
         var EnabledMetrics = new Dictionary<string, object>();
 
-        DateTime currentTime = DateTime.Now;
+        DateTime utcNow = DateTime.UtcNow;
+        DateTime currentTime = utcNow.ToLocalTime();
 
-        EnabledMetrics["CollectedAt"] = currentTime.ToString("yyyy-MM-dd HH:mm:ss");
+        EnabledMetrics["CollectedAt"] = utcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
 
         PersianCalendar pc = new PersianCalendar();
         EnabledMetrics["CollectedAt_Shamsi"] = $"{pc.GetYear(currentTime):0000}/{pc.GetMonth(currentTime):00}/{pc.GetDayOfMonth(currentTime):00} {currentTime:HH:mm:ss}";
-        
+
         EnabledMetrics["ComputerName"] = Environment.MachineName;
-
-        if (_enabledMetrics.Contains("WindowsSid")) EnabledMetrics["WindowsSid"] = WindowsIdentity.GetCurrent().User?.Value ?? "Unknown";
-        
-        // --- تغییرات مربوط به WindowsUsername و WindowsUsername_RunAdmin ---
-         EnabledMetrics["WindowsUsername_RunAdmin"] = WindowsIdentity.GetCurrent().Name ?? "";
-
-        if (_enabledMetrics.Contains("WindowsUsername")) 
-        {
-            // ابتدا تلاش برای یافتن کاربر explorer.exe، سپس WMI، و در نهایت بازگشت به کاربر فعلی پراسس
-            EnabledMetrics["WindowsUsername"] = GetExplorerUser() ?? GetInteractiveWindowsUsername() ?? WindowsIdentity.GetCurrent().Name;
-        }
-        else 
-        {
-            // اگر در تنظیمات فعال نبود هم کلید آن را با مقدار خالی می‌فرستیم تا ساختار حفظ شود
-            EnabledMetrics["WindowsUsername"] = "";
-        }
-        // ----------------------------------------------------------------------
+        var processIdentity = WindowsIdentity.GetCurrent();
+        EnabledMetrics["WindowsSid"] = processIdentity.User?.Value ?? "Unknown";
+        string windowsUsername = GetExplorerUser() ?? GetInteractiveWindowsUsername() ?? processIdentity.Name ?? "";
+        EnabledMetrics["WindowsUsername"] = windowsUsername;
+        EnabledMetrics["WindowsUsername_RunAdmin"] = Ergonomy.Logging.AppLogNormalizer.NormalizeWindowsUsernameRunAdmin(
+            processIdentity.Name ?? windowsUsername,
+            windowsUsername);
 
         if (_enabledMetrics.Contains("MotherboardSerial")) EnabledMetrics["MotherboardSerial"] = GetMotherboardSerial();
 
@@ -113,10 +105,6 @@ public class AdvancedMetricsCollector
         if (_enabledMetrics.Contains("DiskHealthStatus")) EnabledMetrics["DiskHealthStatusJson"] = GetDiskHealthStatus();
         if (_enabledMetrics.Contains("CriticalSystemEvents")) EnabledMetrics["CriticalSystemEventsJson"] = GetCriticalSystemEvents();
         
-        // فراخوانی تاریخچه کروم
-        //TO DO بعدا اضافه میکنم
-        // if (_enabledMetrics.Contains("ChromeHistory"))  EnabledMetrics["ChromeHistoryJson"] = GetAllBrowsersHistoryLast24Hours();
-
         // شرط آپدیت شده: حذف متریک‌های تکی CPU و جایگزینی با CPUJson
         bool needsHardware = _enabledMetrics.Contains("CPUJson") ||
                              _enabledMetrics.Contains("TotalRamMb") || 
@@ -151,7 +139,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetInteractiveWindowsUsername), ex); }
         return null;
     }
 
@@ -176,7 +164,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetExplorerUser), ex); }
         return null;
     }
     // ---------------------------------------------------
@@ -202,7 +190,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetDiskHealthStatus), ex); }
         return JsonSerializer.Serialize(diskHealth, _jsonOptions);
     }
 
@@ -236,7 +224,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetCriticalSystemEvents), ex); }
         return JsonSerializer.Serialize(eventStats, _jsonOptions);
     }
 
@@ -426,7 +414,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetCpuWmiDetails), ex); }
         return cpuWmi;
     }
 
@@ -454,8 +442,9 @@ public class AdvancedMetricsCollector
                 dict["AvgDiskLatencyMs"] = diskLatency.NextValue() * 1000; 
             }
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
+            NoteProbeFailure(nameof(GetDiskPerformanceMetrics), ex);
             dict["Error"] = "Performance Counter Error: " + ex.Message;
         }
 
@@ -510,8 +499,9 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
+            NoteProbeFailure(nameof(GetAdvancedSmartData), ex);
             dict["Error"] = "WMI SMART Error (Run as Admin): " + ex.Message;
         }
 
@@ -541,8 +531,8 @@ public class AdvancedMetricsCollector
                 .Select(p => 
                 {
                     double cpuSeconds = 0;
-                    try { cpuSeconds = Math.Round(p.TotalProcessorTime.TotalSeconds, 2); } 
-                    catch { }
+                    try { cpuSeconds = Math.Round(p.TotalProcessorTime.TotalSeconds, 2); }
+                    catch (Exception ex) { NoteProbeFailure("TopProcesses.Cpu", ex); }
                     
                     return new { ProcessName = p.ProcessName, CpuTotalSeconds = cpuSeconds };
                 })
@@ -562,8 +552,9 @@ public class AdvancedMetricsCollector
 
             return JsonSerializer.Serialize(combinedResult, _jsonOptions);
         }
-        catch 
+        catch (Exception ex)
         {
+            NoteProbeFailure(nameof(GetTopProcesses), ex);
             return "{}";
         }
     }
@@ -587,7 +578,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetDiskModels), ex); }
         return JsonSerializer.Serialize(models, _jsonOptions);
     }
 
@@ -617,7 +608,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetMotherboardSerial), ex); }
         
         return "Unknown";
     }
@@ -670,6 +661,7 @@ public class AdvancedMetricsCollector
         }
         catch (Exception ex)
         {
+            NoteProbeFailure(nameof(PerformNetworkTrace), ex);
             hops.Add(new { Error = ex.Message });
         }
         return JsonSerializer.Serialize(hops, _jsonOptions);
@@ -691,7 +683,7 @@ public class AdvancedMetricsCollector
                 foreach (var item in searcher.Get()) return item["displayName"]?.ToString() ?? "Unknown";
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetSecurityStatus), ex); }
         return "Not Found / No Permission";
     }
 
@@ -714,7 +706,7 @@ public class AdvancedMetricsCollector
             }
             return count;
         }
-        catch { return -1; }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetFailedLoginsCount), ex); return -1; }
     }
 
     /// <summary>
@@ -730,7 +722,7 @@ public class AdvancedMetricsCollector
                 return searcher.Get().Count;
             }
         }
-        catch { return 0; }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetUsbDevicesCount), ex); return 0; }
     }
 
     /// <summary>
@@ -744,9 +736,10 @@ public class AdvancedMetricsCollector
             long tickCount = Environment.TickCount64; 
             return DateTime.Now - TimeSpan.FromMilliseconds(tickCount);
         }
-        catch
+        catch (Exception ex)
         {
-            return DateTime.MinValue; 
+            NoteProbeFailure(nameof(GetBootTime), ex);
+            return DateTime.MinValue;
         }
     }
 
@@ -798,7 +791,7 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetDiskWmiInfo), ex); }
         return dict;
     }
 
@@ -830,309 +823,12 @@ public class AdvancedMetricsCollector
                 }
             }
         }
-        catch { }
+        catch (Exception ex) { NoteProbeFailure(nameof(GetGpuDetails), ex); }
         return JsonSerializer.Serialize(gpus, _jsonOptions);
     }
 
-    /// <summary>
-    /// تاریخچه ۲۴ ساعت گذشته مرورگرهای Chromium و Firefox همه پروفایل‌های کاربری را جمع می‌کند.
-    /// این متد در مسیر Collect فعلی فراخوانی نمی‌شود و برای توسعه بعدی نگه داشته شده است.
-    /// </summary>
-    /// <returns>JSON فهرست بازدیدها.</returns>
-    private string GetAllBrowsersHistoryLast24Hours()
-    {
-        var historyList = new List<object>();
-
-        try
-        {
-            var userProfiles = GetWindowsUserProfiles();
-
-            foreach (var userProfile in userProfiles)
-            {
-                CollectChromiumHistory(
-                    Path.Combine(userProfile, @"AppData\Local\Google\Chrome\User Data"),
-                    "Chrome",
-                    historyList
-                );
-
-                CollectChromiumHistory(
-                    Path.Combine(userProfile, @"AppData\Local\Microsoft\Edge\User Data"),
-                    "Edge",
-                    historyList
-                );
-
-                CollectFirefoxHistory(
-                    Path.Combine(userProfile, @"AppData\Roaming\Mozilla\Firefox\Profiles"),
-                    "Firefox",
-                    historyList
-                );
-            }
-        }
-        catch
-        {
-        }
-
-        return JsonSerializer.Serialize(historyList, _jsonOptions);
-    }
-
-
-    /// <summary>
-    /// مسیر پروفایل‌های واقعی کاربران را از C:\Users بدون پوشه‌های سیستمی برمی‌گرداند.
-    /// </summary>
-    /// <returns>فهرست مسیر پروفایل‌ها.</returns>
-    private List<string> GetWindowsUserProfiles()
-    {
-        var result = new List<string>();
-
-        try
-        {
-            string usersRoot = @"C:\Users";
-
-            if (!Directory.Exists(usersRoot))
-                return result;
-
-            var ignored = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-            {
-                "Public",
-                "Default",
-                "Default User",
-                "All Users"
-            };
-
-            foreach (var dir in Directory.GetDirectories(usersRoot))
-            {
-                string name = Path.GetFileName(dir);
-
-                if (!ignored.Contains(name))
-                {
-                    result.Add(dir);
-                }
-            }
-        }
-        catch
-        {
-        }
-
-        return result;
-    }
-    
-    /// <summary>
-    /// فایل History مرورگر Chromium را کپی کرده و بازدیدهای ۲۴ ساعت گذشته را از SQLite فقط‌خواندنی استخراج می‌کند.
-    /// </summary>
-    /// <param name="browserUserDataPath">مسیر User Data مرورگر.</param>
-    /// <param name="browserName">نام مرورگر برای برچسب خروجی.</param>
-    /// <param name="historyList">فهرست تجمعی بازدیدها.</param>
-    private void CollectChromiumHistory(
-    string browserUserDataPath,
-    string browserName,
-    List<object> historyList)
-    {
-        try
-        {
-            if (!Directory.Exists(browserUserDataPath))
-                return;
-
-            var profileDirs = new List<string>();
-
-            profileDirs.AddRange(
-                Directory.GetDirectories(browserUserDataPath, "Default")
-            );
-
-            profileDirs.AddRange(
-                Directory.GetDirectories(browserUserDataPath, "Profile *")
-            );
-
-            foreach (var profileDir in profileDirs)
-            {
-                string historyFile = Path.Combine(profileDir, "History");
-
-                if (!File.Exists(historyFile))
-                    continue;
-
-                string tempDir = Path.Combine(
-                    Path.GetTempPath(),
-                    Guid.NewGuid().ToString()
-                );
-
-                Directory.CreateDirectory(tempDir);
-
-                try
-                {
-                    string tempHistory = Path.Combine(tempDir, "History");
-
-                    CopyIfExists(historyFile, tempHistory);
-                    CopyIfExists(historyFile + "-wal", tempHistory + "-wal");
-                    CopyIfExists(historyFile + "-shm", tempHistory + "-shm");
-
-                    using (var connection = new SqliteConnection(
-                        $"Data Source={tempHistory};Mode=ReadOnly;"))
-                    {
-                        connection.Open();
-
-                        using (var command = connection.CreateCommand())
-                        {
-                            command.CommandText = @"
-                        SELECT url, title
-                        FROM urls
-                        WHERE datetime(
-                            last_visit_time / 1000000 - 11644473600,
-                            'unixepoch',
-                            'localtime'
-                        ) >= datetime('now', '-1 day')
-                        ORDER BY last_visit_time DESC";
-
-                            using (var reader = command.ExecuteReader())
-                            {
-                                while (reader.Read())
-                                {
-                                    historyList.Add(new
-                                    {
-                                        Browser = browserName,
-                                        Url = reader.GetString(0),
-                                        Title = !reader.IsDBNull(1)
-                                            ? reader.GetString(1)
-                                            : ""
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                catch
-                {
-                }
-                finally
-                {
-                    try
-                    {
-                        Directory.Delete(tempDir, true);
-                    }
-                    catch
-                    {
-                    }
-                }
-            }
-        }
-        catch
-        {
-        }
-    }
-
-    /// <summary>
-    /// فایل places.sqlite فایرفاکس را کپی کرده و بازدیدهای ۲۴ ساعت گذشته را می‌خواند.
-    /// </summary>
-    /// <param name="firefoxProfilesPath">مسیر پوشه Profiles فایرفاکس.</param>
-    /// <param name="browserName">نام مرورگر برای برچسب خروجی.</param>
-    /// <param name="historyList">فهرست تجمعی بازدیدها.</param>
-    private void CollectFirefoxHistory(
-        string firefoxProfilesPath,
-        string browserName,
-        List<object> historyList)
-    {
-        try
-        {
-            if (!Directory.Exists(firefoxProfilesPath))
-                return;
-
-            foreach (var profileDir in Directory.GetDirectories(firefoxProfilesPath))
-            {
-                string placesFile = Path.Combine(profileDir, "places.sqlite");
-
-                if (!File.Exists(placesFile))
-                    continue;
-
-                string tempDir = Path.Combine(
-                    Path.GetTempPath(),
-                    Guid.NewGuid().ToString()
-                );
-
-                Directory.CreateDirectory(tempDir);
-
-                try
-                {
-                    string tempDb = Path.Combine(tempDir, "places.sqlite");
-
-                    CopyIfExists(placesFile, tempDb);
-                    CopyIfExists(placesFile + "-wal", tempDb + "-wal");
-                    CopyIfExists(placesFile + "-shm", tempDb + "-shm");
-
-                    using (var connection = new SqliteConnection(
-                        $"Data Source={tempDb};Mode=ReadOnly;"))
-                    {
-                        connection.Open();
-
-                        using (var command = connection.CreateCommand())
-                        {
-                            command.CommandText = @"
-                        SELECT p.url, p.title
-                        FROM moz_places p
-                        JOIN moz_historyvisits h
-                        ON h.place_id = p.id
-                        WHERE datetime(
-                            h.visit_date / 1000000,
-                            'unixepoch',
-                            'localtime'
-                        ) >= datetime('now', '-1 day')
-                        ORDER BY h.visit_date DESC";
-
-                            using (var reader = command.ExecuteReader())
-                            {
-                                while (reader.Read())
-                                {
-                                    historyList.Add(new
-                                    {
-                                        Browser = browserName,
-                                        Url = reader.GetString(0),
-                                        Title = !reader.IsDBNull(1)
-                                            ? reader.GetString(1)
-                                            : ""
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-                catch
-                {
-                }
-                finally
-                {
-                    try
-                    {
-                        Directory.Delete(tempDir, true);
-                    }
-                    catch
-                    {
-                    }
-                }
-            }
-        }
-        catch
-        {
-        }
-    }
-
-    /// <summary>
-    /// فایل پایگاه مرورگر و همراهان WAL/SHM را در صورت وجود به مسیر موقت کپی می‌کند.
-    /// </summary>
-    /// <param name="source">مسیر مبدأ.</param>
-    /// <param name="destination">مسیر مقصد موقت.</param>
-    private void CopyIfExists(string source, string destination)
-    {
-        try
-        {
-            if (File.Exists(source))
-            {
-                File.Copy(source, destination, true);
-            }
-        }
-        catch
-        {
-        }
-    }
-
-
-
+    private void NoteProbeFailure(string probe, Exception ex)
+        => _probeFailures.TryReport(probe, ex, "probe:" + probe);
 }
 
 public class UpdateVisitor : IVisitor

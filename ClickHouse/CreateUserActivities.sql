@@ -1,4 +1,6 @@
-CREATE TABLE IF NOT EXISTS UserActivities
+CREATE DATABASE IF NOT EXISTS Monitoring;
+
+CREATE TABLE IF NOT EXISTS Monitoring.UserActivities
 (
     `SessionId` UUID,
     `WindowsSid` String,

@@ -1,11 +1,18 @@
 using System;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.Versioning;
 using System.Threading.Tasks;
+using Ergonomy.Configuration;
+using Ergonomy.Core.Diagnostics;
+using Ergonomy.Core.Hosting;
 using Ergonomy.Core.Ipc;
+using Ergonomy.Database;
 using Ergonomy.Logging;
+using Ergonomy.Observability;
 using Ergonomy.Service.Hosting;
 using Ergonomy.Service.Ipc;
+using Ergonomy.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -42,6 +49,20 @@ namespace Ergonomy.Service
         /// <returns>کد خروج صفر در موفقیت و یک در شکست راه‌اندازی.</returns>
         private static async Task<int> Main(string[] args)
         {
+            ExceptionPolicy.InstallLastChance();
+
+            StartupLog.EnsureDirectories();
+            using IsolationClaim? claim = RuntimeIsolation.TryClaimService();
+            if (claim == null)
+            {
+                Console.Error.WriteLine(
+                    "[FATAL] Ergonomy.Service could not claim SQLite ownership. Another writer is running.");
+                StartupLog.Error("Exit: could not claim Global\\Ergonomy_Service_Running_v1 / Global\\Ergonomy_Sqlite_Owner_v1.");
+                StartupLog.WriteApplicationEvent(
+                    "Ergonomy.Service could not claim SQLite ownership. Another writer is running.");
+                return 1;
+            }
+
             bool isInteractive = !IsRunningAsWindowsService(args);
 
             IHost host = Host.CreateDefaultBuilder(args)
@@ -62,22 +83,68 @@ namespace Ergonomy.Service
                 })
                 .ConfigureServices((context, services) =>
                 {
-                    // Named Pipe server (singleton): accepts connections from every interactive
-                    // Task process on this machine.
+                    services.AddSingleton<HttpClient>(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(15) });
+                    services.AddSingleton<SqliteOutboxConnectionProvider>();
+                    services.AddSingleton<SettingsCacheStore>();
+                    services.AddSingleton<ISettingsService, SettingsService>();
+                    services.AddSingleton<AppSettings>(sp =>
+                    {
+                        ISettingsService settings = sp.GetRequiredService<ISettingsService>();
+                        settings.LoadBootstrap();
+                        return settings.Current;
+                    });
+                    services.AddSingleton(_ => ServiceRuntimeHostedService.CreateMachineIdentity());
+
+                    services.AddSingleton<LocalDatabaseManager>(sp =>
+                        new LocalDatabaseManager(
+                            sp.GetRequiredService<AppSettings>().Outbox,
+                            sp.GetRequiredService<SqliteOutboxConnectionProvider>()));
+                    services.AddSingleton<MessageLogService>();
+
+                    services.AddSingleton<AgentMetrics>();
+                    services.AddSingleton<KafkaConnect>(sp =>
+                    {
+                        try
+                        {
+                            KafkaSettings? k = sp.GetRequiredService<AppSettings>().Kafka;
+                            return new KafkaConnect(
+                                k ?? new KafkaSettings(),
+                                sp.GetService<ILogger<KafkaConnect>>());
+                        }
+                        catch (Exception ex)
+                        {
+                            StartupLog.Error("KafkaConnect factory failed; using a fail-safe instance.", ex);
+                            return new KafkaConnect(
+                                new KafkaSettings(),
+                                sp.GetService<ILogger<KafkaConnect>>());
+                        }
+                    });
+                    services.AddSingleton<SyncEngine>(sp =>
+                        new SyncEngine(
+                            sp.GetRequiredService<KafkaConnect>(),
+                            sp.GetRequiredService<LocalDatabaseManager>(),
+                            sp.GetRequiredService<ILogger<SyncEngine>>(),
+                            sp.GetRequiredService<AgentMetrics>(),
+                            sp.GetRequiredService<AppSettings>().SyncEngineIntervalMinutes));
+
                     services.AddSingleton<NamedPipeIpcServer>(sp => new NamedPipeIpcServer(
                         sp.GetRequiredService<ILogger<NamedPipeIpcServer>>()));
-
-                    // Service-side IPC router: message catalogue, hello/settings push, activity sink.
                     services.AddSingleton<ServiceIpcHost>();
+                    services.AddSingleton<ICollectionGate, IpcCollectionGate>();
+                    services.AddSingleton<PermissionsEvaluator>();
+                    services.AddSingleton<IAlarmImageLoader, NoOpAlarmImageLoader>();
+                    services.AddSingleton<SettingsRefreshWorker>();
+                    services.AddSingleton<HealthCheckService>();
+                    services.AddSingleton<HealthMonitorWorker>();
+                    services.AddSingleton<PermissionMonitorWorker>();
+                    services.AddSingleton<UpdateManager>();
 
-                    // Bridges ServiceIpcHost into the Generic Host start/stop lifecycle.
                     services.AddHostedService<IpcHostedService>();
-
-                    // Migration seam: the SQLite outbox, SyncEngine, metrics, settings refresh,
-                    // health and command workers move here from the legacy Ergonomy project.
-                    // Each will be registered as an additional IHostedService when it arrives.
+                    services.AddHostedService<ServiceRuntimeHostedService>();
                 })
                 .Build();
+
+            ExceptionPolicy.Configure(host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("ExceptionPolicy"));
 
             try
             {
@@ -86,7 +153,7 @@ namespace Ergonomy.Service
             }
             catch (Exception ex)
             {
-                // Last-resort logging if the host itself fails to start.
+                ExceptionPolicy.Report(ex, "service-host");
                 Console.Error.WriteLine($"[FATAL] Ergonomy.Service failed to start: {ex}");
                 return 1;
             }
@@ -122,9 +189,9 @@ namespace Ergonomy.Service
                     return true;
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Parent lookup is best-effort; fall through to the UserInteractive check above.
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "parent-process-lookup");
             }
 
             return false;
@@ -146,8 +213,9 @@ namespace Ergonomy.Service
                     self.Handle, 0, pbi, pbi.Length * IntPtr.Size, out _);
                 return status == 0 ? (int)pbi[5] : 0;
             }
-            catch
+            catch (Exception ex)
             {
+                ExceptionPolicy.IgnoreBestEffortDispose(ex, "parent-pid");
                 return 0;
             }
         }

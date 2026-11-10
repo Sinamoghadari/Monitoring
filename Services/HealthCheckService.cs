@@ -20,6 +20,11 @@ namespace Ergonomy.Services
         private readonly MessageLogService _log;
         private readonly ILogger<HealthCheckService> _logger;
         private readonly SqliteOutboxConnectionProvider _outboxConnection;
+        private readonly object _perfLock = new();
+        private readonly long[] _memoryMbSamples = new long[12];
+        private readonly int[] _threadSamples = new int[12];
+        private int _sampleCount;
+        private int _sampleIndex;
 
         /// <summary>Invoked when SQLite becomes inaccessible; wired by the lifecycle shell.</summary>
         public Action<string>? OnSqliteCriticalFailure { get; set; }
@@ -70,11 +75,11 @@ namespace Ergonomy.Services
                 using var response = await client.GetAsync(apiUrl).ConfigureAwait(false);
                 if (response.IsSuccessStatusCode)
                 {
-                    _log.LogHealth("INFO", "Settings API is healthy and accessible.", "ApiHealth");
+                    _log.LogHealth("INFORMATION", "Settings API is healthy and accessible.", "ApiHealth");
                 }
                 else
                 {
-                    _log.LogHealth("WARN", $"Settings API returned status code: {response.StatusCode}", "ApiHealth");
+                    _log.LogHealth("WARNING", $"Settings API returned status code: {response.StatusCode}", "ApiHealth");
                 }
             }
             catch (Exception ex)
@@ -107,7 +112,7 @@ namespace Ergonomy.Services
                 cmd.ExecuteScalar();
 
                 statusMessage = "SQLite database is healthy and accessible.";
-                logLevel = "INFO";
+                logLevel = "INFORMATION";
             }
             catch (Exception ex)
             {
@@ -124,27 +129,77 @@ namespace Ergonomy.Services
 
         /// <summary>
         /// مصرف حافظه و تعداد نخ فرایند عامل را اندازه‌گیری کرده و در صورت عبور از ۵۰۰ مگابایت هشدار می‌دهد.
+        /// میانگین غلتان ۱۲ نمونه آخر نیز ثبت می‌شود. خطای خواندن متریک حلقه سلامت را متوقف نمی‌کند.
         /// </summary>
         /// <returns>وظیفه کامل‌شده پس از ثبت نتیجه.</returns>
         private Task CheckSelfPerformanceAsync()
         {
             try
             {
-                using var process = Process.GetCurrentProcess();
+                Process process = Process.GetCurrentProcess();
+                process.Refresh();
+
                 long memoryUsedMB = process.WorkingSet64 / (1024 * 1024);
+                int threadCount = SafeThreadCount(process);
+
+                RecordPerformanceSample(memoryUsedMB, threadCount, out double avgMemoryMb, out double avgThreadCount);
 
                 string statusMessage =
-                    $"Agent Performance: Memory Usage is {memoryUsedMB} MB. Thread Count: {process.Threads.Count}";
-                string logLevel = memoryUsedMB > 500 ? "WARN" : "INFO";
+                    $"Agent Performance: Memory Usage is {memoryUsedMB} MB. Thread Count: {threadCount}. " +
+                    $"Average Memory: {avgMemoryMb:0.#} MB. Average Thread Count: {avgThreadCount:0.#}.";
+                string logLevel = memoryUsedMB > 500 ? "WARNING" : "INFORMATION";
 
-                _log.LogHealth(logLevel, statusMessage, "AgentPerformance");
+                _log.LogHealth(logLevel, statusMessage, AppLogNormalizer.AgentPerformanceCategory);
             }
             catch (Exception ex)
             {
-                _log.LogHealth("ERROR", $"Failed to check self performance.", "AgentPerformance");
+                _logger.LogWarning(ex, "Self-performance probe failed; health loop continues.");
+                try
+                {
+                    _log.LogHealth("ERROR", "Failed to check self performance.", AppLogNormalizer.AgentPerformanceCategory);
+                }
+                catch (Exception inner)
+                {
+                    _logger.LogError(inner, "Could not enqueue self-performance failure log.");
+                }
             }
 
             return Task.CompletedTask;
+        }
+
+        private static int SafeThreadCount(Process process)
+        {
+            try
+            {
+                return process.Threads.Count;
+            }
+            catch
+            {
+                return 0;
+            }
+        }
+
+        private void RecordPerformanceSample(long memoryMb, int threadCount, out double avgMemoryMb, out double avgThreadCount)
+        {
+            lock (_perfLock)
+            {
+                _memoryMbSamples[_sampleIndex] = memoryMb;
+                _threadSamples[_sampleIndex] = threadCount;
+                _sampleIndex = (_sampleIndex + 1) % _memoryMbSamples.Length;
+                if (_sampleCount < _memoryMbSamples.Length)
+                    _sampleCount++;
+
+                long memSum = 0;
+                long threadSum = 0;
+                for (int i = 0; i < _sampleCount; i++)
+                {
+                    memSum += _memoryMbSamples[i];
+                    threadSum += _threadSamples[i];
+                }
+
+                avgMemoryMb = memSum / (double)_sampleCount;
+                avgThreadCount = threadSum / (double)_sampleCount;
+            }
         }
     }
 }
