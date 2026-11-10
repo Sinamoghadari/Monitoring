@@ -11,6 +11,7 @@ using LibreHardwareMonitor.Hardware;
 using System.Diagnostics.Eventing.Reader;
 using System.Globalization;
 using Microsoft.Data.Sqlite;
+using Ergonomy.Networking;
 
 public class AdvancedMetricsCollector
 {
@@ -246,6 +247,19 @@ public class AdvancedMetricsCollector
     /// <param name="metrics">دیکشنری خروجی Collect.</param>
     private void CollectHardwareData(Dictionary<string, object> metrics)
     {
+        // VPN evaluation deliberately uses the complete OS inventory before LibreHardwareMonitor
+        // opens and before the display-level NetworkDetailsJson adapter filter below. WSL/Hyper-V/
+        // Docker/etc. must be visible to the detector so they can be hard-excluded rather than
+        // silently disappearing.
+        VpnDetectionResult vpnDetection = new VpnDetectionResult(VpnDetectionState.NotDetected);
+        if (_enabledMetrics.Contains("NetworkDetails"))
+        {
+            bool proxyConfigured;
+            IReadOnlyList<NetworkInterfaceSnapshot> rawNetworkInventory =
+                WindowsNetworkInventoryCollector.Collect(out proxyConfigured);
+            vpnDetection = VpnDetector.Evaluate(rawNetworkInventory, proxyConfigured);
+        }
+
         Computer computer = new Computer
         {
             IsCpuEnabled = true,
@@ -371,7 +385,16 @@ public class AdvancedMetricsCollector
 
         if (_enabledMetrics.Contains("CPUJson") && cpuDict.Count > 0) metrics["CPUJson"] = JsonSerializer.Serialize(cpuDict, _jsonOptions);
         if (_enabledMetrics.Contains("StorageDetails")) metrics["StorageDetailsJson"] = JsonSerializer.Serialize(storageDict, _jsonOptions);
-        if (_enabledMetrics.Contains("NetworkDetails")) metrics["NetworkDetailsJson"] = JsonSerializer.Serialize(networkDict, _jsonOptions);
+        if (_enabledMetrics.Contains("NetworkDetails"))
+        {
+            // Keep the existing adapter keys and add the VPN result at the root. NetworkTraceJson
+            // remains untouched as its existing array-of-hops contract is consumed downstream.
+            var networkDetailsPayload = new Dictionary<string, object>(networkDict)
+            {
+                ["IsVpnActive"] = vpnDetection.IsVpnActive
+            };
+            metrics["NetworkDetailsJson"] = JsonSerializer.Serialize(networkDetailsPayload, _jsonOptions);
+        }
 
         computer.Close();
     }
